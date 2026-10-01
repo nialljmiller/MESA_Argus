@@ -1,0 +1,15 @@
+{
+ "note": "AB minus Vega magnitude per filter, measured from the colors module (identical 1 Msun runs with mag_system Vega vs AB; constant to 1e-14).",
+ "offsets": {
+  "G": 0.12743,
+  "Gbp": 0.02439,
+  "Grp": 0.38056,
+  "beta": -0.08271,
+  "rho": 0.19253,
+  "SDSS_u": 0.89447,
+  "SDSS_g": -0.10649,
+  "SDSS_r": 0.14294,
+  "SDSS_i": 0.36263,
+  "SDSS_z": 0.53027
+ }
+}

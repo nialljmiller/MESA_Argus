@@ -1,0 +1,88 @@
+! =============================================================================
+! MESA_ARGUS physics inlist (template).
+!
+! mesa_argus/runner.py renders this into runs/<track>/inlist, substituting the
+! brace-delimited fields. Every run directory therefore holds the complete inlist that
+! produced it. Physics choices largely follow MIST (Choi et al. 2016, ApJ 823, 102).
+! =============================================================================
+
+&star_job
+      create_pre_main_sequence_model = .true.
+      pgstar_flag = .false.
+      history_columns_file = '{history_columns}'
+      save_model_when_terminate = .false.
+      show_log_description_at_start = .false.
+/
+
+&eos
+/
+
+&kap
+      kap_file_prefix = 'gs98'          ! GS98 mixture, matches Kurucz2003 + colors z_over_x_ref
+      use_Type2_opacities = .true.      ! C/O-enhanced opacities during core He burning
+      Zbase = {z}
+/
+
+&colors
+      use_colors = .true.
+      ! Gaia G/BP/RP + Argus beta/rho (system throughput) + SDSS ugriz in ONE
+      ! instrument: every system is computed from the identical model at every step.
+      instrument  = '{instrument}'
+      stellar_atm = '{stellar_atm}'
+      vega_sed    = '{vega_sed}'
+      mag_system  = '{mag_system}'
+      distance    = 3.0857d19           ! 10 pc -> absolute magnitudes
+      make_csv    = .false.
+      ! z_over_x_ref left at default (GS98, 0.0230): [M/H] = log((Z/X)/(Z/X)_sun)
+/
+
+&controls
+      ! --- this track ---
+      initial_mass = {mass}
+      initial_z = {z}
+      initial_y = {y}
+      mixing_length_alpha = {alpha}
+      max_age = {max_age}
+
+      ! --- stopping: core He depletion (or max_age above) ---
+      xa_central_lower_limit_species(1) = 'he4'
+      xa_central_lower_limit(1) = 1d-4
+
+      ! --- convection ---
+      use_Ledoux_criterion = .false.
+      overshoot_scheme(1) = 'exponential'   ! exponential core overshoot (MIST)
+      overshoot_zone_type(1) = 'any'
+      overshoot_zone_loc(1) = 'core'
+      overshoot_bdy_loc(1) = 'any'
+      overshoot_f(1) = 0.016d0
+      overshoot_f0(1) = 0.008d0
+
+      ! --- winds (MIST) ---
+      cool_wind_RGB_scheme = 'Reimers'
+      Reimers_scaling_factor = 0.1d0
+      cool_wind_AGB_scheme = 'Blocker'
+      Blocker_scaling_factor = 0.2d0
+      RGB_to_AGB_wind_switch = 1d-4
+      hot_wind_scheme = 'Dutch'
+      Dutch_scaling_factor = 1.0d0
+
+      ! no element diffusion: the photospheric Z/X (hence the [M/H] handed to the
+      ! atmosphere grid) stays at the grid value apart from dredge-up
+      do_element_diffusion = .false.
+
+      ! --- resolution / output ---
+      mesh_delta_coeff = 1.0d0
+      varcontrol_target = 1d-3
+      ! keep tracks smooth in the CMD: limit per-step motion in the HRD
+      delta_lgTeff_limit = 0.005d0
+      delta_lgL_limit = 0.02d0
+      delta_HR_limit = 0.01d0
+      history_interval = 1
+      write_profiles_flag = .false.
+      photo_interval = 10000000
+      terminal_interval = 500
+      write_header_frequency = 100000
+/
+
+&pgstar
+/

@@ -1,0 +1,17 @@
+# MESA build products
+mesa_work/build/
+mesa_work/star
+mesa_work/.mesa_temp_cache/
+.mesa_temp_cache/
+
+# generated: assembled filter instrument, MESA runs, figures/HTML
+filters/
+runs/
+outputs/
+
+__pycache__/
+*.pyc
+.DS_Store
+
+# archived runs/outputs of past experiments (large)
+archive/

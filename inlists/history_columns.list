@@ -1,0 +1,18 @@
+! history columns for the Argus/Gaia grid; colors-module columns
+! (Mag_bol, Flux_bol, Interp_rad, G, Gbp, Grp, beta, rho) are appended automatically
+      model_number
+      phase_of_evolution
+      star_age
+      star_mass
+      log_Teff
+      log_L
+      log_R
+      log_g
+      log_LH
+      log_LHe
+      center h1
+      center he4
+      he_core_mass
+      surface h1
+      log_surf_cell_z
+      num_retries

@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argus, Gaia, SDSS 3D CMD</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f5f2; --surface: #fcfcfb; --surface-2: #f0efec; --border: #dcdbd6;
+  --text: #0b0b0b; --text-2: #52514e; --text-3: #7b7a75; --accent: #2a78d6;
+  --grid: #e3e2de; --zero: #c9c8c2; --out: #b9b8b2;
+  --ph0: #2a78d6; --ph1: #eb6834; --ph2: #1baf7a;
+  --s-gaia: #2a78d6; --s-argus: #eb6834; --s-sdss: #1baf7a;
+  --ramp: #86b6ef,#6da7ec,#5598e7,#3987e5,#2a78d6,#256abf,#1c5cab,#184f95,#104281,#0d366b;
+  /* bands, ordered by pivot wavelength */
+  --b-u: #6a3fb5; --b-beta: #2f5fd0; --b-g: #1a8fd0; --b-BP: #1baf7a; --b-r: #7f9a00;
+  --b-G: #52514e; --b-rho: #e09a00; --b-i: #eb6834; --b-RP: #e34948; --b-z: #9b2335;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --surface-2: #232321; --border: #33332f;
+    --text: #ffffff; --text-2: #c3c2b7; --text-3: #8f8e86; --accent: #3987e5;
+    --grid: #2c2c29; --zero: #45453f; --out: #55554f;
+    --ph0: #3987e5; --ph1: #d95926; --ph2: #199e70;
+    --s-gaia: #3987e5; --s-argus: #d95926; --s-sdss: #199e70;
+    --ramp: #184f95,#1c5cab,#256abf,#2a78d6,#3987e5,#5598e7,#6da7ec,#86b6ef,#9ec5f4,#cde2fb;
+    --b-u: #9085e9; --b-beta: #5b86e5; --b-g: #3fa9e6; --b-BP: #199e70; --b-r: #9cb520;
+    --b-G: #c3c2b7; --b-rho: #e0a420; --b-i: #d95926; --b-RP: #e66767; --b-z: #d0607a;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface: #1a1a19; --surface-2: #232321; --border: #33332f;
+  --text: #ffffff; --text-2: #c3c2b7; --text-3: #8f8e86; --accent: #3987e5;
+  --grid: #2c2c29; --zero: #45453f; --out: #55554f;
+  --ph0: #3987e5; --ph1: #d95926; --ph2: #199e70;
+  --s-gaia: #3987e5; --s-argus: #d95926; --s-sdss: #199e70;
+  --ramp: #184f95,#1c5cab,#256abf,#2a78d6,#3987e5,#5598e7,#6da7ec,#86b6ef,#9ec5f4,#cde2fb;
+  --b-u: #9085e9; --b-beta: #5b86e5; --b-g: #3fa9e6; --b-BP: #199e70; --b-r: #9cb520;
+  --b-G: #c3c2b7; --b-rho: #e0a420; --b-i: #d95926; --b-RP: #e66767; --b-z: #d0607a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+}
+.controls {
+  display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center;
+  padding: 10px 16px; border-bottom: 1px solid var(--border); min-height: 56px;
+}
+.ctl { display: flex; align-items: center; gap: 8px; }
+.ctl[hidden] { display: none; }
+.ctl > .lbl { color: var(--text-3); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+.seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; gap: 2px; }
+.seg button {
+  border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 13px;
+  padding: 5px 11px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.12); font-weight: 600; }
+.seg button:focus-visible, .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.seg.multi button[aria-pressed="false"] { color: var(--text-3); }
+.seg .bsw { width: 14px; height: 0; border-top: 3px solid; border-radius: 2px; }
+.seg button[aria-pressed="false"] .bsw { opacity: .35; }
+.seg .gap { width: 1px; background: var(--border); margin: 4px 2px; }
+.sel {
+  font: inherit; font-size: 13px; color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 5px 8px; cursor: pointer; max-width: 260px;
+}
+.sel:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+label.chk { display: inline-flex; gap: 6px; align-items: center; color: var(--text-2); font-size: 13px; cursor: pointer; white-space: nowrap; }
+label.chk input { accent-color: var(--accent); }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; }
+#plots { display: grid; grid-template-columns: repeat(var(--n, 1), minmax(0, 1fr)); min-width: 0; }
+.plot { height: calc(100vh - 57px); min-height: 420px; min-width: 0; position: relative; }
+.plot[hidden] { display: none; }
+.plot + .plot { border-left: 1px solid var(--border); }
+.plot-title {
+  position: absolute; top: 10px; left: 14px; z-index: 2; pointer-events: none;
+  font-weight: 600; font-size: 13px; color: var(--text-2);
+}
+aside { border-left: 1px solid var(--border); padding: 14px 16px; overflow: auto; height: calc(100vh - 57px); background: var(--surface); }
+aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); margin: 4px 0 8px; font-weight: 600; }
+.legend-key { display: grid; gap: 6px; margin-bottom: 16px; font-size: 13px; color: var(--text-2); }
+.legend-key .row { display: flex; align-items: center; gap: 8px; }
+.sw { width: 18px; height: 0; border-top: 3px solid; border-radius: 2px; flex: none; }
+.sw.dot { border-top-style: dotted; } .sw.dash { border-top-style: dashed; }
+.ramp { height: 8px; border-radius: 4px; flex: none; }
+.ramp-lbl { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-3); }
+.pop { margin-bottom: 12px; }
+.pop-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.pop-name { font-weight: 600; font-size: 13px; cursor: pointer; }
+.pop-name:hover { text-decoration: underline; }
+.pop-mh { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); background: var(--surface);
+  border-radius: 999px; padding: 2px 8px 2px 6px; font: inherit; font-size: 12px; color: var(--text);
+  cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.chip .dotc { width: 8px; height: 8px; border-radius: 50%; }
+.chip.off { color: var(--text-3); opacity: .55; }
+.chip.off .dotc { background: transparent !important; outline: 1px solid var(--text-3); }
+.rng { margin-bottom: 14px; }
+.rng-head { display: flex; justify-content: space-between; font-size: 13px; color: var(--text-2); margin-bottom: 2px; }
+.rng-head b { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.rng-track { position: relative; height: 26px; }
+.rng-track::before { content: ""; position: absolute; left: 8px; right: 8px; top: 12px; height: 3px; border-radius: 2px; background: var(--border); }
+.rng-fill { position: absolute; top: 12px; height: 3px; border-radius: 2px; background: var(--accent); }
+.rng-track input { position: absolute; left: 0; width: 100%; top: 4px; margin: 0; pointer-events: none; background: none; -webkit-appearance: none; appearance: none; height: 18px; }
+.rng-track input::-webkit-slider-thumb { pointer-events: auto; -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); cursor: pointer; }
+.rng-track input::-moz-range-thumb { pointer-events: auto; width: 12px; height: 12px; border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); cursor: pointer; }
+.rng-track input::-moz-range-track { background: none; }
+.rng-ticks { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-3); padding: 0 4px; font-variant-numeric: tabular-nums; }
+.hint { font-size: 12px; color: var(--text-3); margin: 10px 0 0; }
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; }
+  #plots { grid-template-columns: 1fr; }
+  .plot { height: 64vh; }
+  .plot + .plot { border-left: 0; border-top: 1px solid var(--border); }
+  aside { border-left: 0; border-top: 1px solid var(--border); height: auto; }
+}
+</style>
+</head>
+<body>
+<div class="controls" role="toolbar" aria-label="Plot controls">
+  <div class="ctl"><span class="lbl">View</span>
+    <div class="seg" id="viewSeg">
+      <button data-v="3d" aria-pressed="true">3D</button>
+      <button data-v="cmd" aria-pressed="false">CMD (face-on)</button>
+      <button data-v="lc" aria-pressed="false">Light curve</button>
+    </div>
+  </div>
+  <div class="ctl" id="sysCtl"><span class="lbl">Systems</span>
+    <div class="seg multi" id="sysSeg">
+      <button data-v="gaia" aria-pressed="true">Gaia</button>
+      <button data-v="argus" aria-pressed="true">Argus</button>
+      <button data-v="sdss" aria-pressed="false">SDSS</button>
+    </div>
+  </div>
+  <div class="ctl" id="panelCtl"><span class="lbl">Panels</span>
+    <div class="seg" id="panelSeg">
+      <button data-v="separate" aria-pressed="true">Separate</button>
+      <button data-v="combined" aria-pressed="false">Combined</button>
+    </div>
+  </div>
+  <div class="ctl" id="thirdCtl"><span class="lbl">3rd axis</span>
+    <select id="thirdSel" class="sel" aria-label="Third axis"></select>
+  </div>
+  <div class="ctl" id="colCtl"><span class="lbl">Colour by</span>
+    <div class="seg" id="colSeg">
+      <button data-v="mass" aria-pressed="true">Mass</button>
+      <button data-v="phase" aria-pressed="false">Phase</button>
+    </div>
+  </div>
+  <div class="ctl" id="bandCtl" hidden><span class="lbl">Bands</span>
+    <div class="seg multi" id="bandSeg"></div>
+  </div>
+  <div class="ctl">
+    <label class="chk"><input type="checkbox" id="chkOut"> Outside atmosphere grid</label>
+  </div>
+</div>
+
+<main>
+  <div id="plots">
+    <div class="plot" id="plotA"><div class="plot-title"></div></div>
+    <div class="plot" id="plotB" hidden><div class="plot-title"></div></div>
+    <div class="plot" id="plotC" hidden><div class="plot-title"></div></div>
+  </div>
+  <aside>
+    <h2>Key</h2>
+    <div class="legend-key" id="key"></div>
+    <h2>Range</h2>
+    <div id="ranges"></div>
+    <h2>Tracks</h2>
+    <div id="pops"></div>
+    <p class="hint">Click a mass to hide/show that track; click a population name to show only that population (click again to show all). Drag to rotate, scroll to zoom, right-drag to pan; hover a track for its parameters.</p>
+  </aside>
+</main>
+
+<script>/*__PLOTLY__*/</script>
+<script>
+window.onerror = (m, src, l, c) => { const t = document.querySelector("#plotA .plot-title"); if (t) t.textContent = "JS error: " + m + " @" + l + ":" + c; };
+const DATA = /*__DATA__*/null;
+const CAL = DATA.calibration;
+const PHASES = ["Main sequence", "H-shell burning (subgiant / giant branch / Hertzsprung gap)", "Core He burning (HB, red clump, blue loop)"];
+const SYS = {
+  gaia:  { col: t => [t.BP, t.RP], mag: "G", xl: "G<sub>BP</sub> − G<sub>RP</sub>", zl: "M<sub>G</sub> (absolute, Vega)",
+           xh: "BP−RP", zh: "M_G", title: "Gaia  (BP − RP, G; Vega)" },
+  argus: { col: t => [t.beta, t.rho], mag: "rho", xl: "β − ρ", zl: "M<sub>ρ</sub> (absolute, Vega)",
+           xh: "β−ρ", zh: "M_ρ", title: "Argus  (β − ρ, ρ; Vega)" },
+  sdss:  { col: t => [t.g, t.r], mag: "r", xl: "g − r", zl: "M<sub>r</sub> (absolute, AB)",
+           xh: "g−r", zh: "M_r", title: "SDSS  (g − r, r; AB)" },
+};
+const SYS_NAME = { gaia: "Gaia", argus: "Argus", sdss: "SDSS" };
+const SYS_COMBINED = {
+  gaia: "BP − RP / G (Vega)", argus: "β − ρ / ρ (Vega)", sdss: "g − r / r (AB)",
+};
+const SYS_ORDER = ["gaia", "argus", "sdss"];
+// third axis of the CMD: per-track constants (grid dimensions) or per-point history columns
+const THIRD = [
+  { group: "Grid dimensions" },
+  { key: "feh",    label: "[M/H] (grid)",               get: (t, i) => t.feh, ticks: "feh" },
+  { key: "mass",   label: "Initial mass (M☉)",           get: (t, i) => t.mass, type: "log" },
+  { key: "alpha",  label: "α<sub>MLT</sub>",            text: "α_MLT", get: (t, i) => t.alpha, ticks: "alpha" },
+  { group: "Evolution" },
+  { key: "age",    label: "Age (Gyr)",                   get: (t, i) => t.age[i] / 1e9 },
+  { key: "logage", label: "log Age (yr)",                get: (t, i) => Math.log10(Math.max(t.age[i], 1)) },
+  { key: "ph",     label: "Evolutionary phase",          get: (t, i) => t.ph[i], ticks: "phase" },
+  { key: "mstar",  label: "Current mass (M☉)",           get: (t, i) => t.mstar[i] },
+  { key: "mhe",    label: "He core mass (M☉)",           get: (t, i) => t.mhe[i] },
+  { key: "xc",     label: "Central H mass fraction",     get: (t, i) => t.xc[i] },
+  { key: "yc",     label: "Central He mass fraction",    get: (t, i) => t.yc[i] },
+  { key: "logLH",  label: "log L<sub>H</sub>/L☉",        text: "log L_H/L☉", get: (t, i) => t.logLH[i] },
+  { key: "logLHe", label: "log L<sub>He</sub>/L☉",       text: "log L_He/L☉", get: (t, i) => t.logLHe[i] },
+  { group: "Surface" },
+  { key: "teff",   label: "T<sub>eff</sub> (K)",         text: "T_eff (K)", get: (t, i) => t.teff[i], type: "log" },
+  { key: "logg",   label: "log g",                       get: (t, i) => t.logg[i] },
+  { key: "logL",   label: "log L/L☉",                    get: (t, i) => t.logL[i] },
+  { key: "logR",   label: "log R/R☉",                    get: (t, i) => t.logR[i] },
+  { key: "mh",     label: "Photospheric [M/H]",          get: (t, i) => t.mh[i] },
+  { group: "Photometry" },
+  { key: "mbol",   label: "M<sub>bol</sub>",             text: "M_bol", get: (t, i) => t.mbol[i], reversed: true },
+  { key: "interp", label: "Atmosphere interpolation radius", get: (t, i) => t.interp[i] },
+];
+const third = () => THIRD.find(o => o.key === state.third);
+// bands for the light curve, grouped by system; dash marks the system
+const BANDS = [
+  { key: "G",    label: "G",  sys: "Gaia",  dash: "solid" },
+  { key: "BP",   label: "BP", sys: "Gaia",  dash: "solid" },
+  { key: "RP",   label: "RP", sys: "Gaia",  dash: "solid" },
+  { key: "beta", label: "β",  sys: "Argus", dash: "dash" },
+  { key: "rho",  label: "ρ",  sys: "Argus", dash: "dash" },
+  { key: "u",    label: "u",  sys: "SDSS",  dash: "dot" },
+  { key: "g",    label: "g",  sys: "SDSS",  dash: "dot" },
+  { key: "r",    label: "r",  sys: "SDSS",  dash: "dot" },
+  { key: "i",    label: "i",  sys: "SDSS",  dash: "dot" },
+  { key: "z",    label: "z",  sys: "SDSS",  dash: "dot" },
+];
+const state = {
+  view: "3d", colour: "mass", panels: "separate", third: "feh", out: false,
+  systems: new Set(["gaia", "argus"]), bands: new Set(["G", "beta", "rho", "g", "r"]),
+  hidden: new Set(), solo: null,
+  rng: {},  // per-parameter [lo, hi] index into its level list
+};
+
+// ---------- helpers ----------
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const masses = [...new Set(DATA.tracks.map(t => t.mass))].sort((a, b) => a - b);
+function massColour(m) {
+  const ramp = css("--ramp").split(",").map(s => s.trim());
+  const lo = Math.log(masses[0]), hi = Math.log(masses[masses.length - 1]);
+  const f = hi > lo ? (Math.log(m) - lo) / (hi - lo) : 0.5;
+  return ramp[Math.round(f * (ramp.length - 1))];
+}
+const fmtAge = a => a >= 1e9 ? (a / 1e9).toFixed(3) + " Gyr" : (a / 1e6).toFixed(2) + " Myr";
+const pops = [];
+DATA.tracks.forEach(t => { if (!pops.find(p => p.name === t.population)) pops.push({ name: t.population, feh: t.feh }); });
+pops.sort((a, b) => b.feh - a.feh);
+const mhLevels = pops.map(p => p.feh).sort((a, b) => a - b);
+const fmtMH = v => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(1);
+const fmtDA = d => d === 0 ? "α☉" : `α☉ ${d > 0 ? "+" : "−"} ${Math.abs(d).toFixed(1)}`;
+const dashOf = t => t.dalpha < 0 ? "dot" : t.dalpha > 0 ? "dash" : "solid";
+const trackHead = t => `<b>${t.mass} M☉</b> · [M/H] = ${fmtMH(t.feh)} · ${fmtDA(t.dalpha)} (α = ${t.alpha.toFixed(2)})<br>${t.population}`;
+
+const RANGES = [
+  { key: "mass",  label: "Initial mass", unit: " M☉", levels: [...new Set(DATA.tracks.map(t => t.mass))].sort((a, b) => a - b), fmt: v => `${v}` },
+  { key: "feh",   label: "[M/H]", unit: "", levels: [...new Set(DATA.tracks.map(t => t.feh))].sort((a, b) => a - b), fmt: v => fmtMH(v) },
+  { key: "alpha", label: "α<sub>MLT</sub>", unit: "", levels: [...new Set(DATA.tracks.map(t => t.alpha))].sort((a, b) => a - b), fmt: v => v.toFixed(2) },
+];
+RANGES.forEach(R => state.rng[R.key] = [0, R.levels.length - 1]);
+function inRanges(t) {
+  return RANGES.every(R => {
+    const [lo, hi] = state.rng[R.key];
+    return t[R.key] >= R.levels[lo] - 1e-9 && t[R.key] <= R.levels[hi] + 1e-9;
+  });
+}
+function visible(t) {
+  if (!inRanges(t)) return false;
+  if (state.solo && t.population !== state.solo) return false;
+  return !state.hidden.has(`${t.mass}|${t.feh}`);
+}
+
+function ranges(sysList) {
+  let cx = [Infinity, -Infinity], mz = [Infinity, -Infinity];
+  for (const sys of sysList) DATA.tracks.forEach(t => {
+    const [b, r] = SYS[sys].col(t), m = t[SYS[sys].mag];
+    for (let i = 0; i < m.length; i++) {
+      if (!t.ok[i] && !state.out) continue;
+      const c = b[i] - r[i];
+      cx[0] = Math.min(cx[0], c); cx[1] = Math.max(cx[1], c);
+      mz[0] = Math.min(mz[0], m[i]); mz[1] = Math.max(mz[1], m[i]);
+    }
+  });
+  const pad = (a, f) => { const d = (a[1] - a[0]) * f; return [a[0] - d, a[1] + d]; };
+  return { x: pad(cx, 0.04), z: pad(mz, 0.03) };
+}
+
+// ---------- 3D CMD ----------
+function traces3d(sys, combined) {
+  const S = SYS[sys], out = [], T = third(), yName = T.text || T.label;
+  const phCols = [css("--ph0"), css("--ph1"), css("--ph2")], outCol = css("--out");
+  DATA.tracks.forEach(t => {
+    if (!visible(t)) return;
+    const [b, r] = S.col(t), m = t[S.mag];
+    const x = [], y = [], z = [], c = [], cd = [];
+    for (let i = 0; i < m.length; i++) {
+      if (!t.ok[i] && !state.out) {  // break the line
+        if (x.length && x[x.length - 1] !== null) { x.push(null); y.push(null); z.push(null); c.push(0); cd.push(null); }
+        continue;
+      }
+      x.push(+(b[i] - r[i]).toFixed(3)); y.push(T.get(t, i)); z.push(m[i]);
+      c.push(t.ok[i] ? t.ph[i] : 3);
+      cd.push([fmtAge(t.age[i]), PHASES[t.ph[i]].split(" (")[0], t.teff[i], t.logg[i], t.logL[i],
+               t.ok[i] ? "" : "<br><b>outside atmosphere grid: clamped</b>"]);
+    }
+    const width = t.kind === "alpha" ? 3 : 4.5, dash = dashOf(t);
+    const line = combined ? { width, dash, color: css("--s-" + sys) }
+      : state.colour === "phase"
+      ? { width, dash, color: c, cmin: 0, cmax: 3, showscale: false,
+          colorscale: [[0, phCols[0]], [0.25, phCols[0]], [0.25, phCols[1]], [0.5, phCols[1]],
+                       [0.5, phCols[2]], [0.75, phCols[2]], [0.75, outCol], [1, outCol]] }
+      : { width, dash, color: massColour(t.mass) };
+    out.push({
+      type: "scatter3d", mode: "lines", x, y, z, line, customdata: cd, name: t.name,
+      hovertemplate: (combined ? `<b>${SYS_NAME[sys]}</b> · ` : "") + trackHead(t) + `<br>%{customdata[1]} · age %{customdata[0]}<br>` +
+        `T<sub>eff</sub> = %{customdata[2]} K · log g = %{customdata[3]} · log L = %{customdata[4]}<br>` +
+        `${S.xh} = %{x:.3f} · ${S.zh} = %{z:.3f} · ${yName} = %{y:.4g}%{customdata[5]}<extra></extra>`,
+    });
+  });
+  return out;
+}
+
+const CAMS = {
+  "3d":  { eye: { x: 1.55, y: -1.65, z: 0.55 }, up: { x: 0, y: 0, z: 1 }, center: { x: 0, y: 0, z: -0.05 }, projection: { type: "perspective" } },
+  "cmd": { eye: { x: 0, y: -2.4, z: 0 }, up: { x: 0, y: 0, z: 1 }, center: { x: 0, y: 0, z: 0 }, projection: { type: "orthographic" } },
+};
+let camera = JSON.parse(JSON.stringify(CAMS["3d"]));
+const ASPECT0 = { x: 1.0, y: 1.0, z: 1.15 };
+let aspect = { ...ASPECT0 };  // orthographic zoom in Plotly changes the aspect ratio, so it is shared too
+let camRev = 0;
+
+function baseLayout() {
+  const text = css("--text");
+  return {
+    paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", showlegend: false,
+    font: { family: getComputedStyle(document.body).fontFamily, color: text },
+    hoverlabel: { bgcolor: css("--surface"), bordercolor: css("--border"), font: { color: text, size: 12 }, align: "left" },
+  };
+}
+function axStyle(title, extra) {
+  return Object.assign({
+    title: { text: title, font: { size: 13, color: css("--text") } }, color: css("--text-2"),
+    gridcolor: css("--grid"), zerolinecolor: css("--zero"), linecolor: css("--zero"),
+    tickfont: { size: 11, color: css("--text-2") },
+  }, extra);
+}
+function yAxisExtra(T) {
+  if (T.ticks === "feh") return { tickvals: mhLevels, ticktext: mhLevels.map(fmtMH), range: [mhLevels[0] - 0.15, mhLevels[mhLevels.length - 1] + 0.15] };
+  if (T.ticks === "alpha") { const a = [...new Set(DATA.tracks.map(t => t.alpha))].sort(); return { tickvals: a, ticktext: a.map(v => v.toFixed(2)), range: [a[0] - 0.1, a[a.length - 1] + 0.1] }; }
+  if (T.ticks === "phase") return { tickvals: [0, 1, 2], ticktext: ["MS", "H-shell", "Core He"], range: [-0.3, 2.3] };
+  const e = { autorange: T.reversed ? "reversed" : true };
+  if (T.type === "log") { e.type = "log"; }
+  if (T.key === "mass") { e.tickvals = masses; e.ticktext = masses.map(String); }
+  return e;
+}
+function layout3d(sysList) {
+  const T = third();
+  const R = ranges(sysList), one = sysList.length === 1 ? SYS[sysList[0]] : null;
+  const xl = one ? one.xl : "Colour  (" + sysList.map(s => SYS[s].xl).join("  |  ") + ")";
+  const zl = one ? one.zl : "Absolute magnitude  (" + sysList.map(s => SYS[s].zl.split(" (")[0]).join(" | ") + ")";
+  const ax = (title, extra) => axStyle(title, Object.assign({ showbackground: false, showspikes: false }, extra));
+  return Object.assign(baseLayout(), {
+    margin: { l: 0, r: 0, t: 0, b: 0 }, uirevision: "keep" + camRev,
+    datarevision: state.third,
+    scene: {
+      xaxis: ax(xl, { range: R.x }),
+      yaxis: ax(T.label, yAxisExtra(T)),
+      zaxis: ax(zl, { range: [R.z[1], R.z[0]] }),
+      aspectmode: "manual", aspectratio: aspect,
+      camera,
+    },
+  });
+}
+
+// ---------- light curve ----------
+function tracesLC() {
+  const out = [];
+  DATA.tracks.forEach(t => {
+    if (!visible(t)) return;
+    BANDS.forEach(B => {
+      if (!state.bands.has(B.key)) return;
+      const x = [], y = [], cd = [];
+      for (let i = 0; i < t.age.length; i++) {
+        if (!t.ok[i] && !state.out) { if (x.length && x[x.length - 1] !== null) { x.push(null); y.push(null); cd.push(null); } continue; }
+        x.push(t.age[i] / 1e9); y.push(t[B.key][i]);
+        cd.push([fmtAge(t.age[i]), PHASES[t.ph[i]].split(" (")[0], t.teff[i], t.ok[i] ? "" : "<br><b>outside atmosphere grid: clamped</b>"]);
+      }
+      out.push({
+        type: "scattergl", mode: "lines", x, y, customdata: cd, name: `${t.name} ${B.key}`,
+        line: { width: t.kind === "alpha" ? 1.5 : 2, color: css("--b-" + B.key), dash: B.dash },
+        opacity: t.kind === "alpha" ? 0.7 : 1,
+        hovertemplate: trackHead(t) + `<br><b>${B.sys} ${B.label}</b> = %{y:.3f} ${B.sys === "SDSS" ? "(AB)" : "(Vega)"}<br>` +
+          `%{customdata[1]} · age %{customdata[0]} · T<sub>eff</sub> = %{customdata[2]} K%{customdata[3]}<extra></extra>`,
+      });
+    });
+  });
+  return out;
+}
+function layoutLC() {
+  return Object.assign(baseLayout(), {
+    margin: { l: 64, r: 20, t: 16, b: 52 }, uirevision: "lc" + camRev, hovermode: "closest",
+    xaxis: axStyle("Age (Gyr)", { zeroline: false }),
+    yaxis: axStyle("Absolute magnitude", { autorange: "reversed", zeroline: false }),
+  });
+}
+
+const CONFIG = { displaylogo: false, responsive: true,
+  modeBarButtonsToRemove: ["resetCameraLastSave3d", "hoverClosest3d", "select2d", "lasso2d"],
+  toImageButtonOptions: { format: "png", scale: 2, filename: "argus_gaia_sdss" } };
+
+// ---------- panels ----------
+const PANEL_IDS = ["plotA", "plotB", "plotC"];
+let syncing = false;
+function bindSync(src) {
+  src.on("plotly_relayout", ev => {
+    if (syncing || src._mode !== "3d") return;
+    // keep only whole-object camera / aspect updates (rotation, perspective zoom, orthographic zoom)
+    const upd = {};
+    const sc = src._fullLayout && src._fullLayout.scene;
+    if (Object.keys(ev).some(k => k.startsWith("scene.camera"))) {
+      camera = JSON.parse(JSON.stringify(sc ? sc.camera : ev["scene.camera"]));
+      upd["scene.camera"] = camera;
+    }
+    if (Object.keys(ev).some(k => k.startsWith("scene.aspectratio"))) {
+      aspect = { ...(sc ? sc.aspectratio : ev["scene.aspectratio"]) };
+      upd["scene.aspectratio"] = aspect;
+    }
+    if (!Object.keys(upd).length) return;
+    syncing = true;
+    const others = PANEL_IDS.map(id => document.getElementById(id)).filter(el => el !== src && !el.hidden && el.data && el._mode === "3d");
+    Promise.all(others.map(el => Plotly.relayout(el, upd))).finally(() => { syncing = false; });
+  });
+}
+
+function renderPlots() {
+  const lc = state.view === "lc";
+  const sel = SYS_ORDER.filter(s => state.systems.has(s));
+  const combined = !lc && state.panels === "combined";
+  // one entry per panel: "lc", or a list of systems drawn in that panel
+  const systems = lc ? ["lc"] : combined ? [sel] : sel.map(s => [s]);
+  document.getElementById("plots").style.setProperty("--n", systems.length);
+  PANEL_IDS.forEach((id, i) => {
+    const el = document.getElementById(id), sys = systems[i];
+    const mode = sys === "lc" ? "lc" : "3d";
+    el.querySelector(".plot-title").textContent = sys && !lc && !combined && systems.length > 1 ? SYS[sys[0]].title : "";
+    if (!sys || el._mode !== mode) { if (el.data) Plotly.purge(el); el._synced = false; }
+    if (!sys) { el.hidden = true; return; }
+    el.hidden = false; el._mode = mode;
+    if (lc) Plotly.react(el, tracesLC(), layoutLC(), CONFIG);
+    else Plotly.react(el, sys.flatMap(s => traces3d(s, combined)), layout3d(sys), CONFIG);
+    if (!el._synced) { bindSync(el); el._synced = true; }
+  });
+  window.dispatchEvent(new Event("resize"));
+}
+
+function render() {
+  const lc = state.view === "lc";
+  document.getElementById("sysCtl").hidden = lc;
+  document.getElementById("panelCtl").hidden = lc;
+  document.getElementById("thirdCtl").hidden = lc;
+  document.getElementById("colCtl").hidden = lc || state.panels === "combined";
+  document.getElementById("bandCtl").hidden = !lc;
+  drawKey(); drawPops();
+  try { renderPlots(); } catch (e) {
+    document.querySelector("#plotA .plot-title").textContent = "Could not draw the plot (" + e.message + "). This page needs a browser with WebGL.";
+    console.error(e);
+  }
+}
+
+// ---------- sidebar ----------
+function drawKey() {
+  const k = document.getElementById("key");
+  let h = "";
+  if (state.view === "lc") {
+    h += `<div class="row"><span class="sw" style="border-color:var(--text-2)"></span>Gaia (Vega)</div>`;
+    h += `<div class="row"><span class="sw dash" style="border-color:var(--text-2)"></span>Argus (Vega)</div>`;
+    h += `<div class="row"><span class="sw dot" style="border-color:var(--text-2)"></span>SDSS (AB)</div>`;
+    h += `<div class="row" style="color:var(--text-3);font-size:12px">Line colour = band (see Bands). Thinner, fainter lines are the α<sub>MLT</sub> variants. Isolate a track below for a clean light curve.</div>`;
+    k.innerHTML = h; return;
+  }
+  if (state.panels === "combined") {
+    SYS_ORDER.filter(s => state.systems.has(s)).forEach(s =>
+      h += `<div class="row"><span class="sw" style="border-color:var(--s-${s})"></span>${SYS_NAME[s]}  <span style="color:var(--text-3)">${SYS_COMBINED[s]}</span></div>`);
+  } else if (state.colour === "phase") {
+    PHASES.forEach((p, i) => h += `<div class="row"><span class="sw" style="border-color:${css("--ph" + i)}"></span>${p}</div>`);
+    if (state.out) h += `<div class="row"><span class="sw" style="border-color:${css("--out")}"></span>Outside atmosphere grid (clamped)</div>`;
+  } else {
+    const ramp = css("--ramp").split(",").map(s => s.trim());
+    const mid = Math.sqrt(masses[0] * masses[masses.length - 1]).toPrecision(2);
+    h += `<div class="row" style="flex-direction:column;align-items:stretch;gap:3px">
+      <div style="font-size:12px">Initial mass (log scale)</div>
+      <div class="ramp" style="background:linear-gradient(90deg,${ramp.join(",")})"></div>
+      <div class="ramp-lbl"><span>${masses[0]} M☉</span><span>${mid} M☉</span><span>${masses[masses.length - 1]} M☉</span></div></div>`;
+  }
+  h += `<div class="row"><span class="sw" style="border-color:var(--text-2)"></span>α<sub>MLT</sub> = α☉ = ${CAL.alpha_sun.toFixed(2)} (solar-calibrated)</div>`;
+  h += `<div class="row"><span class="sw dot" style="border-color:var(--text-2)"></span>α☉ − 0.3</div>`;
+  h += `<div class="row"><span class="sw dash" style="border-color:var(--text-2)"></span>α☉ + 0.3</div>`;
+  k.innerHTML = h;
+}
+
+function drawPops() {
+  const el = document.getElementById("pops");
+  el.innerHTML = "";
+  pops.forEach(p => {
+    const ts = DATA.tracks.filter(t => t.population === p.name && t.kind === "base").sort((a, b) => a.mass - b.mass);
+    const div = document.createElement("div"); div.className = "pop";
+    const dim = state.solo && state.solo !== p.name;
+    div.innerHTML = `<div class="pop-head"><span class="pop-name" role="button" tabindex="0" style="${dim ? "color:var(--text-3)" : ""}">${p.name}</span>
+      <span class="pop-mh">[M/H] ${fmtMH(p.feh)}</span></div><div class="chips"></div>`;
+    const nm = div.querySelector(".pop-name");
+    const solo = () => { state.solo = state.solo === p.name ? null : p.name; render(); };
+    nm.onclick = solo; nm.onkeydown = e => { if (e.key === "Enter") solo(); };
+    const chips = div.querySelector(".chips");
+    ts.forEach(t => {
+      const key = `${t.mass}|${t.feh}`, off = state.hidden.has(key) || dim || !inRanges(t);
+      const hasA = DATA.tracks.some(u => u.kind === "alpha" && u.mass === t.mass && u.feh === t.feh);
+      const b = document.createElement("button");
+      b.className = "chip" + (off ? " off" : "");
+      b.title = t.why + (hasA ? "  (has α_MLT variants)" : "");
+      b.innerHTML = `<span class="dotc" style="background:${massColour(t.mass)}"></span>${t.mass} M☉${hasA ? " <span style='color:var(--text-3)'>±α</span>" : ""}`;
+      b.onclick = () => { state.hidden.has(key) ? state.hidden.delete(key) : state.hidden.add(key); render(); };
+      chips.appendChild(b);
+    });
+    el.appendChild(div);
+  });
+}
+
+function drawRanges() {
+  const box = document.getElementById("ranges");
+  box.innerHTML = "";
+  RANGES.forEach(R => {
+    const n = R.levels.length - 1;
+    const div = document.createElement("div"); div.className = "rng";
+    div.innerHTML = `<div class="rng-head"><span>${R.label}</span><b></b></div>
+      <div class="rng-track"><div class="rng-fill"></div>
+        <input type="range" min="0" max="${n}" step="1" aria-label="${R.label} minimum">
+        <input type="range" min="0" max="${n}" step="1" aria-label="${R.label} maximum"></div>
+      <div class="rng-ticks"><span>${R.fmt(R.levels[0])}</span><span>${R.fmt(R.levels[n])}</span></div>`;
+    const [a, b] = div.querySelectorAll("input"), fill = div.querySelector(".rng-fill"), val = div.querySelector("b");
+    const sync = () => {
+      const [lo, hi] = state.rng[R.key];
+      a.value = lo; b.value = hi;
+      const f = v => n ? v / n : 0;  // thumb centres run from 8px to (width - 8px)
+      fill.style.left = `calc(8px + (100% - 16px) * ${f(lo)})`;
+      fill.style.width = `calc((100% - 16px) * ${f(hi) - f(lo)})`;
+      val.textContent = lo === hi ? R.fmt(R.levels[lo]) + R.unit : `${R.fmt(R.levels[lo])} – ${R.fmt(R.levels[hi])}${R.unit}`;
+    };
+    const onInput = which => () => {
+      let lo = +a.value, hi = +b.value;
+      if (lo > hi) { if (which === "a") hi = lo; else lo = hi; }
+      state.rng[R.key] = [lo, hi]; sync(); drawPops(); renderPlotsSafe();
+    };
+    a.oninput = onInput("a"); b.oninput = onInput("b");
+    if (n === 0) { a.disabled = b.disabled = true; }
+    box.appendChild(div);
+    sync();
+  });
+}
+function renderPlotsSafe() { try { renderPlots(); } catch (e) { console.error(e); } }
+
+// ---------- controls ----------
+function single(id, keyName, after) {
+  const el = document.getElementById(id);
+  el.querySelectorAll("button").forEach(b => b.onclick = () => {
+    el.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b));
+    state[keyName] = b.dataset.v; if (after) after(b.dataset.v); render();
+  });
+}
+function multi(el, set) {
+  el.querySelectorAll("button").forEach(b => b.onclick = () => {
+    const v = b.dataset.v;
+    if (set.has(v)) { if (set.size === 1) return; set.delete(v); } else set.add(v);  // keep at least one on
+    b.setAttribute("aria-pressed", set.has(v)); render();
+  });
+}
+const bandSeg = document.getElementById("bandSeg");
+let lastSys = null;
+BANDS.forEach(B => {
+  if (lastSys && lastSys !== B.sys) bandSeg.insertAdjacentHTML("beforeend", `<span class="gap"></span>`);
+  lastSys = B.sys;
+  bandSeg.insertAdjacentHTML("beforeend",
+    `<button data-v="${B.key}" aria-pressed="${state.bands.has(B.key)}" title="${B.sys} ${B.label}"><span class="bsw" style="border-color:var(--b-${B.key})"></span>${B.label}</button>`);
+});
+single("viewSeg", "view", v => { if (CAMS[v]) camera = JSON.parse(JSON.stringify(CAMS[v])); aspect = { ...ASPECT0 }; camRev++; });
+single("colSeg", "colour");
+single("panelSeg", "panels");
+const thirdSel = document.getElementById("thirdSel");
+let og = null;
+THIRD.forEach(o => {
+  if (o.group) { og = document.createElement("optgroup"); og.label = o.group; thirdSel.appendChild(og); return; }
+  const opt = document.createElement("option");
+  opt.value = o.key; opt.textContent = o.text || o.label; og.appendChild(opt);
+});
+thirdSel.value = state.third;
+thirdSel.onchange = () => { state.third = thirdSel.value; render(); };
+multi(document.getElementById("sysSeg"), state.systems);
+multi(bandSeg, state.bands);
+document.getElementById("chkOut").onchange = e => { state.out = e.target.checked; render(); };
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+
+drawRanges();
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+plotly-gl3d.min.js: plotly.js v2.35.2 (gl3d partial bundle), MIT licence, (c) Plotly, Inc.
+Inlined into the generated HTML so it works offline.
+https://github.com/plotly/plotly.js

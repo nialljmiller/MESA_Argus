@@ -1,0 +1,29 @@
+# Inputs for the Fisher-information (discernibility) analysis: `python -m mesa_argus fisher`.
+
+# Distance-modulus prior (mag). Every band shifts by the same amount with distance,
+# so this sets how much absolute-magnitude information is usable.
+# 0.02 mag ~ 1% distance: Gaia parallax for nearby bright stars.
+sigma_mu = 0.02
+
+# Reference systems: assumed per-band photometric errors (mag), held fixed.
+# Gaia DR3 bright stars (G ~ 12-15), incl. calibration floor; Riello et al. 2021.
+# SDSS: ubercal calibration floors, ~1% griz, ~2% u; Padmanabhan et al. 2008.
+[fixed.gaia]
+G = 0.001
+BP = 0.003
+RP = 0.003
+
+[fixed.sdss]
+u = 0.02
+g = 0.01
+r = 0.01
+i = 0.01
+z = 0.01
+
+# Argus per-band error is not known yet: one analysis/figure per trial value (mag).
+[argus]
+trial_sigmas = [0.001, 0.003, 0.005, 0.1, 0.3, 0.5]
+
+# Bandpass-only comparison: every band in every system gets this same error.
+[equal]
+sigma = 0.01
