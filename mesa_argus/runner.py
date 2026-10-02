@@ -33,6 +33,8 @@ def render_inlist(track, mag_system="Vega"):
         history_columns=C.INLISTS / "history_columns.list", instrument=C.INSTRUMENT,
         stellar_atm=C.colors_path("stellar_atm"), vega_sed=C.colors_path("vega_sed"),
         mag_system=mag_system,
+        make_csv=".true." if track.get("save_seds") else ".false.",
+        extra_controls="".join(f"      {ln}\n" for ln in track.get("extra_controls", [])),
     )
 
 
@@ -130,6 +132,9 @@ def run_tracks(tracks, workers=None, threads=None, rerun_failed=False):
     def one(t):
         ok, minutes, term = run_dir(prepare(t), threads)
         print(f"  {'OK ' if ok else 'BAD'} {t['name']:<30s} {minutes:7.1f} min  {term or 'no termination code'}", flush=True)
+        if ok and t.get("save_seds"):
+            from .seds import pack
+            print(f"      packed SEDs -> {pack(t)}", flush=True)
         return t["name"], ok
 
     with ThreadPoolExecutor(max_workers=workers) as ex:

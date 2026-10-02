@@ -72,6 +72,40 @@ To add a grid, drop a new `grids/<name>.py` defining `tracks(make)` (see the exi
 To add a photometric system, add its curves to `mesa_argus/filters.py` and its bands to
 `config.py` / `fisher.py`.
 
+## SEDs for the Argus simulator
+
+`grids/argus_sim_seds.py` re-runs five stars that span the CMD: 1.0 Msun and 0.8 Msun at
+[M/H] -2 (both to the RGB tip), and 3, 5 and 10 Msun (to core-He exhaustion). It sets
+`save_seds`, so MESA writes the interpolated atmosphere SED at every model, as the colors
+module's raw CSVs in `runs/<track>/SED/` (one per filter per model, `<filter>_SED_<model>.csv`;
+these are always kept). After each run a convenience copy is also packed into one file per track
+(`python -m mesa_argus seds GRID` re-packs by hand):
+
+```
+runs/<track>/seds.h5
+  wavelength      [n_wave]            Angstrom (atmosphere-grid sampling, 147 A - 160 um)
+  flux            [n_model, n_wave]   f_lambda at 10 pc, erg s^-1 cm^-2 A^-1
+  model/...       [n_model]           model_number, star_age, star_mass, Teff, log_g, log_L, log_R,
+                                      mh, phase (-1 pre-MS, 0 MS, 1 H-shell, 2 core He),
+                                      inside_atm_grid, Interp_rad, Mag_bol, Flux_bol, fbol_sed_over_L
+  mag/<band>      [n_model]           absolute magnitudes (Gaia/Argus Vega, SDSS AB)
+  attrs                               track parameters, units, provenance
+```
+
+`fbol_sed_over_L` = integrated SED / (L/4πd²) per model. It is ~1 (< 0.5% off) almost everywhere,
+but up to ~7% high for hot, low-g models (Hertzsprung gap / blue loop, Teff 8500-15000 K, log g < 3)
+near the ragged low-g edge of the Kurucz grid, where the interpolation is not flux-conserving.
+To scale to a distance d, multiply flux by (10 pc / d)².
+
+To see one model through Argus (CMD point, light/colour curve, synthetic exposure, spectrum), point
+`plot_sed_observation.py` straight at a raw SED CSV. All photometry goes through ArgusSim's
+`ABPhot.mag_from_sed` / `electrons_from_sed`. Add `--distance-pc` to move the star away from 10 pc,
+because most models saturate there in a 60 s exposure:
+
+```
+python plot_sed_observation.py runs/<track>/SED/beta_SED_00000010.csv --distance-pc 2000 -o model10.png
+```
+
 ## Physics
 
 - **Atmospheres:** Kurucz2003 (ATLAS9). Magnitudes are absolute (10 pc): Vega for Gaia and

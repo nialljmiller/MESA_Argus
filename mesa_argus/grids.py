@@ -25,7 +25,8 @@ class _Maker:
     def __call__(self, mass, feh, alpha, max_age=DEFAULT_MAX_AGE, **meta):
         x, y, z = composition.from_feh(feh, self.cal["Y_sun"], self.cal["Z_sun"])
         alpha = round(alpha, 4)
-        return dict(name=track_name(mass, feh, alpha, max_age), mass=mass, feh=round(feh, 4), alpha=alpha,
+        name = track_name(mass, feh, alpha, max_age) + (f"_{meta['tag']}" if meta.get("tag") else "")
+        return dict(name=name, mass=mass, feh=round(feh, 4), alpha=alpha,
                     dalpha=round(alpha - self.alpha_sun, 2), X=x, Y=y, Z=z, max_age=max_age, **meta)
 
 

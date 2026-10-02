@@ -8,6 +8,7 @@
                             [--min-mass M] [--max-mass M] to restrict by initial mass
   status GRID [GRID ...]    done / running / failed / pending counts
   cmd3d GRID [--live]       interactive 3D CMD -> outputs/GRID_cmd3d.html (--live: rebuild every 5 min)
+  seds GRID                 pack per-model SED CSVs into runs/<track>/seds.h5 (done automatically after each run)
   fisher [GRID] [--live]    discernibility analysis -> outputs/fisher/ (default grid: fisher_stencil;
                             --live: re-run whenever another anchor's stencil completes)
 """
@@ -70,6 +71,15 @@ def cmd_cmd3d(a):
     cmd3d.live(a.grid) if a.live else cmd3d.build(a.grid)
 
 
+def cmd_seds(a):
+    from .grids import load
+    from .runner import status
+    from .seds import pack
+    for t in load(a.grid):
+        if t.get("save_seds") and status(t["name"]) == "done" and (C.RUNS / t["name"] / "SED").exists():
+            print(t["name"], "->", pack(t))
+
+
 def cmd_fisher(a):
     from . import fisher
     fisher.live(a.grid) if a.live else fisher.main(a.grid)
@@ -90,6 +100,7 @@ def main(argv=None):
     s.set_defaults(f=cmd_run)
     s = sub.add_parser("status"); s.add_argument("grids", nargs="+"); s.set_defaults(f=cmd_status)
     s = sub.add_parser("cmd3d"); s.add_argument("grid"); s.add_argument("--live", action="store_true"); s.set_defaults(f=cmd_cmd3d)
+    s = sub.add_parser("seds"); s.add_argument("grid"); s.set_defaults(f=cmd_seds)
     s = sub.add_parser("fisher"); s.add_argument("grid", nargs="?", default="fisher_stencil")
     s.add_argument("--live", action="store_true"); s.set_defaults(f=cmd_fisher)
     a = p.parse_args(argv)

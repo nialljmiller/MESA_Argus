@@ -32,7 +32,11 @@
       vega_sed    = '{vega_sed}'
       mag_system  = '{mag_system}'
       distance    = 3.0857d19           ! 10 pc -> absolute magnitudes
-      make_csv    = .false.
+      ! SED output (grids with save_seds): one CSV per filter per model in SED/,
+      ! packed into seds.h5 by mesa_argus.seds after the run
+      make_csv    = {make_csv}
+      sed_per_model = {make_csv}
+      colors_results_directory = 'SED'
       ! z_over_x_ref left at default (GS98, 0.0230): [M/H] = log((Z/X)/(Z/X)_sun)
 /
 
@@ -43,7 +47,7 @@
       initial_y = {y}
       mixing_length_alpha = {alpha}
       max_age = {max_age}
-
+{extra_controls}
       ! --- stopping: core He depletion (or max_age above) ---
       xa_central_lower_limit_species(1) = 'he4'
       xa_central_lower_limit(1) = 1d-4
