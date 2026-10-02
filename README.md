@@ -106,6 +106,13 @@ because most models saturate there in a 60 s exposure:
 python plot_sed_observation.py runs/<track>/SED/beta_SED_00000010.csv --distance-pc 2000 -o model10.png
 ```
 
+Point it at the run folder instead to get a movie of the whole track, one frame per model in
+model-number order (`--max-frames`, default 600, subsamples long runs; `--model-range` picks a phase):
+
+```
+python plot_sed_observation.py runs/<track> --distance-pc 2000      # -> <track>_argus.mp4
+```
+
 ## Physics
 
 - **Atmospheres:** Kurucz2003 (ATLAS9). Magnitudes are absolute (10 pc): Vega for Gaia and

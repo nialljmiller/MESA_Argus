@@ -9,6 +9,18 @@ Point it straight at a MESA colors-module SED (any filter's file holds the full 
 MESA SEDs are f_lambda at 10 pc; --distance-pc rescales them by (10 pc / d)^2
 (default: left at 10 pc, which saturates most stars in a 60 s exposure).
 
+Point it at a folder to make a movie, one frame per SED::
+
+    python plot_sed_observation.py runs/<track> --distance-pc 2000            # -> <track>_argus.mp4
+    python plot_sed_observation.py runs/<track>/SED --model-range 1 400 -o ms.gif
+
+MESA writes the same SED once per filter, so one file per model is used, ordered by
+model number (other folders: by the trailing number in each file name). Every axis is
+fixed by the whole sequence; the CMD traces the evolutionary track and the light curve
+shows one exposure per state against model number. Long runs are evenly subsampled
+to --max-frames (default 600; 0 renders every model). --save-data writes the per-frame
+photometry (with age, Teff and log g from LOGS/history.data) as a CSV.
+
 Other CSVs: the default columns are wavelength,flux, in Angstrom and
 erg/(s cm2 Angstrom). Values are observer-frame flux above the atmosphere.
 Use --flux-kind surface --radius-rsun R --distance-pc D for surface flux.
@@ -179,10 +191,10 @@ def system_response(tp, band, airmass):
     return response * np.asarray(tp.filt_wav.atmosphere, dtype=float) ** airmass
 
 
-def prepare_sed(args, ab):
+def prepare_sed(args, ab, path=None):
     """Read the SED and apply surface dilution, distance rescaling, or brightness normalisation."""
     wave, flux, metadata = read_sed(
-        args.input, args.wavelength_column, args.flux_column, args.wavelength_unit, args.flux_unit
+        path or args.input, args.wavelength_column, args.flux_column, args.wavelength_unit, args.flux_unit
     )
     kind = args.flux_kind or metadata.get("flux_kind", "observer")
     if kind not in ("observer", "surface"):
@@ -247,8 +259,8 @@ def cmd_covariance(sigma_beta, sigma_rho):
     return np.array([[sigma_beta**2 + sigma_rho**2, -(sigma_rho**2)], [-(sigma_rho**2), sigma_rho**2]])
 
 
-def simulate(args, wave, flux, ab, cfg):
-    """Predict both bands and draw paired, fixed-condition point-source exposures."""
+def observing_setup(args, ab, cfg):
+    """PSF, sky and noise model for both bands: fixed by the observing conditions, not the SED."""
     psf_model = ZemaxPSF.from_config(cfg)
     noise = NoiseBudget(
         read_noise=cfg.telescope.readnoise * u.electron,
@@ -256,11 +268,8 @@ def simulate(args, wave, flux, ab, cfg):
     )
     # Illustrative components in V-band S10, not a survey/sky-position forecast.
     sky_s10 = args.sky_s10 or [145.0 * args.airmass, 60.0, 10.0, 0.0, 0.0]
-    cadence = args.cadence_s if args.cadence_s is not None else args.exptime
-    times = (np.arange(args.n_exposures) * cadence + args.exptime / 2.0) / 60.0
-    rngs = [np.random.default_rng(seed) for seed in np.random.SeedSequence(args.seed).spawn(2)]
-    results = {}
-    for (name, band), rng in zip(BANDS.items(), rngs):
+    bands = {}
+    for name, band in BANDS.items():
         angles = psf_model.field_angles(band)
         if not angles.min() <= args.field_angle <= angles.max():
             raise ValueError(f"--field-angle must lie within {angles.min():.3f}–{angles.max():.3f} deg for {name}.")
@@ -271,12 +280,32 @@ def simulate(args, wave, flux, ab, cfg):
             raise ValueError(f"Invalid {name} PSF.")
         psf = np.maximum(psf, 0.0)
         psf /= psf.sum()
+        sky = SpectralSky(ab.tp, ab, band, throughputs_dir=args.throughputs_dir)
+        sky_rate = float(sky.sky_electrons(*sky_s10, transparency=args.transparency)) * cfg.telescope.plate_scale**2
+        bands[name] = {
+            "psf": psf,
+            "hfd": float(hfd),
+            "angle": float(angles[np.argmin(abs(angles - args.field_angle))]),
+            "sky_rate": sky_rate,
+        }
+    return {"noise": noise, "sky_s10": sky_s10, "bands": bands}
+
+
+def simulate(args, wave, flux, ab, cfg, setup=None, seed=None):
+    """Predict both bands and draw paired, fixed-condition point-source exposures."""
+    setup = setup or observing_setup(args, ab, cfg)
+    noise, sky_s10 = setup["noise"], setup["sky_s10"]
+    cadence = args.cadence_s if args.cadence_s is not None else args.exptime
+    times = (np.arange(args.n_exposures) * cadence + args.exptime / 2.0) / 60.0
+    seed = np.random.SeedSequence(args.seed) if seed is None else seed
+    rngs = [np.random.default_rng(s) for s in seed.spawn(2)]
+    results = {}
+    for (name, band), rng in zip(BANDS.items(), rngs):
+        psf, sky_rate = setup["bands"][name]["psf"], setup["bands"][name]["sky_rate"]
         rate = ab.electrons_from_sed(band, wave, flux, airmass=args.airmass, transparency=args.transparency)
         if rate.value <= 0:
             raise ValueError(f"The SED must have positive in-band flux in {name}.")
         mag = float(ab.mag_from_sed(band, wave, flux))
-        sky = SpectralSky(ab.tp, ab, band, throughputs_dir=args.throughputs_dir)
-        sky_rate = float(sky.sky_electrons(*sky_s10, transparency=args.transparency)) * cfg.telescope.plate_scale**2
         snr, budget = noise.get_snr(rate, psf, sky_rate * u.electron / u.s, args.exptime * u.s)
         source_e = rate.to_value(u.electron / u.s) * args.exptime
         background_e = (sky_rate + cfg.telescope.dark_current) * args.exptime
@@ -305,8 +334,8 @@ def simulate(args, wave, flux, ab, cfg):
             "sky_e_s_pixel": sky_rate,
             "background_e_pixel": background_e,
             "psf": psf,
-            "hfd_arcsec": float(hfd),
-            "sampled_field_angle_deg": float(angles[np.argmin(abs(angles - args.field_angle))]),
+            "hfd_arcsec": setup["bands"][name]["hfd"],
+            "sampled_field_angle_deg": setup["bands"][name]["angle"],
             "noise_budget_snr": float(snr),
             "noise_budget": budget,
             "fit_snr": source_e / chosen["sigma_e"],
@@ -318,8 +347,7 @@ def simulate(args, wave, flux, ab, cfg):
     return {"bands": results, "time_min": times, "sky_s10": sky_s10}
 
 
-def plot_figure(args, wave, flux, metadata, result, ab, cfg):
-    """Build the requested 70/30 by 60/40 linked panel layout."""
+def apply_style():
     plt.rcParams.update(
         {
             "font.size": 11,
@@ -335,12 +363,91 @@ def plot_figure(args, wave, flux, metadata, result, ab, cfg):
             "savefig.facecolor": "white",
         }
     )
-    fig = plt.figure(figsize=(16, 10), layout="constrained")
-    grid = fig.add_gridspec(2, 2, width_ratios=[7, 3], height_ratios=[6, 4], wspace=0.07, hspace=0.08)
+
+
+def figure_axes(fig, margins=None):
+    """The 70/30 by 60/40 linked layout: CMD, light/colour curves, exposure, spectrum.
+
+    margins (left, right, bottom, top) pins the layout for movie frames, where a
+    constrained layout would shift the panels as tick labels change.
+    """
+    if margins is None:
+        grid = fig.add_gridspec(2, 2, width_ratios=[7, 3], height_ratios=[6, 4], wspace=0.07, hspace=0.08)
+    else:
+        left, right, bottom, top = margins
+        grid = fig.add_gridspec(
+            2, 2, width_ratios=[7, 3], height_ratios=[6, 4], wspace=0.2, hspace=0.32,
+            left=left, right=right, bottom=bottom, top=top,
+        )
     cmd, image_ax, sed_ax = (fig.add_subplot(grid[0, 0]), fig.add_subplot(grid[0, 1]), fig.add_subplot(grid[1, 1]))
-    light_grid = grid[1, 0].subgridspec(2, 1, height_ratios=[2, 1], hspace=0.02)
+    light_grid = grid[1, 0].subgridspec(2, 1, height_ratios=[2, 1], hspace=0.02 if margins is None else 0.08)
     lc = fig.add_subplot(light_grid[0])
     colour_ax = fig.add_subplot(light_grid[1], sharex=lc)
+    return cmd, lc, colour_ax, image_ax, sed_ax
+
+
+def draw_image_panel(fig, image_ax, args, shown, cfg):
+    """Synthetic detector stamp of the selected exposure in one band."""
+    img = shown["exposure"]["image"]
+    ny, nx = img.shape
+    scale = cfg.telescope.plate_scale
+    extent = np.array([-nx / 2, nx / 2, -ny / 2, ny / 2]) * scale
+    norm = AsinhNorm(
+        linear_width=max(1, np.sqrt(shown["background_e_pixel"] + cfg.telescope.readnoise**2)),
+        vmin=float(min(0, img.min())),
+        vmax=float(img.max()),
+    )
+    plotted = image_ax.imshow(img, origin="lower", interpolation="nearest", cmap="magma", norm=norm, extent=extent)
+    image_ax.set_title(f"Synthetic exposure · {SYMBOLS[args.image_band]}", loc="left", weight="bold")
+    image_ax.set(xlabel="Offset (arcsec)", ylabel="Offset (arcsec)")
+    colorbar = fig.colorbar(plotted, ax=image_ax, shrink=0.8, pad=0.025, label="electrons / pixel")
+    colorbar.set_ticks(norm.inverse(np.linspace(0, 1, 5)))
+    colorbar.ax.yaxis.set_major_formatter(StrMethodFormatter("{x:.0f}"))
+    state = "SATURATED" if shown["exposure"]["saturated"] else f"Expected S/N {shown['fit_snr']:.1f}"
+    image_ax.text(
+        0.035,
+        0.965,
+        f"{args.exptime:g} s  ·  {state}\nHFD {shown['hfd_arcsec']:.2f} arcsec",
+        transform=image_ax.transAxes,
+        va="top",
+        fontsize=9,
+        color="white",
+        bbox={"facecolor": "#111726", "alpha": 0.65, "edgecolor": "none", "pad": 5},
+    )
+
+
+def draw_spectrum_panel(sed_ax, args, wave, flux, ab, ylim=None):
+    """Input SED over the Argus wavelength grid with both detected responses; ylim switches to log flux."""
+    nm = wave.to_value(u.nm)
+    flam = flux.to_value(FLAM, equivalencies=u.spectral_density(wave))
+    active = (nm >= ab.tp.wav[0].to_value(u.nm)) & (nm <= ab.tp.wav[-1].to_value(u.nm))
+    sed_ax.plot(nm[active], flam[active], color="#213e52", lw=1.2, label="Input SED")
+    sed_ax.set(
+        xlabel="Wavelength (nm)",
+        ylabel=r"$f_\lambda$ (erg s$^{-1}$ cm$^{-2}$ Å$^{-1}$)",
+        xlim=(ab.tp.wav[0].to_value(u.nm), ab.tp.wav[-1].to_value(u.nm)),
+    )
+    sed_ax.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
+    sed_ax.set_title("Spectrum at the CMD point", loc="left", weight="bold")
+    response_ax = sed_ax.twinx()
+    response_ax.spines["right"].set_visible(True)
+    for name, band in BANDS.items():
+        response = system_response(ab.tp, band, args.airmass) * args.transparency
+        response_ax.fill_between(ab.tp.wav.to_value(u.nm), response, color=COLORS[name], alpha=0.12)
+        response_ax.plot(ab.tp.wav.to_value(u.nm), response, color=COLORS[name], alpha=0.8, lw=0.8)
+    response_ax.set(ylim=(0, 1), ylabel="Detected response")
+    sed_ax.text(0.03, 0.97, "β", transform=sed_ax.transAxes, va="top", color=COLORS["beta"], weight="bold")
+    sed_ax.text(0.10, 0.97, "ρ", transform=sed_ax.transAxes, va="top", color=COLORS["rho"], weight="bold")
+    sed_ax.grid(alpha=0.12)
+    if ylim is not None:
+        sed_ax.set(yscale="log", ylim=ylim)
+
+
+def plot_figure(args, wave, flux, metadata, result, ab, cfg):
+    """Build the requested 70/30 by 60/40 linked panel layout."""
+    apply_style()
+    fig = plt.figure(figsize=(16, 10), layout="constrained")
+    cmd, lc, colour_ax, image_ax, sed_ax = figure_axes(fig)
     data = result["bands"]
     b, r = data["beta"], data["rho"]
     truth_colour = b["mag"] - r["mag"]
@@ -484,55 +591,9 @@ def plot_figure(args, wave, flux, metadata, result, ab, cfg):
             fontsize=10,
         )
 
-    shown = data[args.image_band]
-    img = shown["exposure"]["image"]
-    ny, nx = img.shape
-    scale = cfg.telescope.plate_scale
-    extent = np.array([-nx / 2, nx / 2, -ny / 2, ny / 2]) * scale
-    norm = AsinhNorm(
-        linear_width=max(1, np.sqrt(shown["background_e_pixel"] + cfg.telescope.readnoise**2)),
-        vmin=float(min(0, img.min())),
-        vmax=float(img.max()),
-    )
-    plotted = image_ax.imshow(img, origin="lower", interpolation="nearest", cmap="magma", norm=norm, extent=extent)
-    image_ax.set_title(f"Synthetic exposure · {SYMBOLS[args.image_band]}", loc="left", weight="bold")
-    image_ax.set(xlabel="Offset (arcsec)", ylabel="Offset (arcsec)")
-    colorbar = fig.colorbar(plotted, ax=image_ax, shrink=0.8, pad=0.025, label="electrons / pixel")
-    colorbar.set_ticks(norm.inverse(np.linspace(0, 1, 5)))
-    colorbar.ax.yaxis.set_major_formatter(StrMethodFormatter("{x:.0f}"))
-    state = "SATURATED" if shown["exposure"]["saturated"] else f"Expected S/N {shown['fit_snr']:.1f}"
-    image_ax.text(
-        0.035,
-        0.965,
-        f"{args.exptime:g} s  ·  {state}\nHFD {shown['hfd_arcsec']:.2f} arcsec",
-        transform=image_ax.transAxes,
-        va="top",
-        fontsize=9,
-        color="white",
-        bbox={"facecolor": "#111726", "alpha": 0.65, "edgecolor": "none", "pad": 5},
-    )
+    draw_image_panel(fig, image_ax, args, data[args.image_band], cfg)
 
-    nm = wave.to_value(u.nm)
-    flam = flux.to_value(FLAM, equivalencies=u.spectral_density(wave))
-    active = (nm >= ab.tp.wav[0].to_value(u.nm)) & (nm <= ab.tp.wav[-1].to_value(u.nm))
-    sed_ax.plot(nm[active], flam[active], color="#213e52", lw=1.2, label="Input SED")
-    sed_ax.set(
-        xlabel="Wavelength (nm)",
-        ylabel=r"$f_\lambda$ (erg s$^{-1}$ cm$^{-2}$ Å$^{-1}$)",
-        xlim=(ab.tp.wav[0].to_value(u.nm), ab.tp.wav[-1].to_value(u.nm)),
-    )
-    sed_ax.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
-    sed_ax.set_title("Spectrum at the CMD point", loc="left", weight="bold")
-    response_ax = sed_ax.twinx()
-    response_ax.spines["right"].set_visible(True)
-    for name, band in BANDS.items():
-        response = system_response(ab.tp, band, args.airmass) * args.transparency
-        response_ax.fill_between(ab.tp.wav.to_value(u.nm), response, color=COLORS[name], alpha=0.12)
-        response_ax.plot(ab.tp.wav.to_value(u.nm), response, color=COLORS[name], alpha=0.8, lw=0.8)
-    response_ax.set(ylim=(0, 1), ylabel="Detected response")
-    sed_ax.text(0.03, 0.97, "β", transform=sed_ax.transAxes, va="top", color=COLORS["beta"], weight="bold")
-    sed_ax.text(0.10, 0.97, "ρ", transform=sed_ax.transAxes, va="top", color=COLORS["rho"], weight="bold")
-    sed_ax.grid(alpha=0.12)
+    draw_spectrum_panel(sed_ax, args, wave, flux, ab)
     title = args.title or metadata.get("title") or Path(metadata["path"]).stem
     mode = "one epoch" if args.n_exposures == 1 else f"{args.n_exposures} repeats of one fixed SED"
     fig.suptitle(
@@ -542,6 +603,236 @@ def plot_figure(args, wave, flux, metadata, result, ab, cfg):
         weight="medium",
     )
     return fig
+
+
+def find_seds(folder):
+    """SED CSVs in a folder, one per stellar state, in evolutionary order: [(key, path)], key label.
+
+    A MESA run folder (runs/<track>) is searched in its SED/ subfolder. MESA writes the same
+    SED once per filter (<filter>_SED_<model>.csv), so one file per model is kept (beta's,
+    when present) and models are ordered by number. Other CSVs are ordered by the trailing
+    number in their names, or naturally by name when there is none.
+    """
+    folder = Path(folder).expanduser()
+    if (folder / "SED").is_dir() and not any(folder.glob("*.csv")):
+        folder = folder / "SED"
+    files = sorted(
+        p for p in folder.iterdir()
+        if p.is_file() and p.suffix.lower() == ".csv" and not p.name.endswith(".photometry.csv")
+    )
+    if not files:
+        raise ValueError(f"No CSV files in {folder}.")
+    names = [MESA_NAME.match(p.stem) for p in files]
+    if all(names):
+        by_model = {}
+        for path, name in zip(files, names):
+            model = int(name["model"])
+            if model not in by_model or name["filter"] == "beta":
+                by_model[model] = path
+        return [(model, by_model[model]) for model in sorted(by_model)], "Model number"
+    files.sort(key=lambda p: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", p.stem)])
+    numbers = [re.search(r"(\d+)$", p.stem) for p in files]
+    if all(numbers) and len({int(n[1]) for n in numbers}) == len(files):
+        return [(int(n[1]), p) for n, p in zip(numbers, files)], "File number"
+    return list(enumerate(files, start=1)), "Frame"
+
+
+def mesa_history(sed_dir):
+    """Model number -> (star_age yr, Teff K, log g) from the run's LOGS/history.data, if present."""
+    history = Path(sed_dir).parent / "LOGS" / "history.data"
+    if Path(sed_dir).name != "SED" or not history.is_file():
+        return {}
+    h = np.genfromtxt(history, skip_header=5, names=True)
+    return {
+        int(m): (age, 10.0**teff, logg)
+        for m, age, teff, logg in zip(h["model_number"], h["star_age"], h["log_Teff"], h["log_g"])
+    }
+
+
+def format_age(years):
+    """Star age at a readable scale."""
+    for unit, scale in (("Gyr", 1e9), ("Myr", 1e6), ("kyr", 1e3)):
+        if years >= scale:
+            return f"{years / scale:.4g} {unit}"
+    return f"{years:.4g} yr"
+
+
+def make_movie(args, frames, key_label, ab, cfg):
+    """Observe every SED in turn and write one linked four-panel frame per stellar state.
+
+    Pass 1 reads each SED and its true AB magnitudes, which fix every axis for the whole
+    movie. Pass 2 draws one exposure per state under the same conditions (fresh noise for
+    each) and renders it: the CMD shows the evolutionary track traced so far, the light curve
+    the measured magnitudes against model number.
+    """
+    from matplotlib.animation import FFMpegWriter, PillowWriter
+
+    if args.model_range is not None:
+        low, high = args.model_range
+        frames = [f for f in frames if low <= f[0] <= high]
+    if len(frames) < 2:
+        raise ValueError(f"A movie needs at least two SEDs; {len(frames)} selected.")
+    if args.max_frames and len(frames) > args.max_frames:
+        keep = np.unique(np.round(np.linspace(0, len(frames) - 1, args.max_frames)).astype(int))
+        print(f"{len(frames)} SEDs; rendering {len(keep)} evenly spaced in {key_label.lower()} (--max-frames 0 for all)")
+        frames = [frames[i] for i in keep]
+
+    history = mesa_history(frames[0][1].parent)
+    states, skipped = [], []
+    for key, path in frames:
+        try:
+            wave, flux, metadata = prepare_sed(args, ab, path)
+            mags = {name: float(ab.mag_from_sed(band, wave, flux)) for name, band in BANDS.items()}
+        except (ValueError, u.UnitConversionError) as exc:
+            skipped.append(f"{path.name}: {exc}")
+            continue
+        states.append({"key": key, "path": path, "wave": wave, "flux": flux, "metadata": metadata, "mag": mags})
+    if skipped:
+        warnings.warn(f"Skipped {len(skipped)} unusable SEDs, e.g. {skipped[0]}", stacklevel=1)
+    if len(states) < 2:
+        raise ValueError("Fewer than two usable SEDs.")
+
+    modulus = 5 * np.log10(args.distance_pc / 10.0) if args.absolute else 0.0
+    keys = np.array([s["key"] for s in states], dtype=float)
+    true = {name: np.array([s["mag"][name] for s in states]) for name in BANDS}
+    true_colour, true_y = true["beta"] - true["rho"], true["rho"] - modulus
+
+    def padded(values, minimum):
+        low, high = np.nanmin(values), np.nanmax(values)
+        pad = max(minimum, 0.06 * (high - low))
+        return low - pad, high + pad
+
+    fixed = {"colour": padded(true_colour, 0.05), "y": padded(true_y, 0.1), "lc": padded(np.r_[true["beta"], true["rho"]], 0.1)}
+    lo, hi = ab.tp.wav[0].to_value(u.nm), ab.tp.wav[-1].to_value(u.nm)
+    peaks, floors = [], []
+    for state in states:
+        nm = state["wave"].to_value(u.nm)
+        flam = state["flux"].to_value(FLAM)[(nm >= lo) & (nm <= hi)]
+        peaks.append(flam.max())
+        floors.append(np.percentile(flam[flam > 0], 5) if np.any(flam > 0) else flam.max())
+    fixed["sed"] = (max(min(floors) / 2, max(peaks) * 1e-6), max(peaks) * 2)
+
+    setup = observing_setup(args, ab, cfg)
+    seeds = np.random.SeedSequence(args.seed).spawn(len(states))
+    if args.output.suffix.lower() == ".gif":
+        writer = PillowWriter(fps=args.fps)
+    elif FFMpegWriter.isAvailable():
+        writer = FFMpegWriter(
+            fps=args.fps,
+            extra_args=["-vcodec", "libx264", "-pix_fmt", "yuv420p", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"],
+        )
+    else:
+        raise ValueError("ffmpeg not found on PATH; install it or write a .gif instead.")
+    apply_style()
+    fig = plt.figure(figsize=(16, 10))
+    rows = []
+    print(f"Rendering {len(states)} frames to {args.output}")
+    with writer.saving(fig, str(args.output), dpi=args.dpi):
+        for i, state in enumerate(states):
+            result = simulate(args, state["wave"], state["flux"], ab, cfg, setup=setup, seed=seeds[i])
+            row = {key_label.lower().replace(" ", "_"): state["key"]}
+            if state["key"] in history:
+                row.update(zip(("star_age_yr", "teff_K", "log_g"), history[state["key"]]))
+            for name in BANDS:
+                d = result["bands"][name]
+                m = d["measurements"][0]
+                row.update({
+                    f"{name}_true_mag": d["mag"], f"{name}_mag": m["mag"], f"{name}_sigma_mag": m["sigma_mag"],
+                    f"{name}_rate_e_s": d["rate_e_s"], f"{name}_saturated": m["saturated"],
+                })
+            rows.append(row)
+            fig.clear()
+            draw_movie_frame(fig, args, states, i, rows, result, key_label, history, fixed, modulus, ab, cfg)
+            writer.grab_frame()
+            if (i + 1) % max(1, len(states) // 10) == 0 or i + 1 == len(states):
+                print(f"  {i + 1}/{len(states)}", flush=True)
+    plt.close(fig)
+    if args.save_data:
+        with args.output.with_suffix(".photometry.csv").open("w", newline="") as handle:
+            writer_csv = csv.DictWriter(handle, fieldnames=rows[0].keys())
+            writer_csv.writeheader()
+            writer_csv.writerows(rows)
+    saturated = sum(r["beta_saturated"] or r["rho_saturated"] for r in rows)
+    print(f"Saved {args.output}: {len(rows)} frames at {args.fps:g} fps")
+    if saturated:
+        warnings.warn(
+            f"{saturated}/{len(rows)} frames saturated in at least one band (magnitudes omitted there). "
+            "Move the star further away (--distance-pc) or shorten --exptime.",
+            stacklevel=1,
+        )
+
+
+def draw_movie_frame(fig, args, states, i, rows, result, key_label, history, fixed, modulus, ab, cfg):
+    """One movie frame: evolutionary CMD and light curve so far, this state's exposure and spectrum."""
+    cmd, lc, colour_ax, image_ax, sed_ax = figure_axes(fig, margins=(0.05, 0.95, 0.06, 0.88))
+    state = states[i]
+    key_name = key_label.lower().replace(" ", "_")
+    keys = np.array([r[key_name] for r in rows], dtype=float)
+    all_keys = np.array([s["key"] for s in states], dtype=float)
+    true = {name: np.array([s["mag"][name] for s in states]) for name in BANDS}
+    true_colour, true_y = true["beta"] - true["rho"], true["rho"] - modulus
+    meas = {name: np.array([r[f"{name}_mag"] for r in rows]) for name in BANDS}
+    err = {name: np.array([r[f"{name}_sigma_mag"] for r in rows]) for name in BANDS}
+    b, r = result["bands"]["beta"], result["bands"]["rho"]
+
+    cmd.plot(true_colour, true_y, color="#c9d3da", lw=1.0, zorder=1, label="Full track (input SEDs)")
+    cmd.plot(true_colour[: i + 1], true_y[: i + 1], color="#5d7d93", lw=1.6, zorder=2, label="Track so far")
+    valid = np.isfinite(meas["beta"]) & np.isfinite(meas["rho"])
+    cmd.scatter((meas["beta"] - meas["rho"])[valid], (meas["rho"] - modulus)[valid], s=9, color="#a8b8c4",
+                alpha=0.7, zorder=3, label="Measured so far")
+    if valid[i]:
+        cmd.errorbar(meas["beta"][i] - meas["rho"][i], meas["rho"][i] - modulus,
+                     xerr=np.hypot(err["beta"][i], err["rho"][i]), yerr=err["rho"][i],
+                     fmt="o", ms=7, color="#203f54", capsize=2, zorder=6, label="This exposure")
+    cmd.scatter(true_colour[i], true_y[i], marker="*", s=230, color="#d9a33b", edgecolor="#755921",
+                linewidth=0.8, zorder=5, label="Input SED")
+    cmd.set(xlim=fixed["colour"], ylim=(fixed["y"][1], fixed["y"][0]), xlabel=r"$\beta-\rho$ (AB mag)",
+            ylabel=r"$M_\rho$ (AB mag)" if args.absolute else r"$m_\rho$ (AB mag)")
+    cmd.set_title("Colour–magnitude diagram", loc="left", weight="bold")
+    cmd.grid(alpha=0.15)
+    # the track can pass under any corner: the legend sits beneath the current state, and the
+    # state itself is read out in the headings rather than in a box over the data
+    legend = cmd.legend(loc="lower right", fontsize=10, framealpha=0.85, edgecolor="none")
+    legend.set_zorder(4)
+    cmd.set_title(f"β {b['mag']:.3f}   ρ {r['mag']:.3f}   β−ρ {b['mag'] - r['mag']:.3f}  (input SED, AB)",
+                  loc="right", fontsize=11, color="#3c5262")
+
+    for name in BANDS:
+        lc.plot(all_keys, true[name], color=COLORS[name], lw=0.8, alpha=0.3)
+        ok = np.isfinite(meas[name])
+        lc.errorbar(keys[ok], meas[name][ok], yerr=err[name][ok], fmt="o", ms=3, capsize=0, lw=0.7,
+                    color=COLORS[name], label=SYMBOLS[name])
+        lc.plot(keys[i], true[name][i], "o", ms=9, mfc="none", mec=COLORS[name], mew=1.5)
+    colour_ax.plot(all_keys, true["beta"] - true["rho"], color=COLORS["colour"], lw=0.8, alpha=0.3)
+    colour_ax.errorbar(keys[valid], (meas["beta"] - meas["rho"])[valid],
+                       yerr=np.hypot(err["beta"], err["rho"])[valid], fmt="o", ms=3, lw=0.7,
+                       color=COLORS["colour"])
+    for ax in (lc, colour_ax):
+        ax.axvline(keys[i], color="#455868", lw=0.8, alpha=0.35)
+        ax.grid(alpha=0.15)
+    lc.set_title("Light and colour curves", loc="left", weight="bold")
+    lc.set(ylabel="AB magnitude", ylim=(fixed["lc"][1], fixed["lc"][0]))
+    lc.legend(loc="lower right", bbox_to_anchor=(1.0, 1.005), ncol=2, frameon=False, borderaxespad=0)
+    plt.setp(lc.get_xticklabels(), visible=False)
+    span = all_keys[-1] - all_keys[0]
+    colour_ax.set(xlabel=key_label, ylabel=r"$\beta-\rho$ (mag)", ylim=fixed["colour"],
+                  xlim=(all_keys[0] - 0.02 * span, all_keys[-1] + 0.02 * span))
+
+    draw_image_panel(fig, image_ax, args, result["bands"][args.image_band], cfg)
+    draw_spectrum_panel(sed_ax, args, state["wave"], state["flux"], ab, ylim=fixed["sed"])
+    title = args.title or (state["path"].parent.parent.name if state["path"].parent.name == "SED" else state["path"].parent.name)
+    distance = f"  |  {args.distance_pc:g} pc" if args.distance_pc else ""
+    physical = ""
+    if state["key"] in history:
+        age, teff, logg = history[state["key"]]
+        physical = f" · {format_age(age)} · {teff:.0f} K · log g {logg:.2f}"
+    fig.suptitle(
+        f"ARGUS · {title} · {key_label.lower()} {state['key']}{physical}  ({i + 1}/{len(states)})\n"
+        f"one {args.exptime:g} s exposure per state{distance}  |  airmass {args.airmass:g}  |  "
+        f"seeing {args.seeing:g}″  |  field {args.field_angle:g}°",
+        fontsize=15,
+        weight="medium",
+    )
 
 
 def save_data(output, args, metadata, result, cfg):
@@ -614,9 +905,13 @@ def parser():
     p.add_argument(
         "input",
         type=Path,
-        help="one SED CSV (e.g. MESA's runs/<track>/SED/<filter>_SED_<model>.csv), or a folder with exactly one CSV",
+        help="one SED CSV (e.g. MESA's runs/<track>/SED/<filter>_SED_<model>.csv) for an image, "
+        "or a folder of them (runs/<track>, runs/<track>/SED) for a movie",
     )
-    p.add_argument("-o", "--output", type=Path, default=Path("sed_observation.png"))
+    p.add_argument(
+        "-o", "--output", type=Path,
+        help="image (.png/.pdf/.svg; default sed_observation.png) or, for a folder, movie (.mp4/.gif; default <name>_argus.mp4)",
+    )
     p.add_argument("--wavelength-column", help="CSV header name or zero-based index")
     p.add_argument("--flux-column", help="CSV header name or zero-based index")
     p.add_argument("--wavelength-unit", help="Astropy unit; default Angstrom or CSV metadata")
@@ -648,7 +943,12 @@ def parser():
     p.add_argument("--ee50-profile", type=Path, help="override config's delivered optics profile")
     p.add_argument("--throughputs-dir", help="override ArgusSim's packaged throughput/template directory")
     p.add_argument("--title")
-    p.add_argument("--dpi", type=int, default=180)
+    p.add_argument("--dpi", type=int, help="default 180 for an image, 100 for a movie")
+    p.add_argument("--fps", type=float, default=24, help="movie frames per second (default 24)")
+    p.add_argument("--max-frames", type=int, default=600,
+                   help="movie: evenly subsample to at most this many SEDs (default 600; 0 = all)")
+    p.add_argument("--model-range", type=int, nargs=2, metavar=("FIRST", "LAST"),
+                   help="movie: only models (or file numbers) in this inclusive range")
     p.add_argument("--save-data", action="store_true", help="also write FITS stamps, photometry CSV and metadata JSON")
     return p
 
@@ -667,14 +967,14 @@ def validate_args(args):
         raise ValueError("Sky components must be finite and non-negative.")
     if not all(np.isfinite(v) and 0 <= v < 1 for v in args.pixel_phase):
         raise ValueError("Pixel phases must lie in [0,1).")
-    if args.n_exposures < 1 or not 0 <= args.epoch_index < args.n_exposures or args.seed < 0 or args.dpi < 1:
-        raise ValueError("Invalid exposure count, selected epoch, seed or DPI.")
+    if args.n_exposures < 1 or not 0 <= args.epoch_index < args.n_exposures or args.seed < 0:
+        raise ValueError("Invalid exposure count, selected epoch or seed.")
+    if (args.dpi is not None and args.dpi < 1) or not np.isfinite(args.fps) or args.fps <= 0 or args.max_frames < 0:
+        raise ValueError("Invalid DPI, --fps or --max-frames.")
     if args.cadence_s is not None and args.cadence_s < args.exptime:
         raise ValueError("--cadence-s must be at least --exptime.")
     if args.rho_mag is not None and (not np.isfinite(args.rho_mag) or args.distance_pc is not None):
         raise ValueError("--rho-mag must be finite and cannot be combined with a physical --distance-pc.")
-    if args.output.suffix.lower() not in (".png", ".pdf", ".svg"):
-        raise ValueError("Output extension must be .png, .pdf or .svg.")
 
 
 def main(argv=None):
@@ -699,10 +999,29 @@ def main(argv=None):
             throughput_loss=cfg.telescope.throughput_loss,
         )
         ab = ABPhot(throughput=tp, collecting_area=cfg.telescope.collecting_area)
+        if args.input.expanduser().is_dir():
+            frames, key_label = find_seds(args.input)
+            if len(frames) > 1:
+                if args.n_exposures != 1 or args.rho_mag is not None:
+                    raise ValueError("A movie draws one exposure per state at a physical distance: "
+                                     "drop --n-exposures and --rho-mag.")
+                folder = frames[0][1].parent
+                name = folder.parent.name if folder.name == "SED" else folder.name
+                args.output = (args.output or Path(f"{name}_argus.mp4")).expanduser()
+                if args.output.suffix.lower() not in (".mp4", ".gif"):
+                    raise ValueError("A movie must be written as .mp4 or .gif.")
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.dpi = args.dpi or 100
+                make_movie(args, frames, key_label, ab, cfg)
+                return 0
+            args.input = frames[0][1]
+        args.output = (args.output or Path("sed_observation.png")).expanduser()
+        if args.output.suffix.lower() not in (".png", ".pdf", ".svg"):
+            raise ValueError("Output extension must be .png, .pdf or .svg.")
+        args.dpi = args.dpi or 180
         wave, flux, metadata = prepare_sed(args, ab)
         result = simulate(args, wave, flux, ab, cfg)
         fig = plot_figure(args, wave, flux, metadata, result, ab, cfg)
-        args.output = args.output.expanduser()
         args.output.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(args.output, dpi=args.dpi)
         plt.close(fig)
