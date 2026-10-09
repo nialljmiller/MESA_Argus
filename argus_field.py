@@ -493,6 +493,8 @@ def main(argv=None):
     import os
 
     os.chdir(Path(__file__).resolve().parent)  # data/, runs/, outputs/ live in the repo, wherever this is run from
+    if not list(Path("runs").glob("*_sed/seds.h5")):  # the constant stars' SEDs (m3_night_movie.Templates)
+        raise SystemExit("no runs/*_sed/seds.h5: run the SED tracks first (python -m mesa_argus run argus_sim_seds), or copy runs/*_sed/seds.h5 from a machine that has them")
     name = args.name or field_name(args.ra, args.dec)
     data, out = Path("data") / name, Path("outputs") / name
     site = SITES[args.site]
