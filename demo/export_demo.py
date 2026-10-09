@@ -5,6 +5,7 @@
 
 Everything here is the movie's own physics (m3_night_movie.py, ArgusSim), evaluated once:
 - every Gaia star: position, catalogue colour, template electron rates per band on AIRMASS_GRID (as the movie);
+  the same for a BP-RP grid at G = 15, for stars added on the page;
 - the night: per exposure UT, BJD, airmass, seeing and ArgusSim's five sky components per band (e/s/pixel);
 - ArgusSim Zemax PSFs per band on a 0.05" seeing grid x 8 x 8 sub-pixel phases (as the movie's Scene);
 - variable-star models (the field's own MESA RSP stars and a library, one per type): electron rates per band x
@@ -119,6 +120,17 @@ def main():
                                                       for x in M.AIRMASS_GRID])
             static_mag[b][on] = float(ab.mag_from_sed(band, templates.wave, s_)) - 2.5 * np.log10(scale[on])
 
+    # templates for stars added on the page: the movie's choice (Templates.index) on a BP-RP grid, rates at G = 15
+    added = dict(bp_rp=np.round(np.arange(-0.3, 3.001, 0.05), 2).tolist(), G=15.0, rate={b: [] for b in BANDS},
+                 mag={b: [] for b in BANDS})
+    for c_ in added["bp_rp"]:
+        f_ = templates.sed(c_, added["G"]) * FLAM
+        for b, band in BANDS.items():
+            added["rate"][b].append([ab.electrons_from_sed(band, templates.wave, f_, airmass=x).value for x in M.AIRMASS_GRID])
+            added["mag"][b].append(float(ab.mag_from_sed(band, templates.wave, f_)))
+    added["rate"] = {b: pack(v) for b, v in added["rate"].items()}
+    added["mag"] = {b: pack(v) for b, v in added["mag"].items()}
+
     # the field's own variables (as the movie) and the library (re-reddened to this field)
     from mesa_argus import rsp
 
@@ -177,7 +189,7 @@ def main():
                    G=pack(G), bp_rp_gaia=pack(M.column(stars, "BP-RP")), colour=pack(colour),
                    in_block=pack(np.asarray(stars["in_block"], float)), gaia_var=pack(gaia_var.astype(float)),
                    rate={b: pack(r) for b, r in static_rate.items()}, mag={b: pack(m) for b, m in static_mag.items()}),
-        native=native, models=models,
+        native=native, models=models, templates=added,
         night=dict(ut=pack(ut), bjd=(bjd - 2460000.0).tolist(), airmass=pack(airmass), seeing=pack(seeing),
                    moon_illum=pack(comp["illum_frac"]), moon_alt=pack(comp["moon_alt"]), sky_v=pack(comp["v_mag"]),
                    sky={b: {n_: pack(v) for n_, v in c_.items()} for b, c_ in sky.items()}),
