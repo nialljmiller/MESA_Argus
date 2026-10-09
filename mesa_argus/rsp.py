@@ -165,8 +165,6 @@ def build_sed_instrument():
     import shutil
 
     full = C.REPO / "filters" / "ArgusGaiaSDSS" / "ArgusGaiaSDSS"
-    if not full.exists():
-        raise SystemExit(f"{full} not found: run `python -m mesa_argus setup` first")
     if not RSP_INSTRUMENT.exists():
         RSP_INSTRUMENT.mkdir(parents=True)
         names = ["G.dat", "Gbp.dat", "Grp.dat", "beta.dat", "rho.dat"]
@@ -242,14 +240,14 @@ def cores():
     """Cores this process's RSP runs may use: $ARGUS_CORES (set by stage_batch.py to share the machine between
     fields run at once), else config.toml [run] max_star_procs, else all."""
     if os.environ.get("ARGUS_CORES"):
-        return max(1, int(os.environ["ARGUS_CORES"]))
-    return int(C.config().get("run", {}).get("max_star_procs", 0) or 0) or os.cpu_count() or 1
+        return int(os.environ["ARGUS_CORES"])
+    return int(C.config()["run"]["max_star_procs"]) or os.cpu_count()
 
 
 def take_cores():
     """Block until cores are free; return the OpenMP thread count for this run (also the cores it holds)."""
     global _free, _waiting
-    fixed = int(C.config().get("run", {}).get("rsp_threads", 0) or 0)
+    fixed = int(C.config()["run"]["rsp_threads"])
     with _pool:
         if _free is None:
             _free = cores()
@@ -271,74 +269,36 @@ def give_cores(n):
         _pool.notify_all()
 
 
-def run(directory: Path, text: str, log="out.txt", timeout=4 * 3600):
+def run(directory: Path, text: str, log="out.txt"):
     """Run MESA in directory; every RSP run goes through here, so the core pool covers all stars, convection sets
     and kicks of this process. The thread count used is written to directory/omp_threads."""
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "inlist").write_text(text)
     n = take_cores()
-    try:
-        (directory / "omp_threads").write_text(f"{n}\n")
-        env = dict(os.environ, OMP_NUM_THREADS=str(n))
-        with open(directory / log, "w") as out:
-            subprocess.run([str(STAR)], cwd=directory, stdout=out, stderr=subprocess.STDOUT, env=env, timeout=timeout)
-    finally:
-        give_cores(n)
+    (directory / "omp_threads").write_text(f"{n}\n")
+    with open(directory / log, "w") as out:
+        subprocess.run([str(STAR)], cwd=directory, stdout=out, stderr=subprocess.STDOUT,
+                       env=dict(os.environ, OMP_NUM_THREADS=str(n)))
+    give_cores(n)
     return (directory / log).read_text(errors="replace")
 
 
 def linear(params, directory):
+    """Periods (d) and growth rates per period of the lowest modes (RSP's LINA), or None if the static model fails."""
     import shutil
 
     shutil.rmtree(directory / "LOGS", ignore_errors=True)  # never read a previous run's results
     run(directory, inlist(params, "lina"), "lina.txt")
     out = directory / "LOGS" / "LINA_period_growth.data"
     if not out.exists():
-        raise RuntimeError(f"linear analysis failed at Teff {params['teff']:.0f} K, L {params['L']:.2f}; see {directory / 'lina.txt'}")
+        return None
     table = np.loadtxt(out)
-    return table[:, 1], table[:, 2]  # periods (d), growth rates per period
+    return table[:, 1], table[:, 2]
 
 
-def tune(label, target, base):
-    """Tune Teff to the Gaia period; unless the star's mode is then the only unstable one (of F and 1O),
-    lower L in 5% steps (max 30%), which moves the period-matched model to a cooler Teff.
-
-    At M3's horizontal-branch L, short-period RRc (P1O ~ 0.28 d) need Teff beyond the RSP blue edge
-    and short-period RRab (~0.5 d) sit where the overtone is the more unstable mode; slightly less
-    luminous models put each in its own mode. The L used, and the cluster value, are both recorded.
-    """
-    cluster_L = luminosity(target)
-    # direction from the first try: an RRc whose fundamental is unstable at the period-matched Teff is too cool
-    # (long-period RRc, e.g. Oosterhoff II M15): raise L, so the period is reached at a hotter Teff; otherwise
-    # the model is too hot or in the overtone-dominated zone (short-period RRab/RRc, e.g. M3): lower L
-    try:
-        params = _tune_teff(label, target, base, cluster_L)
-        params.update(cluster_L=cluster_L, L_factor=1.0)
-        return params
-    except RuntimeError as exc:
-        last = exc
-    p0 = _linear_at_cluster_L(label, target, base, cluster_L)
-    too_cool = MODE[target["kind"]] == 1 and p0["growth"][0] > 0
-    factors = (1.05, 1.10, 1.15, 1.20, 1.30, 1.40, 1.50) if too_cool else (0.95, 0.90, 0.85, 0.80, 0.75, 0.70)
-    for factor in factors:
-        try:
-            params = _tune_teff(label, target, base, cluster_L * factor)
-            params.update(cluster_L=cluster_L, L_factor=factor)
-            return params
-        except RuntimeError as exc:
-            last = exc
-    raise last
-
-
-def _linear_at_cluster_L(label, target, base, L):
-    """Linear periods and growth rates of the period-matched model at L, without the stability checks."""
-    try:
-        return _tune_teff(label, target, base, L, check=False)
-    except RuntimeError:
-        raise
-
-
-def _tune_teff(label, target, base, L, check=True):
+def tune_teff(label, target, base, L):
+    """The linear model at L with Teff tuned until the period of the star's mode equals Gaia's to 0.1%, or None
+    if the linear analysis fails (e.g. the static envelope cannot be built)."""
     mode, p_target = MODE[target["kind"]], target["period"]
     params = dict(mass=target["mass"] if "mass" in target else MASS[target["kind"]], L=L, mode=mode, z=target.get("z", Z),
                   kap=target.get("kap", KAP_MIX), x=target.get("x", X), extra_controls=EXTRA_CONTROLS.get(target["kind"], []))
@@ -347,7 +307,12 @@ def _tune_teff(label, target, base, L, check=True):
     teffs, periods = [6400.0 * (0.594 * (params["L"] / 47.0) ** 0.84 * (0.68 / params["mass"]) ** 0.68 / p0) ** (1 / 3.48)], []
     for _ in range(8):
         params["teff"] = teffs[-1]
-        p, growth = linear(params, base / "lina")
+        lina = linear(params, base / "lina")
+        if lina is None:
+            print(f"  {label}: linear analysis failed at Teff {params['teff']:.0f} K, L {L:.2f}; see {base / 'lina' / 'lina.txt'}",
+                  flush=True)
+            return None
+        p, growth = lina
         periods.append(p[mode])
         if abs(periods[-1] / p_target - 1) < 1e-3:
             break
@@ -357,45 +322,35 @@ def _tune_teff(label, target, base, L, check=True):
             slope = (np.log(periods[-1]) - np.log(periods[-2])) / (np.log(teffs[-1]) - np.log(teffs[-2]))
             teffs.append(float(np.exp(np.log(teffs[-1]) + (np.log(p_target) - np.log(periods[-1])) / slope)))
     params.update(teff=teffs[len(periods) - 1], linear_periods=p.tolist(), growth=growth.tolist(), linear_period=periods[-1])
-    if not check:
-        return params
-    if growth[mode] <= 0:
-        raise RuntimeError(f"{label}: mode {mode} is linearly stable at Teff {params['teff']:.0f} K (growth {growth.tolist()})")
-    if check == "own":  # only the star's own mode must be unstable; the non-linear run decides the rest
-        return params
-    # the star's mode must be the only unstable one of the two lowest: otherwise the nonlinear model
-    # drifts to the other mode or to double-mode pulsation (seen as alternating periods)
-    other = 1 - mode
-    if growth[other] > 0:
-        raise RuntimeError(f"{label}: mode {other} also unstable at Teff {params['teff']:.0f} K (growth {growth.tolist()})")
     return params
 
 
 def candidates(label, target, base):
     """Period-matched linear models with the star's own mode unstable, in the order to try: the star's L first,
-    then L stepped down (or up, for an RRc whose fundamental is unstable: too cool), as in tune()."""
+    then L stepped down 5% at a time to 0.70 x (which moves the period-matched model to a cooler Teff), or up to
+    1.50 x for an RRc whose fundamental is unstable (too cool); the non-linear run decides the rest."""
     L0 = luminosity(target)
     mode = MODE[target["kind"]]
-    try:
-        p0 = _tune_teff(label, target, base, L0, check=False)
-    except RuntimeError as exc:  # e.g. the static model cannot be built at this L: let the L search go on
-        print(f"  {label}: L x 1.0: {exc}", flush=True)
-        p0 = dict(growth=[0.0, 0.0, 0.0])
     up, down = (1.05, 1.10, 1.15, 1.20, 1.30, 1.40, 1.50), (0.95, 0.90, 0.85, 0.80, 0.75, 0.70)
-    too_cool = mode == 1 and p0["growth"][0] > 0
-    order = up if too_cool else down
-    if not too_cool and p0["growth"][mode] <= 0 and any(p0["growth"]):
+    p0 = tune_teff(label, target, base, L0)
+    growth = p0["growth"] if p0 else [0.0, 0.0, 0.0]
+    order = up if mode == 1 and growth[0] > 0 else down
+    if order is down and growth[mode] <= 0 and any(growth):
         # the star's mode is stable at its own L: step L the way that raises its growth rate
-        g_up = _tune_teff(label, target, base, L0 * 1.05, check=False)["growth"][mode]
-        g_down = _tune_teff(label, target, base, L0 * 0.95, check=False)["growth"][mode]
+        p_up, p_down = tune_teff(label, target, base, L0 * 1.05), tune_teff(label, target, base, L0 * 0.95)
+        if p_up is None or p_down is None:
+            return
+        g_up, g_down = p_up["growth"][mode], p_down["growth"][mode]
         order = up if g_up > g_down else down
         print(f"  {label}: mode {mode} stable at L; growth {g_down:.3g} at L x 0.95, {g_up:.3g} at L x 1.05: stepping "
               f"L {'up' if order is up else 'down'}", flush=True)
     for factor in (1.0,) + order:
-        try:
-            params = _tune_teff(label, target, base, L0 * factor, check="own")
-        except RuntimeError as exc:
-            print(f"  {label}: L x {factor}: {exc}", flush=True)
+        params = tune_teff(label, target, base, L0 * factor)
+        if params is None:
+            continue
+        if params["growth"][mode] <= 0:
+            print(f"  {label}: L x {factor}: mode {mode} is linearly stable at Teff {params['teff']:.0f} K "
+                  f"(growth {params['growth']})", flush=True)
             continue
         params.update(cluster_L=L0, L_factor=factor)
         yield params
@@ -430,7 +385,7 @@ def mode_amplitudes(history, periods, frac=(0.5, 1.0)):
 
 
 def accept_double_mode(label, target, base):
-    """A double-mode (F + 1O) limit cycle, or a RuntimeError saying why not.
+    """A double-mode (F + 1O) limit cycle, or None.
 
     Linear: Teff tuned so F matches Gaia's fundamental period, at the first L (factors 1, 0.95, 1.05, ...) where F and
     1O are both unstable; the model's 1O period is compared with Gaia's. Non-linear: in each convection set (A-D, in
@@ -442,10 +397,8 @@ def accept_double_mode(label, target, base):
     p_1o = target.get("period2")
     found = None
     for factor in (1.0, 0.95, 1.05, 0.90, 1.10, 0.85, 1.15, 0.80, 1.20, 1.25, 1.30, 1.35, 1.40, 1.50, 1.60):
-        try:
-            params = _tune_teff(label, target, base, L0 * factor, check=False)
-        except RuntimeError as exc:
-            print(f"  {label}: L x {factor}: {exc}", flush=True)
+        params = tune_teff(label, target, base, L0 * factor)
+        if params is None:
             continue
         g = params["growth"]
         if g[0] > 0 and g[1] > 0:
@@ -453,7 +406,8 @@ def accept_double_mode(label, target, base):
             break
         print(f"  {label}: L x {factor}, Teff {params['teff']:.0f} K: F and 1O not both unstable (growth {g[:2]})", flush=True)
     if found is None:
-        raise RuntimeError(f"{label}: no L where F and 1O are both linearly unstable at Gaia's fundamental period")
+        print(f"  {label}: no L where F and 1O are both linearly unstable at Gaia's fundamental period", flush=True)
+        return None
     lin_1o = found["linear_periods"][1]
     print(f"  {label}: L x {found['L_factor']}, Teff {found['teff']:.0f} K: linear P1O {lin_1o:.5f} d"
           + (f" vs Gaia {p_1o:.5f} d (P1O/PF {lin_1o / target['period']:.4f} vs {p_1o / target['period']:.4f})" if p_1o else ""),
@@ -464,11 +418,11 @@ def accept_double_mode(label, target, base):
                  kick=KICK["RRd"], limit_periods=DM_PERIODS, grekm="0d0", history_interval=20, limit_steps=300)
         d = base / f"dm_{name}"
         shutil.rmtree(d, ignore_errors=True)
-        text = run(d, inlist(p, "limit"), timeout=8 * 3600)
+        text = run(d, inlist(p, "limit"))
         if "NO CONVERGENCE IN RELAX_ENV" in text:  # MESA's own suggestion: a looser envelope-relaxation tolerance
             p["extra_controls"] = p["extra_controls"] + ["RSP_relax_dm_tolerance = 1d-5"]
             shutil.rmtree(d, ignore_errors=True)
-            text = run(d, inlist(p, "limit"), timeout=8 * 3600)
+            text = run(d, inlist(p, "limit"))
         lines = period_lines(text)
         if len(lines) < 200 or not (d / "limit.mod").exists():
             return dict(set=name, ok=False, reason="run failed")
@@ -492,8 +446,9 @@ def accept_double_mode(label, target, base):
     (base / "double_mode.json").write_text(json.dumps([{k: v for k, v in r.items() if k != "params"} for r in res], indent=1))
     good = [r for r in res if r["ok"]]
     if not good:
-        raise RuntimeError(f"{label}: no convection set gives stable double-mode pulsation (see {base / 'double_mode.json'}); "
-                           "double-mode pulsation is an unsolved problem in RSP (Paxton et al. 2019)")
+        print(f"  {label}: no convection set gives stable double-mode pulsation (see {base / 'double_mode.json'}); "
+              "double-mode pulsation is an unsolved problem in RSP (Paxton et al. 2019)", flush=True)
+        return None
     pick = max(good, key=lambda r: min(r["amp_F"], r["amp_1O"]) / max(r["amp_F"], r["amp_1O"]))
     (base / "limit").mkdir(exist_ok=True)
     shutil.copy(base / f"dm_{pick['set']}" / "limit.mod", base / "limit" / "limit.mod")
@@ -548,7 +503,7 @@ def bracket_limit(label, target, base, params):
 
 
 def accept_nonlinear(label, target, base):
-    """The first candidate whose limit cycle pulsates at Gaia's period (within MODE_TOL), i.e. in the star's mode.
+    """The first candidate whose limit cycle pulsates at Gaia's period (within MODE_TOL), i.e. in the star's mode, or None.
 
     A limit cycle clearly in the star's mode (period within MODE_WINDOW; F and 1O differ by ~30%) but off by more
     than MODE_TOL (the non-linear period at full amplitude differs from the linear one tuned to) gets its Teff
@@ -589,9 +544,8 @@ def accept_nonlinear(label, target, base):
                 break
             params["teff"] *= (p_nl / target["period"]) ** (1 / 3.48)
             print(f"  {label}: correcting Teff to {params['teff']:.0f} K for the non-linear period", flush=True)
-    msg = f"{label}: no candidate pulsates in the star's mode at its period; see {base / 'rejected.json'}"
-    (base / "FAILED").write_text(msg)
-    raise RuntimeError(msg)
+    print(f"  {label}: no candidate pulsates in the star's mode at its period; see {base / 'rejected.json'}", flush=True)
+    return None
 
 
 def period_lines(text):
@@ -601,31 +555,27 @@ def period_lines(text):
 
 
 def model_star(label, target):
+    """Model one star to runs/rsp_<label>/pulsation.h5. A star with no model gets a FAILED file instead, which is
+    final until the directory is removed (argus_field.py then holds it constant)."""
     base = C.RUNS / f"rsp_{PREFIX}{label}"
     done = base / "pulsation.h5"
-    if done.exists():
-        return label, "done"
+    if done.exists() or (base / "FAILED").exists():
+        return
     params_file = base / "params.json"
-    if (base / "FAILED").exists():  # a failure is final until the directory is removed
-        raise RuntimeError((base / "FAILED").read_text())
     if params_file.exists():  # resume (models made before the non-linear mode check keep their own route)
         params = json.loads(params_file.read_text())
-    elif target["kind"] == "RRd":
-        params = accept_double_mode(label, target, base)
-        params_file.write_text(json.dumps(params, indent=1))
     else:
-        params = accept_nonlinear(label, target, base)
+        params = (accept_double_mode if target["kind"] == "RRd" else accept_nonlinear)(label, target, base)
+        if params is None:
+            (base / "FAILED").write_text(f"{label}: no model (rejected.json / double_mode.json say why)\n")
+            return
         params_file.write_text(json.dumps(params, indent=1))
     limit_dir = base / "limit"
     if not (limit_dir / "limit.mod").exists():
-        text = run(limit_dir, inlist(params, "limit"))
-        lines = period_lines(text)
-        if not (limit_dir / "limit.mod").exists() or len(lines) < 20:
-            raise RuntimeError(f"{label}: limit-cycle run failed; see {limit_dir / 'out.txt'}")
+        lines = period_lines(run(limit_dir, inlist(params, "limit")))
         amp = np.array([d for _, _, d in lines])
         params.update(nonlinear_period=lines[-1][1], amplitude_change_last10=float(abs(amp[-1] / amp[-10] - 1)),
-                      periods_run=len(lines),
-                      delta_R=float(amp[-1]))
+                      periods_run=len(lines), delta_R=float(amp[-1]))
         params_file.write_text(json.dumps(params, indent=1))
     fine_dir = base / "fine"
     period_s = params.get("nonlinear_period", target["period"]) * 86400
@@ -639,7 +589,6 @@ def model_star(label, target):
         run(fine_dir, inlist(params, "fine"))
     pack(fine_dir, done, params, target)
     params_file.write_text(json.dumps(params, indent=1))
-    return label, "ok"
 
 
 def pack(fine_dir, out, params, target):
@@ -666,49 +615,9 @@ def pack(fine_dir, out, params, target):
         f.create_dataset("flux", data=np.array([s[:, 1] for s in seds]), compression="gzip", compression_opts=4)
         f.create_dataset("time_days", data=h["star_age"][idx] * 365.25)
         for name in ("log_Teff", "log_L", "log_R", "log_g"):
-            if name in h.dtype.names:
-                f.create_dataset(name, data=h[name][idx])
+            f.create_dataset(name, data=h[name][idx])
     for p in (fine_dir / "SED").glob("*.csv"):
         p.unlink()
-
-
-def bracket(label, kicks, periods=150):
-    """Weakly unstable modes converge too slowly to reach their limit cycle: run the limit stage from several
-    kicks and report each run's amplitude drift. The limit cycle lies where the drift changes sign."""
-    base = C.RUNS / f"rsp_{PREFIX}{label}"
-    params = json.loads((base / "params.json").read_text())
-
-    def one(kick):
-        p = dict(params, kick=float(kick), limit_periods=periods)
-        lines = period_lines(run(base / f"bracket_{kick:g}", inlist(p, "limit")))
-        dr = np.array([d for _, _, d in lines])
-        return kick, dr[10], dr[-1], (dr[-1] - dr[10]) / (len(dr) - 11), lines[-1][1]
-
-    with ThreadPoolExecutor(len(kicks)) as ex:
-        results = list(ex.map(one, kicks))
-    for kick, start, end, drift, period in results:
-        print(f"  {label} kick {kick:g} km/s: dR {start:.4f} -> {end:.4f}, drift {drift:+.2e} Rsun/period, P {period:.5f} d")
-    return results
-
-
-def adopt(label, kick, note):
-    """Use the bracketing run from `kick` as the limit cycle, then rebuild the fine SED cycles from it."""
-    import shutil
-
-    base = C.RUNS / f"rsp_{PREFIX}{label}"
-    src = base / f"bracket_{kick:g}"
-    lines = period_lines((src / "out.txt").read_text())
-    params = json.loads((base / "params.json").read_text())
-    # mean over the last 20 periods: weakly unstable models' single cycles jitter (other modes mixing in)
-    params.update(kick=float(kick), nonlinear_period=float(np.mean([p for _, p, _ in lines[-20:]])),
-                  delta_R=float(np.mean([d for _, _, d in lines[-20:]])), periods_run=len(lines), limit_cycle_note=note)
-    (base / "limit").mkdir(exist_ok=True)
-    shutil.copy(src / "limit.mod", base / "limit" / "limit.mod")
-    shutil.rmtree(base / "fine", ignore_errors=True)
-    (base / "pulsation.h5").unlink(missing_ok=True)
-    (base / "params.json").write_text(json.dumps(params, indent=1))
-    target = json.loads(TARGETS.read_text())[label]
-    return model_star(label, target)
 
 
 # MESA test-suite models (star/test_suite/rsp_*), run through this module's inlists: the expected period is the
@@ -753,14 +662,8 @@ def main(labels=None):
     build_sed_instrument()
     targets = json.loads(TARGETS.read_text())
     todo = {k: v for k, v in targets.items() if not labels or k in labels}
-    workers = max(1, min(len(todo), int(C.config().get("run", {}).get("workers", len(todo)) or len(todo))))
-    with ThreadPoolExecutor(workers) as ex:  # at most config.toml [run] workers MESA runs at once
-        futures = {ex.submit(model_star, k, v): k for k, v in todo.items()}
-        for fut, label in futures.items():
-            try:
-                print(f"  {fut.result()[0]}: {fut.result()[1]}", flush=True)
-            except Exception as exc:  # report and keep the others going
-                print(f"  {label}: FAILED {exc}", flush=True)
+    with ThreadPoolExecutor(int(C.config()["run"]["workers"])) as ex:  # stars modelled at once
+        list(ex.map(lambda kv: model_star(*kv), todo.items()))
 
 
 if __name__ == "__main__":

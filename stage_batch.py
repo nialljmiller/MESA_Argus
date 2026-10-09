@@ -57,14 +57,12 @@ def total_cores():
     sys.path.insert(0, str(REPO))
     from mesa_argus import config as C
 
-    return int(C.config().get("run", {}).get("max_star_procs", 0) or 0) or os.cpu_count() or 1
+    return int(C.config()["run"]["max_star_procs"]) or os.cpu_count()
 
 
 def outcome(f):
     """(modelled, failed or dropped) counts from the field's summary."""
     p = REPO / "outputs" / f["name"] / "field_summary.md"
-    if not p.exists():
-        return "-", "-"
     rows = [ln for ln in p.read_text().splitlines() if ln.startswith("| ") and ln.count("|") >= 8 and "Gaia DR3" not in ln]
     treat = [ln.rsplit("|", 2)[-2].strip() for ln in rows]
     modelled = sum(t.startswith(("MESA RSP (", "PHOEBE (")) for t in treat)
@@ -80,7 +78,7 @@ def write_summary(path, fields, state):
         s = state[f["name"]]
         wall = f"{(s['end'] - s['start']) / 3600:.2f}" if s.get("end") and s.get("start") else ""
         fmt = lambda t: datetime.fromtimestamp(t).strftime("%m-%d %H:%M") if t else ""  # noqa: E731
-        m, x = outcome(f) if s["status"].startswith(("done", "failed")) else ("", "")
+        m, x = outcome(f) if s["status"].startswith("done") else ("", "")
         lines.append(f"| {f['name']} | {f['ra']:.4f} | {f['dec']:+.4f} | {s['status']} | {fmt(s.get('start'))} | "
                      f"{fmt(s.get('end'))} | {wall} | {m} | {x} | {f['name']}.log |")
     path.write_text("\n".join(lines) + "\n")
@@ -104,7 +102,7 @@ def main():
     write_summary(summary, fields, state)
     if a.after:
         print(f"waiting for PID {a.after} …", flush=True)
-        while Path(f"/proc/{a.after}").exists() or subprocess.run(["kill", "-0", str(a.after)], capture_output=True).returncode == 0:
+        while subprocess.run(["kill", "-0", str(a.after)], capture_output=True).returncode == 0:
             time.sleep(30)
     todo = [f for f in fields if state[f["name"]]["status"] == "queued"]
     cores = total_cores()
@@ -129,8 +127,7 @@ def main():
                 continue
             log.close()
             del running[name]
-            ok = p.returncode == 0 and finished(f)
-            state[name].update(status="done" if ok else f"failed (exit {p.returncode})", end=time.time())
+            state[name].update(status="done" if p.returncode == 0 else f"failed (exit {p.returncode})", end=time.time())
             print(f"{datetime.now():%H:%M} {state[name]['status']} {name}", flush=True)
             write_summary(summary, fields, state)
     print(f"batch finished; summary: {summary}", flush=True)

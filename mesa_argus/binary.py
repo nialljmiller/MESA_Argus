@@ -32,7 +32,6 @@ from __future__ import annotations
 from functools import lru_cache
 import json
 import logging
-from pathlib import Path
 import time
 
 import numpy as np
@@ -75,8 +74,6 @@ def surface_sed(teff, logg, mh):
             jj = j
             if flux[i, jj, im].max() <= 0:
                 filled = [k for k in range(len(Gg)) if flux[i, k, im].max() > 0]
-                if not filled:
-                    raise ValueError(f"no atmosphere at Teff {T[i]:.0f} K, [M/H] {M[im]}")
                 jj = min(filled, key=lambda k: abs(Gg[k] - Gg[j]))
             out += np.clip(wt, 0, 1) * np.clip(wg, 0, 1) * np.log(np.clip(flux[i, jj, im], 1e-300, None))
     return wave, np.exp(out)
@@ -115,12 +112,10 @@ def _dwarfs():
         if line.startswith("#"):
             break
         f = line.split()
-        try:
-            t_, m_ = float(f[1]), float(f[-2])
-        except (ValueError, IndexError):
+        if f[-2] == "...":  # L, T and Y dwarfs: no mass tabulated
             continue
-        teff.append(t_)
-        mass.append(m_)
+        teff.append(float(f[1]))
+        mass.append(float(f[-2]))
     o = np.argsort(teff)
     return np.array(teff)[o], np.array(mass)[o]
 
@@ -288,11 +283,9 @@ def fit_route(veb, teff1, contact, seed=None, orbit=None):
         try:
             p = params(x)
             m = lc_g(p, phases, contact)
-            r = float(np.sqrt(np.mean((m - target) ** 2)))
-        except StopIteration:
-            raise
-        except Exception:
+        except Exception:  # PHOEBE rejects unphysical systems (e.g. overflowing Roche lobes): penalise, the simplex moves on
             return 10.0
+        r = float(np.sqrt(np.mean((m - target) ** 2)))
         if r < state["best"][0]:
             state["best"] = (r, p)
         return r

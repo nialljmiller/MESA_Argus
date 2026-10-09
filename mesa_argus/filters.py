@@ -21,10 +21,6 @@ def build():
         Path(C.colors_path("argus_filters")): ARGUS,
         C.DATA / "filters" / "SDSS": SDSS,
     }
-    missing = [str(d / f) for d, files in src.items() for f in files if not (d / f).exists()]
-    if missing:
-        raise SystemExit("missing filter curves:\n  " + "\n  ".join(missing) +
-                         "\n(check [paths] and [colors] in config.toml)")
     if C.INSTRUMENT.exists():
         shutil.rmtree(C.INSTRUMENT)
     C.INSTRUMENT.mkdir(parents=True)

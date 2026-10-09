@@ -50,11 +50,9 @@ def render_inlist(track, mag_system="Vega"):
 def _pid_alive(pid):
     try:
         os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, ValueError):
+    except ProcessLookupError:
         return False
-    except PermissionError:
-        return True
+    return True
 
 
 def termination(d):
@@ -101,10 +99,8 @@ def prepare(track, mag_system="Vega", run_dir=None):
     return d
 
 
-def run_dir(d, threads=None, timeout=24 * 3600):
+def run_dir(d, threads=None):
     """Run MESA in directory d (which must contain `inlist`). Returns (ok, minutes, termination)."""
-    if not C.STAR_BIN.exists():
-        raise SystemExit(f"MESA binary not found: {C.STAR_BIN}\n  build it with: make -C mesa_work")
     threads = threads or C.config()["run"]["omp_threads"]
     env = dict(os.environ, OMP_NUM_THREADS=str(threads))
     t0 = time.time()
@@ -113,13 +109,9 @@ def run_dir(d, threads=None, timeout=24 * 3600):
         out = open(d / "out.txt", "w")
         p = subprocess.Popen([str(C.STAR_BIN)], cwd=d, stdout=out, stderr=subprocess.STDOUT, env=env)
         (d / ".running").write_text(f"{p.pid}\n")
-    try:
-        p.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        p.kill()
-    finally:
-        out.close()
-        (d / ".running").unlink(missing_ok=True)
+    p.wait()
+    out.close()
+    (d / ".running").unlink(missing_ok=True)
     term = termination(d)
     return bool(term) and (d / "LOGS" / "history.data").exists(), (time.time() - t0) / 60, term
 

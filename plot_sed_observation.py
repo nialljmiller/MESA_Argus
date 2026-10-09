@@ -101,22 +101,15 @@ def read_mesa(path):
 def read_sed(path, wavelength_column=None, flux_column=None, wavelength_unit=None, flux_unit=None):
     """Read a MESA SED or a headered/two-column CSV; return sorted wavelength, flux density, metadata.
 
-    MESA colors-module files are recognised by their header. For other CSVs,
-    unsorted rows are sorted; duplicate wavelengths, negative flux, missing
-    values, and non-finite samples are rejected. Column selectors may be
-    names or zero-based indices. Fortran D exponents are accepted.
+    MESA colors-module files are recognised by their header. For other CSVs, rows are sorted by
+    wavelength. Column selectors may be names or zero-based indices. Fortran D exponents are accepted.
     """
     path = Path(path).expanduser()
     if path.is_dir():
-        candidates = sorted(p for p in path.iterdir() if p.suffix.lower() == ".csv" and p.is_file())
-        if len(candidates) != 1:
-            raise ValueError(f"{path} contains {len(candidates)} CSVs; pass a single SED file.")
-        path = candidates[0]
+        path = next(p for p in sorted(path.iterdir()) if p.suffix.lower() == ".csv")
     with path.open(encoding="utf-8-sig") as handle:
         first = handle.readline().strip().replace(" ", "")
     if first == MESA_HEADER and wavelength_column is None and flux_column is None:
-        if wavelength_unit or flux_unit:
-            raise ValueError("MESA SEDs have fixed units; drop --wavelength-unit/--flux-unit.")
         wave, flux, metadata = read_mesa(path)
         metadata["path"] = str(path.resolve())
         return wave, flux, metadata
@@ -130,8 +123,6 @@ def read_sed(path, wavelength_column=None, flux_column=None, wavelength_unit=Non
         elif stripped:
             lines.append(line)
     rows = list(csv.reader(lines))
-    if not rows:
-        raise ValueError("The SED CSV is empty.")
 
     def number(value):
         # Fortran writes D exponents, and drops the E for 3-digit ones (1.180971-100)
@@ -146,42 +137,19 @@ def read_sed(path, wavelength_column=None, flux_column=None, wavelength_unit=Non
 
     def column(selector, aliases, fallback):
         if selector is not None:
-            if str(selector).isdigit():
-                return int(selector)
-            if header is not None and str(selector).lower() in header:
-                return header.index(str(selector).lower())
-            raise ValueError(f"Column {selector!r} not found; available columns: {header}.")
+            return int(selector) if str(selector).isdigit() else header.index(str(selector).lower())
         matches = [i for i, name in enumerate(header or []) if name in aliases]
-        if len(matches) == 1:
-            return matches[0]
-        if header is None and len(rows[0]) == 2:
-            return fallback
-        raise ValueError(f"Specify --{'wavelength' if fallback == 0 else 'flux'}-column; columns: {header}.")
+        return matches[0] if matches else fallback
 
-    if not rows:
-        raise ValueError("The CSV contains a header but no samples.")
     iw = column(wavelength_column, ("wavelength", "wave", "wav", "lambda"), 0)
     iff = column(flux_column, ("flux", "flux_density", "flam", "f_lambda", "fnu", "f_nu"), 1)
-    if iw == iff:
-        raise ValueError("Wavelength and flux must use different columns.")
-    try:
-        samples = np.asarray([[number(row[iw]), number(row[iff])] for row in rows], dtype=float)
-    except (ValueError, IndexError) as exc:
-        raise ValueError("Every CSV data row must contain numeric wavelength and flux values.") from exc
-    if len(samples) < 2 or not np.isfinite(samples).all():
-        raise ValueError("Supply at least two finite wavelength/flux samples.")
-    if np.any(samples[:, 0] <= 0) or np.any(samples[:, 1] < 0) or not np.any(samples[:, 1] > 0):
-        raise ValueError("Wavelengths must be positive and fluxes non-negative, with nonzero total flux.")
+    samples = np.asarray([[number(row[iw]), number(row[iff])] for row in rows], dtype=float)
     wu = wavelength_unit or metadata.get("wavelength_unit", "Angstrom")
     fu = flux_unit or metadata.get("flux_unit", "erg / (s cm2 Angstrom)")
     wave = (samples[:, 0] * u.Unit(wu)).to(u.AA)
     flux = samples[:, 1] * u.Unit(fu)
-    if not flux.unit.is_equivalent(FLAM, equivalencies=u.spectral_density(wave)):
-        raise ValueError(f"--flux-unit {fu!r} is not a spectral flux density.")
     order = np.argsort(wave.value)
     wave, flux = wave[order], flux[order]
-    if np.any(np.diff(wave.value) <= 0):
-        raise ValueError("Duplicate wavelengths are not allowed.")
     metadata.update(path=str(path.resolve()), wavelength_unit=str(wu), flux_unit=str(fu))
     return wave, flux, metadata
 
@@ -198,16 +166,10 @@ def prepare_sed(args, ab, path=None):
         path or args.input, args.wavelength_column, args.flux_column, args.wavelength_unit, args.flux_unit
     )
     kind = args.flux_kind or metadata.get("flux_kind", "observer")
-    if kind not in ("observer", "surface"):
-        raise ValueError("flux_kind must be observer or surface.")
     native_pc = float(metadata["distance_pc"]) if "distance_pc" in metadata else None
     scale = 1.0
     if kind == "surface":
-        if args.radius_rsun is None or args.distance_pc is None:
-            raise ValueError("Surface flux requires --radius-rsun and --distance-pc.")
         scale = ((args.radius_rsun * u.R_sun) / (args.distance_pc * u.pc)).to_value(u.one) ** 2
-    elif args.radius_rsun is not None:
-        raise ValueError("--radius-rsun applies only to --flux-kind surface.")
     elif native_pc is not None and args.rho_mag is None:
         # observer flux at a known distance (MESA: 10 pc): move it to --distance-pc
         if args.distance_pc is None:
@@ -219,8 +181,6 @@ def prepare_sed(args, ab, path=None):
         flux = flux * factor
         scale *= factor
     metadata.update(flux_kind=kind, flux_scale=scale, observer_flux=True)
-    if args.absolute and args.distance_pc is None:
-        raise ValueError("--absolute requires the distance of the observer-frame SED (--distance-pc).")
     if args.distance_pc is not None:
         metadata["observer_distance_pc"] = args.distance_pc
     return wave, flux, metadata
@@ -272,13 +232,9 @@ def observing_setup(args, ab, cfg):
     bands = {}
     for name, band in BANDS.items():
         angles = psf_model.field_angles(band)
-        if not angles.min() <= args.field_angle <= angles.max():
-            raise ValueError(f"--field-angle must lie within {angles.min():.3f}–{angles.max():.3f} deg for {name}.")
         psf, hfd = psf_model.with_seeing(
             seeing=args.seeing, band=band, field_angle_deg=args.field_angle, pixel_phase=tuple(args.pixel_phase)
         )
-        if not np.isfinite(psf).all() or psf.min() < -1e-12 or psf.sum() <= 0:
-            raise ValueError(f"Invalid {name} PSF.")
         psf = np.maximum(psf, 0.0)
         psf /= psf.sum()
         sky = SpectralSky(ab.tp, ab, band, throughputs_dir=args.throughputs_dir)
@@ -304,8 +260,6 @@ def simulate(args, wave, flux, ab, cfg, setup=None, seed=None):
     for (name, band), rng in zip(BANDS.items(), rngs):
         psf, sky_rate = setup["bands"][name]["psf"], setup["bands"][name]["sky_rate"]
         rate = ab.electrons_from_sed(band, wave, flux, airmass=args.airmass, transparency=args.transparency)
-        if rate.value <= 0:
-            raise ValueError(f"The SED must have positive in-band flux in {name}.")
         mag = float(ab.mag_from_sed(band, wave, flux))
         snr, budget = noise.get_snr(rate, psf, sky_rate * u.electron / u.s, args.exptime * u.s)
         source_e = rate.to_value(u.electron / u.s) * args.exptime
@@ -625,8 +579,6 @@ def find_seds(folder):
         p for p in folder.iterdir()
         if p.is_file() and p.suffix.lower() == ".csv" and not p.name.endswith(".photometry.csv")
     )
-    if not files:
-        raise ValueError(f"No CSV files in {folder}.")
     names = [MESA_NAME.match(p.stem) for p in files]
     if all(names):
         by_model = {}
@@ -675,27 +627,17 @@ def make_movie(args, frames, key_label, ab, cfg):
     if args.model_range is not None:
         low, high = args.model_range
         frames = [f for f in frames if low <= f[0] <= high]
-    if len(frames) < 2:
-        raise ValueError(f"A movie needs at least two SEDs; {len(frames)} selected.")
     if args.max_frames and len(frames) > args.max_frames:
         keep = np.unique(np.round(np.linspace(0, len(frames) - 1, args.max_frames)).astype(int))
         print(f"{len(frames)} SEDs; rendering {len(keep)} evenly spaced in {key_label.lower()} (--max-frames 0 for all)")
         frames = [frames[i] for i in keep]
 
     history = mesa_history(frames[0][1].parent)
-    states, skipped = [], []
+    states = []
     for key, path in frames:
-        try:
-            wave, flux, metadata = prepare_sed(args, ab, path)
-            mags = {name: float(ab.mag_from_sed(band, wave, flux)) for name, band in BANDS.items()}
-        except (ValueError, u.UnitConversionError) as exc:
-            skipped.append(f"{path.name}: {exc}")
-            continue
+        wave, flux, metadata = prepare_sed(args, ab, path)
+        mags = {name: float(ab.mag_from_sed(band, wave, flux)) for name, band in BANDS.items()}
         states.append({"key": key, "path": path, "wave": wave, "flux": flux, "metadata": metadata, "mag": mags})
-    if skipped:
-        warnings.warn(f"Skipped {len(skipped)} unusable SEDs, e.g. {skipped[0]}", stacklevel=1)
-    if len(states) < 2:
-        raise ValueError("Fewer than two usable SEDs.")
 
     # light-curve time axis: the model number in each file name looks up the star's age in
     # ../LOGS/history.data; without an age for every frame, fall back to the file key
@@ -748,13 +690,11 @@ def make_movie(args, frames, key_label, ab, cfg):
     seeds = np.random.SeedSequence(args.seed).spawn(len(states))
     if args.output.suffix.lower() == ".gif":
         writer = PillowWriter(fps=args.fps)
-    elif FFMpegWriter.isAvailable():
+    else:
         writer = FFMpegWriter(
             fps=args.fps,
             extra_args=["-vcodec", "libx264", "-pix_fmt", "yuv420p", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"],
         )
-    else:
-        raise ValueError("ffmpeg not found on PATH; install it or write a .gif instead.")
     apply_style()
     fig = plt.figure(figsize=(16, 10))
     rows = []
@@ -984,96 +924,48 @@ def parser():
     return p
 
 
-def validate_args(args):
-    """Reject invalid observing conditions and ambiguous physical scaling."""
-    for name in ("exptime", "seeing", "transparency", "radius_rsun", "distance_pc", "cadence_s"):
-        value = getattr(args, name)
-        if value is not None and (not np.isfinite(value) or value <= 0):
-            raise ValueError(f"--{name.replace('_', '-')} must be positive and finite.")
-    if not np.isfinite(args.airmass) or args.airmass < 1 or args.transparency > 1:
-        raise ValueError("Use airmass >= 1 and transparency in (0,1].")
-    if not np.isfinite(args.field_angle) or args.field_angle < 0:
-        raise ValueError("--field-angle must be non-negative and finite.")
-    if args.sky_s10 is not None and (not np.isfinite(args.sky_s10).all() or min(args.sky_s10) < 0):
-        raise ValueError("Sky components must be finite and non-negative.")
-    if not all(np.isfinite(v) and 0 <= v < 1 for v in args.pixel_phase):
-        raise ValueError("Pixel phases must lie in [0,1).")
-    if args.n_exposures < 1 or not 0 <= args.epoch_index < args.n_exposures or args.seed < 0:
-        raise ValueError("Invalid exposure count, selected epoch or seed.")
-    if (args.dpi is not None and args.dpi < 1) or not np.isfinite(args.fps) or args.fps <= 0 or args.max_frames < 0:
-        raise ValueError("Invalid DPI, --fps or --max-frames.")
-    if args.cadence_s is not None and args.cadence_s < args.exptime:
-        raise ValueError("--cadence-s must be at least --exptime.")
-    if args.rho_mag is not None and (not np.isfinite(args.rho_mag) or args.distance_pc is not None):
-        raise ValueError("--rho-mag must be finite and cannot be combined with a physical --distance-pc.")
-
-
 def main(argv=None):
     """Run a single SED simulation and write the four linked panels."""
-    p = parser()
-    args = p.parse_args(argv)
-    try:
-        validate_args(args)
-        cfg = copy.deepcopy(ARGUS_CONFIG)
-        for option, field in ((args.psf_fits, "psf_fits_path"), (args.ee50_profile, "ee50_profile_path")):
-            if option is not None:
-                setattr(cfg.telescope, field, str(option.expanduser().resolve()))
-        for field in ("psf_fits_path", "ee50_profile_path"):
-            value = getattr(cfg.telescope, field)
-            if value and not Path(value).is_file():
-                raise ValueError(
-                    f"Missing {field}: {value}. Supply --{'psf-fits' if field == 'psf_fits_path' else 'ee50-profile'}."
-                )
-        tp = SystemThroughput(
-            throughputs_dir=args.throughputs_dir,
-            filters={"g": True, "rho": True},
-            throughput_loss=cfg.telescope.throughput_loss,
+    args = parser().parse_args(argv)
+    cfg = copy.deepcopy(ARGUS_CONFIG)
+    for option, field in ((args.psf_fits, "psf_fits_path"), (args.ee50_profile, "ee50_profile_path")):
+        if option is not None:
+            setattr(cfg.telescope, field, str(option.expanduser().resolve()))
+    tp = SystemThroughput(
+        throughputs_dir=args.throughputs_dir,
+        filters={"g": True, "rho": True},
+        throughput_loss=cfg.telescope.throughput_loss,
+    )
+    ab = ABPhot(throughput=tp, collecting_area=cfg.telescope.collecting_area)
+    if args.input.expanduser().is_dir():
+        frames, key_label = find_seds(args.input)
+        if len(frames) > 1:  # a movie: one exposure per state
+            folder = frames[0][1].parent
+            name = folder.parent.name if folder.name == "SED" else folder.name
+            args.output = (args.output or Path(f"{name}_argus.mp4")).expanduser()
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.dpi = args.dpi or 100
+            make_movie(args, frames, key_label, ab, cfg)
+            return 0
+        args.input = frames[0][1]
+    args.output = (args.output or Path("sed_observation.png")).expanduser()
+    args.dpi = args.dpi or 180
+    wave, flux, metadata = prepare_sed(args, ab)
+    result = simulate(args, wave, flux, ab, cfg)
+    fig = plot_figure(args, wave, flux, metadata, result, ab, cfg)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(args.output, dpi=args.dpi)
+    plt.close(fig)
+    if args.save_data:
+        save_data(args.output, args, metadata, result, cfg)
+    print(f"Saved {args.output}")
+    for name, d in result["bands"].items():
+        print(
+            f"{name:4s}: {d['mag']:.6f} AB, {d['rate_e_s']:.3f} e-/s, "
+            f"NoiseBudget S/N={d['noise_budget_snr']:.2f}, fit S/N={d['fit_snr']:.2f}"
         )
-        ab = ABPhot(throughput=tp, collecting_area=cfg.telescope.collecting_area)
-        if args.input.expanduser().is_dir():
-            frames, key_label = find_seds(args.input)
-            if len(frames) > 1:
-                if args.n_exposures != 1 or args.rho_mag is not None:
-                    raise ValueError("A movie draws one exposure per state at a physical distance: "
-                                     "drop --n-exposures and --rho-mag.")
-                folder = frames[0][1].parent
-                name = folder.parent.name if folder.name == "SED" else folder.name
-                args.output = (args.output or Path(f"{name}_argus.mp4")).expanduser()
-                if args.output.suffix.lower() not in (".mp4", ".gif"):
-                    raise ValueError("A movie must be written as .mp4 or .gif.")
-                args.output.parent.mkdir(parents=True, exist_ok=True)
-                args.dpi = args.dpi or 100
-                make_movie(args, frames, key_label, ab, cfg)
-                return 0
-            args.input = frames[0][1]
-        args.output = (args.output or Path("sed_observation.png")).expanduser()
-        if args.output.suffix.lower() not in (".png", ".pdf", ".svg"):
-            raise ValueError("Output extension must be .png, .pdf or .svg.")
-        args.dpi = args.dpi or 180
-        wave, flux, metadata = prepare_sed(args, ab)
-        result = simulate(args, wave, flux, ab, cfg)
-        fig = plot_figure(args, wave, flux, metadata, result, ab, cfg)
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(args.output, dpi=args.dpi)
-        plt.close(fig)
-        if args.save_data:
-            save_data(args.output, args, metadata, result, cfg)
-        print(f"Saved {args.output}")
-        for name, d in result["bands"].items():
-            print(
-                f"{name:4s}: {d['mag']:.6f} AB, {d['rate_e_s']:.3f} e-/s, "
-                f"NoiseBudget S/N={d['noise_budget_snr']:.2f}, fit S/N={d['fit_snr']:.2f}"
-            )
-            if d["exposure"]["saturated"]:
-                warnings.warn(
-                    f"{name}: selected exposure saturated; fitted magnitude omitted. "
-                    "Move the star further away (--distance-pc) or shorten --exptime.",
-                    stacklevel=1,
-                )
-            elif d["fit_snr"] < 5:
-                warnings.warn(f"{name}: expected S/N <5; inspect fluxes before interpreting magnitudes.", stacklevel=1)
-    except (ValueError, OSError, u.UnitConversionError) as exc:
-        p.error(str(exc))
+        if d["exposure"]["saturated"]:
+            print(f"{name}: selected exposure saturated; fitted magnitude omitted")
     return 0
 
 

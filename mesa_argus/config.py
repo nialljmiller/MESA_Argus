@@ -31,10 +31,7 @@ def analysis():
 
 
 def mesa_dir():
-    d = config()["paths"]["mesa_dir"] or os.environ.get("MESA_DIR", "")
-    if not d:
-        raise SystemExit("MESA_DIR is not set (set it, or paths.mesa_dir in config.toml)")
-    return Path(d)
+    return Path(config()["paths"]["mesa_dir"] or os.environ["MESA_DIR"])
 
 
 def colors_data():

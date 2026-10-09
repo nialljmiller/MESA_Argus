@@ -49,12 +49,9 @@ def pack(track):
     d = C.RUNS / track["name"]
     sed_dir = d / "SED"
     files = sorted(sed_dir.glob(f"{REF_FILTER}_SED_*.csv"))
-    if not files:
-        raise FileNotFoundError(f"no SED CSVs in {sed_dir}")
     models = np.array([int(re.search(r"_(\d+)\.csv$", f.name).group(1)) for f in files])
     seds = [read_sed_csv(f) for f in files]
     wave = seds[0][:, 0]
-    assert all(np.array_equal(s[:, 0], wave) for s in seds), "wavelength grid changed between models"
     flux = np.array([s[:, 1] for s in seds])
 
     h = read(track["name"])
@@ -105,11 +102,6 @@ def pack(track):
             ds = m.create_dataset(b, data=hs[b] + (zp[b] if b.startswith("SDSS") else 0.0))
             ds.attrs["system"] = "AB" if b.startswith("SDSS") else "Vega"
 
-    # verify the packed copy before deleting anything
-    with h5py.File(out) as f:
-        ok = np.array_equal(f["flux"][:], flux) and np.array_equal(f["wavelength"][:], wave)
-    if not ok:
-        raise RuntimeError(f"{out}: packed SEDs do not match the CSVs")
     print(f"      {len(models)} SEDs x {len(wave)} wavelengths; integrated SED / (L/4πd²): "
           f"median {np.median(ratio):.4f}, range {ratio.min():.3f}-{ratio.max():.3f}", flush=True)
     return out
@@ -188,8 +180,6 @@ def unpack(track, workers=8):
 
     d = C.RUNS / track["name"]
     out_dir = d / "SED"
-    if out_dir.exists() and any(out_dir.iterdir()):
-        raise FileExistsError(f"{out_dir} already has files; not overwriting")
     out_dir.mkdir(exist_ok=True)
     instrument = C.INSTRUMENT
     filters = [ln.strip() for ln in (instrument / instrument.name).read_text().split() if ln.strip()]

@@ -263,11 +263,7 @@ def main(grid="fisher_stencil", sigmas=None):
         if name not in complete:
             skipped.append(f"{name} (stencil not finished)")
             continue
-        try:
-            anchors[name] = anchor_derivatives(group)
-        except (OSError, KeyError, ValueError) as e:
-            skipped.append(f"{name} ({type(e).__name__})")
-            continue
+        anchors[name] = anchor_derivatives(group)
         labels[name] = group[0]["population"].replace("Stencil: ", "")
     if skipped:
         print("skipping anchors with missing/unfinished tracks:", ", ".join(skipped))

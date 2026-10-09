@@ -235,8 +235,6 @@ def show(rows, block_n=3):
 def choose(rows, select):
     ok = [i for i, r in enumerate(rows, 1) if r["model"]]
     if select is None:
-        if not sys.stdin.isatty():
-            raise SystemExit("\nchoose with --select (e.g. --select 1,2 or --select all)")
         select = input(f"\nSimulate which? numbers from {ok} separated by commas, 'all', or blank for none: ").strip()
     if select in ("", "none"):
         return []
@@ -588,7 +586,7 @@ def main(argv=None):
               flush=True)
         with open(out / "rsp.log", "w") as log:
             subprocess.run([sys.executable, "-m", "mesa_argus.rsp", "--cluster", name, *pulsators_], stdout=log,
-                           stderr=subprocess.STDOUT, check=False)
+                           stderr=subprocess.STDOUT, check=True)
     if followed:
         for label, v in list(followed.items()):
             if not (Path("runs") / f"rsp_{name}_{label}" / "pulsation.h5").exists():
@@ -598,20 +596,10 @@ def main(argv=None):
             print(f"  {label}: {'PHOEBE' if v['kind'] == 'EB' else 'MESA RSP'} FAILED; held constant in the movie")
         (data / "followed.json").write_text(json.dumps(followed, indent=1, default=float))
 
-    movies = []
-    for band in ([] if args.models_only else args.bands):
-        mp4 = out / f"{name}_night_{band}.mp4"
-        cmd = [sys.executable, "m3_night_movie.py", "--cluster", name, "--band", band, "--highlight", str(len(followed)),
-               "-o", str(mp4)] + (["--start", args.start] if args.start else []) + (["--end", args.end] if args.end else [])
-        print(f"rendering {band} -> {mp4}", flush=True)
-        with open(mp4.with_suffix(".log"), "w") as log:
-            ok = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, check=False).returncode == 0
-        print(f"  {'saved' if ok else 'FAILED, see ' + str(mp4.with_suffix('.log'))}", flush=True)
-        movies.append((band, mp4, ok))
-
     lines = [f"# {name}", "", f"RA {args.ra:.5f}, Dec {args.dec:+.5f}; night of {args.date}; site {args.site}; "
              f"UT window {args.start or 'dusk'}-{args.end or 'dawn'}", "",
-             f"{len(stars)} Gaia DR3 sources in the 8' x 8' simulated area; {int(np.sum(stars['in_block']))} in the 3 x 3 block.",
+             f"{len(stars)} Gaia DR3 sources in the 8' x 8' simulated area; {int(np.sum(stars['in_block']))} in the "
+             f"{args.block} x {args.block} block.",
              "", "## Gaia-classified variables in the block", "",
              "| # | Gaia DR3 | type | G | ampl. G | period (d) | treatment |", "|---|---|---|---|---|---|---|"]
     chosen = {v["source"]: k for k, v in followed.items()}
@@ -637,24 +625,30 @@ def main(argv=None):
             lines.append("")
             continue
         lines += [f"- values: distance modulus {v['dm']}, E(B-V) {v['ebv']}, Z {v['z']}, mass {v['mass']} Msun, {v['kap']}"]
-        pf = Path("runs") / f"rsp_{name}_{label}" / "params.json"
-        if pf.exists():  # what MESA RSP settled on
-            q = json.loads(pf.read_text())
-            lines += [f"- MESA RSP: L = {q['L']:.2f} Lsun (x {q.get('L_factor', 1.0)} the L from the distance), Teff = "
-                      f"{q['teff']:.0f} K; linear periods {[round(x, 5) for x in q.get('linear_periods', [])[:2]]} d; "
-                      f"non-linear period {q.get('nonlinear_period', float('nan')):.5f} d (Gaia {v['period']:.5f} d)"
-                      + (f"; Teff corrected {q['teff_corrections']}x for the non-linear period" if q.get("teff_corrections") else "")]
-            lines += [f"- convection: {', '.join(q['extra_controls']) or 'RSP defaults (set A)'}" if q.get("extra_controls")
-                      else "- convection: RSP defaults (set A)"]
-            for key in ("mode_check", "limit_cycle_note"):
-                if q.get(key):
-                    lines.append(f"- {key.replace('_', ' ')}: {q[key]}")
+        q = json.loads((Path("runs") / f"rsp_{name}_{label}" / "params.json").read_text())  # what MESA RSP settled on
+        lines += [f"- MESA RSP: L = {q['L']:.2f} Lsun (x {q.get('L_factor', 1.0)} the L from the distance), Teff = "
+                  f"{q['teff']:.0f} K; linear periods {[round(x, 5) for x in q.get('linear_periods', [])[:2]]} d; "
+                  f"non-linear period {q.get('nonlinear_period', float('nan')):.5f} d (Gaia {v['period']:.5f} d)"
+                  + (f"; Teff corrected {q['teff_corrections']}x for the non-linear period" if q.get("teff_corrections") else "")]
+        lines += [f"- convection: {', '.join(q['extra_controls']) or 'RSP defaults (set A)'}" if q.get("extra_controls")
+                  else "- convection: RSP defaults (set A)"]
+        for key in ("mode_check", "limit_cycle_note"):
+            if q.get(key):
+                lines.append(f"- {key.replace('_', ' ')}: {q[key]}")
         lines.append("")
-    lines += ["## Outputs", ""] + [f"- {band}: `{mp4}`" + ("" if ok else " (FAILED)") for band, mp4, ok in movies]
+    lines += ["## Outputs", ""] + [f"- {band}: `{out / f'{name}_night_{band}.mp4'}`" for band in args.bands]
     lines += ["", "Every other star is constant (Gaia G and BP-RP -> colour-matched MESA SED). Argus instrument, PSF, sky, "
               "noise and photometry are as in outputs/m3/ASSUMPTIONS.md."]
     (out / "field_summary.md").write_text("\n".join(lines) + "\n")
     print(f"summary: {out / 'field_summary.md'}")
+
+    for band in ([] if args.models_only else args.bands):
+        mp4 = out / f"{name}_night_{band}.mp4"
+        cmd = [sys.executable, "m3_night_movie.py", "--cluster", name, "--band", band, "--highlight", str(len(followed)),
+               "-o", str(mp4)] + (["--start", args.start] if args.start else []) + (["--end", args.end] if args.end else [])
+        print(f"rendering {band} -> {mp4} (log {mp4.with_suffix('.log')})", flush=True)
+        with open(mp4.with_suffix(".log"), "w") as log:
+            subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, check=True)
 
 
 if __name__ == "__main__":

@@ -36,8 +36,6 @@ def available():
 
 def load(name):
     path = C.REPO / "grids" / f"{name}.py"
-    if not path.exists():
-        raise SystemExit(f"no grid '{name}'; available: {', '.join(available())}")
     spec = importlib.util.spec_from_file_location(f"grids.{name}", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
