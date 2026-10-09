@@ -24,9 +24,8 @@ exposure from ArgusSim's Observatory model (airglow, zodiacal light, starlight, 
 site's seasonal median scaled to each exposure's airmass (X^0.6); real airmass in the source extinction.
 Assumed here: field angle 1.44 deg (area median of the field) all night, continuous coverage by one
 telescope, transparency 1. Each exposure is a synthetic image (every star's ArgusSim PSF at its sub-pixel
-position, sky, Poisson and read noise, full-well clipping); magnitudes are measured from it by a simultaneous
-PSF fit of all stars at their known positions (deblended) and, for the followed pulsators, a single-star fit
-that ignores neighbours (naive). Full list of assumptions: outputs/m3/ASSUMPTIONS.md.
+position, sky, Poisson and read noise, full-well clipping); magnitudes are measured from it with SExtractor
+(mesa_argus.photometry). The difference panel is display only. Full list of assumptions: outputs/m3/ASSUMPTIONS.md.
 """
 
 from __future__ import annotations
@@ -54,13 +53,12 @@ from matplotlib.patches import Circle, Rectangle  # noqa: E402
 from matplotlib.ticker import StrMethodFormatter  # noqa: E402
 import numpy as np  # noqa: E402
 from scipy import sparse  # noqa: E402
-from scipy.sparse.linalg import splu  # noqa: E402
 
 from argus_sim import ABPhot, SpectralSky, SystemThroughput, ZemaxPSF  # noqa: E402
 from argus_sim import c as ARGUS_CONFIG  # noqa: E402
 from argus_sim import skymap_shim as sh  # noqa: E402
 
-from plot_sed_observation import BANDS, COLORS, FLAM, MAG_FACTOR, SYMBOLS, apply_style, figure_axes, system_response  # noqa: E402
+from plot_sed_observation import BANDS, COLORS, FLAM, SYMBOLS, apply_style, system_response  # noqa: E402
 
 iers.conf.auto_download = False
 # per cluster: Gaia data folder, cluster centre, HDPS tile and 3x3 block centre, default night, site override
@@ -112,8 +110,6 @@ MARGIN = 15.0  # arcsec: stars this far outside still spill light in
 def set_block(n):
     """Show an n x n block of minipixes (n odd)."""
     global BLOCK_N, HALF
-    if n < 1 or n % 2 == 0:
-        raise ValueError("the block must be an odd number of minipixes across")
     BLOCK_N, HALF = n, n / 2 * MINIPIX_PX * SKY_PX
 
 
@@ -121,9 +117,8 @@ def block_label():
     return f"{BLOCK_N} × {BLOCK_N} minipixes ({2 * HALF:.0f}″)"
 
 
-# half-width (arcsec) of the simulated area. The movie shows the block; the difference-imaging kernel, the
-# reference photometry and the zero point use the whole area, as a pipeline would use a large part of the
-# detector (one variable cannot then drive the kernel's flux scale). Set by --field.
+# half-width (arcsec) of the simulated area. The movie shows the block; the difference-image kernel and the
+# zero point use the whole area, as a pipeline would use a large part of the detector. Set by --field.
 AREA_HALF = 240.0
 AIRMASS_GRID = np.round(np.arange(1.0, 2.61, 0.2), 2)
 PSF_PHASES = 8  # sub-pixel phases per axis for the PSF lookup
@@ -272,8 +267,7 @@ class Templates:
         for path in sorted(glob.glob(str(_REPO / "runs" / "*_sed" / "seds.h5"))):
             with h5py.File(path) as f:
                 w = f["wavelength"][:]
-                waves = w if waves is None else waves
-                assert np.array_equal(w, waves)
+                waves = w
                 sel = slice(None, None, stride)
                 fluxes.append(f["flux"][sel])
                 colours.append(f["mag/Gbp"][sel] - f["mag/Grp"][sel])
@@ -300,7 +294,7 @@ class RSPStar:
     """
 
     def __init__(self, path, ab):
-        from mesa_argus import m67, rsp
+        from mesa_argus import m67
 
         with h5py.File(path) as f:
             self.attrs = dict(f.attrs)
@@ -397,7 +391,6 @@ class Scene:
         p0 = self.lookup["rho", 0, 0, 0]
         yy, xx = np.indices(p0.shape)
         self.c0 = ((p0 * yy).sum(), (p0 * xx).sum())
-        self.stamp = p0.shape[0]
         self.x = self.centre + np.asarray(stars["dx"]) / self.plate
         self.y = self.centre + np.asarray(stars["dy"]) / self.plate
         # origin and phase per star (the stamp centroid moves by -phase)
@@ -433,19 +426,6 @@ class Scene:
             self._designs[key] = self._design(name, si)
         return self._designs[key]
 
-    def image_psf(self, name, si):
-        """ArgusSim's PSF at seeing index si as a photutils ImagePSF: the 8 x 8 sub-pixel phases of the pixel-
-        integrated PSF interleaved into one 8x oversampled effective PSF (Anderson & King 2000). A stamp at phase
-        (py, px) holds the star at c0 - phase, so its pixel r samples the ePSF at offset r - c0 + phase."""
-        from photutils.psf import ImagePSF
-
-        size = self.stamp
-        data = np.zeros((size * PSF_PHASES, size * PSF_PHASES))
-        for iy in range(PSF_PHASES):
-            for ix in range(PSF_PHASES):
-                data[iy::PSF_PHASES, ix::PSF_PHASES] = self.lookup[name, si, iy, ix]
-        return ImagePSF(data, oversampling=PSF_PHASES, origin=(PSF_PHASES * self.c0[1], PSF_PHASES * self.c0[0]))
-
     def set_sky(self, sky_rate):
         self.sky = sky_rate
 
@@ -471,7 +451,7 @@ class Scene:
                     background=bg)
 
 
-# ---------------------------------------------------------------- difference imaging
+# ---------------------------------------------------------------- difference image (display only)
 def difference_image(image, image_sat, reference, reference_sat, readnoise, half=3, clip=3.0, fit_pixels=None):
     """PSF-matched difference image: image - (reference (x) K + b), Bramich (2008) delta-function basis.
 
@@ -540,14 +520,11 @@ def main(argv=None):
                    help="fit the kernel only on stamps around reference sources this many sigma above the sky "
                         "(HOTPANTS/ISIS style); 0 = all pixels")
     p.add_argument("--field", type=float, default=8.0,
-                   help="side (arcmin) of the simulated area used for the kernel, reference photometry and zero point; "
+                   help="side (arcmin) of the simulated area used for the kernel and zero point; "
                         "the movie shows the block at its centre")
     p.add_argument("--block", type=int, default=None,
                    help="minipixes across the block shown (odd; default the field's, else 3)")
     p.add_argument("--band", choices=list(BANDS), default="rho", help="band shown in the images, light curves and CMD")
-    p.add_argument("--photometry", choices=["sextractor", "ideal", "psf", "psf-iter", "dia", "dia-psf"], default="sextractor",
-                   help="method for the light curves (mesa_argus.photometry); dia for crowded fields")
-    p.add_argument("--compare", action="store_true", help="also run every other method on each exposure; all go to the CSV")
     args = p.parse_args(argv)
     import os
 
@@ -586,9 +563,6 @@ def main(argv=None):
         hi = clock(int(args.end[:2]) + int(args.end[3:5]) / 60) if args.end else np.inf
         keep = (hours >= lo) & (hours <= hi)
         times, bjd, airmass, alt, az = times[keep], bjd[keep], airmass[keep], alt[keep], az[keep]
-    if len(times) == 0:
-        raise SystemExit(f"the field is not observable (dark, airmass <= {args.max_airmass}) on {args.date}"
-                         + (f" between {args.start or 'dusk'} and {args.end or 'dawn'} UT" if args.start or args.end else ""))
     print(f"night of {args.date}: {len(times)} exposures, UT {times[0].iso[11:16]}-{times[-1].iso[11:16]}, "
           f"airmass {airmass.min():.2f}-{airmass.max():.2f}")
 
@@ -636,10 +610,7 @@ def main(argv=None):
     rsp_dir = {v["source"]: f"rsp_{rsp.PREFIX}{name}" for name, v in json.loads((DATA / "followed.json").read_text()).items()}
     rsp_stars, rsp_rate, rsp_mag, rsp_sed, rsp_cycle = {}, {}, {}, {}, {}
     for k in follow:
-        path = _REPO / "runs" / rsp_dir.get(int(src[k]), "missing") / "pulsation.h5"
-        if not path.exists():
-            raise SystemExit(f"{labels[k]} (Gaia {int(src[k])}) has no MESA RSP model at {path}; run python -m mesa_argus.rsp")
-        model = RSPStar(path, ab)
+        model = RSPStar(_REPO / "runs" / rsp_dir[int(src[k])] / "pulsation.h5", ab)
         rsp_stars[k] = model
         seds = np.array([model.sed(ph) for ph in phases_at(pulsators[int(src[k])], bjd)])
         rsp_sed[k] = seds
@@ -654,7 +625,7 @@ def main(argv=None):
               f"rho {rsp_cycle[k]['rho'].min():.2f}-{rsp_cycle[k]['rho'].max():.2f} (amplitude "
               f"{np.ptp(rsp_cycle[k]['rho']):.2f}); Gaia mean G {G[k]:.2f}")
 
-    # reference for difference imaging: each pulsator's flux averaged over its cycle (intensity mean of the
+    # catalogue (and difference-image reference) brightness: each pulsator's flux averaged over its cycle (intensity mean of the
     # MESA SEDs on a uniform phase grid), seen at each exposure's airmass
     ref_rate = {}
     for k in follow:
@@ -662,13 +633,13 @@ def main(argv=None):
         ref_rate[k] = {b: np.array([ab.electrons_from_sed(band, rsp_stars[k].wave, mean_sed, airmass=x).value
                                     for x in airmass]) for b, band in BANDS.items()}
 
-    def rates_at(b, j, reference=False):
+    def rates_at(b, j):
         x = float(np.clip(airmass[j], AIRMASS_GRID[0], AIRMASS_GRID[-1]))
         i1 = int(np.clip(np.searchsorted(AIRMASS_GRID, x), 1, len(AIRMASS_GRID) - 1))
         f = (x - AIRMASS_GRID[i1 - 1]) / (AIRMASS_GRID[i1] - AIRMASS_GRID[i1 - 1])
         out = static_rate[b][:, i1 - 1] * (1 - f) + static_rate[b][:, i1] * f
         for k in follow:
-            out[k] = (ref_rate if reference else rsp_rate)[k][b][j]
+            out[k] = rsp_rate[k][b][j]
         return out
 
     def true_mag(b, k, j):
@@ -732,7 +703,7 @@ def main(argv=None):
     apply_style()
     fig = plt.figure(figsize=(16, 10))
     frames = range(0, len(times), args.stride)
-    # reference for difference imaging: median of the best-seeing exposures of the night (each one a full noisy
+    # reference for the difference panel: median of the best-seeing exposures of the night (each one a full noisy
     # simulated exposure, the same as it appears in the movie), as a survey pipeline would stack them
     ref_frames = np.argsort(seeing, kind="stable")[: max(20, len(times) // 5)]
     stack, stack_sat = [], []
@@ -756,108 +727,38 @@ def main(argv=None):
           f"(seeing {seeing[ref_frames].min():.2f}-{seeing[ref_frames].max():.2f}\")", flush=True)
 
     # photometry (mesa_argus.photometry): the catalogue a pipeline would calibrate against is every star's magnitude
-    # (pulsators: their intensity-mean); expected catalogue fluxes pick PSF / calibration stars
-    from mesa_argus import photometry as P
+    # (pulsators: their intensity-mean); expected catalogue fluxes pick the calibration stars
+    from mesa_argus.photometry import SExtractorPhotometry
 
     cat_mag = static_mag[B].copy()
     cat_flux = static_rate[B][:, 0] * args.exptime
     for k in follow:
         cat_mag[k] = -2.5 * np.log10(np.mean(10 ** (-0.4 * rsp_cycle[k][B])))
         cat_flux[k] = np.mean(ref_rate[k][B]) * args.exptime
-    common = (scene.x, scene.y, cat_mag, cat_flux, scene.n, scene.readnoise, scene.fullwell, follow)
-
-    image_psfs = {}
-
-    def image_psf(si):
-        if si not in image_psfs:
-            image_psfs[si] = scene.image_psf(B, si)
-        return image_psfs[si]
-
-    si_ref = int(scene.seeing_index[ref_frames[0]])
-    p0 = scene.lookup[B, si_ref, 0, 0]
+    p0 = scene.lookup[B, int(scene.seeing_index[ref_frames[0]]), 0, 0]
     yy_, xx_ = np.indices(p0.shape)
     cy_, cx_ = (p0 * yy_).sum(), (p0 * xx_).sum()
     ref_fwhm = 2.3548 * np.sqrt(0.5 * (p0 * ((yy_ - cy_) ** 2 + (xx_ - cx_) ** 2)).sum())
-
-    def make(method):
-        if method in ("dia", "dia-psf"):
-            d = P.METHODS[method](*common, reference=ref_image, reference_saturated=ref_sat, reference_psf=image_psf(si_ref),
-                                fwhm=ref_fwhm, n_stack=len(ref_frames), colour=column(stars, "BP-RP"))
-            print(f"{method} reference: {d.n_detected} sources detected ({len(stars)} Gaia sources in the "
-                  f"{2 * AREA_HALF / 60:.0f}' area, {int(np.sum(in_block))} in the block); variables matched: "
-                  f"{sum(m_ >= 0 for m_ in d.match)}/{len(follow)}; zero point from {d.n_zp} stars: "
-                  f"{d.zp_a:.3f} {d.zp_b:+.3f} x (BP-RP), scatter {d.zp_scatter:.3f} mag", flush=True)
-            for i, k in enumerate(follow):
-                mi = d.match[i]
-                true_ref = -2.5 * np.log10(np.mean(10 ** (-0.4 * rsp_mag[k][B][ref_frames])))
-                found = (f"reference source {np.hypot(d.det_x[mi] - scene.x[k], d.det_y[mi] - scene.y[k]):.2f} px from the "
-                         f"catalogue position, {d.ref_zp[i] - 2.5 * np.log10(max(d.det_flux[mi], 1e-9)):.2f} mag"
-                         if mi >= 0 else "not detected in the reference")
-                print(f"  {labels[k]}: {found} (true {true_ref:.2f})", flush=True)
-            return d
-        if method == "sextractor":
-            return P.SExtractorPhotometry(*common, colour=column(stars, "BP-RP"), fwhm=ref_fwhm)
-        return P.METHODS[method](*common)
-
-    methods = {name: make(name) for name in (P.METHODS if args.compare else [args.photometry])}
-    print(f"photometry: {args.photometry}" + (f" (comparing {', '.join(methods)})" if args.compare else ""), flush=True)
-    rows, failures = [], {}
-    # fixed light-curve axis: truth plus, for dia, each matched variable's reference magnitude +/- its true amplitude
-    all_measured = {}
-    if args.photometry in ("dia", "dia-psf"):
-        d = methods[args.photometry]
-        for i, k in enumerate(follow):
-            if d.match[i] >= 0 and d.det_flux[d.match[i]] > 0:
-                m_ref = d.ref_zp[i] - 2.5 * np.log10(d.det_flux[d.match[i]])
-                amp = np.ptp(rsp_cycle[k][B])
-                all_measured[k] = [m_ref - amp, m_ref + amp]
-    # validation bookkeeping: the true flux scale exposure/reference (median over constant stars) vs the kernel sum
-    ref_rate_all = np.mean([rates_at(B, jr) for jr in ref_frames], axis=0)
-    constant = np.setdiff1d(np.nonzero(ref_rate_all > 0)[0], follow)
+    phot = SExtractorPhotometry(scene.x, scene.y, cat_mag, cat_flux, scene.n, scene.fullwell, follow,
+                                colour=column(stars, "BP-RP"), fwhm=ref_fwhm)
+    rows = []
     print(f"observing and rendering {len(frames)} frames ({len(times)} exposures) -> {args.output}", flush=True)
-    def exposure(j, with_difference):
+    def exposure(j):  # both bands drawn from the exposure's own seed: identical in both passes
         rng = np.random.default_rng(seeds[j])
-        obs = {b: scene.observe(b, rates_at(b, j), j, rng) for b in BANDS}
-        o = obs[B]
-        ksum = np.nan
-        if with_difference:
-            o["difference"], ksum = difference_image(o["image"], o["full"], ref_image, ref_sat, scene.readnoise,
-                                                     half=args.kernel_half, clip=args.kernel_clip, fit_pixels=stamp_pixels)
-        return obs, ksum
+        return {b: scene.observe(b, rates_at(b, j), j, rng) for b in BANDS}
 
     # pass 1: measure every frame (relative light curves need each star's mean over the night)
-    dia_used = any(name.startswith("dia") for name in methods)
     measured_frames = []
     for n, j in enumerate(frames):
-        obs, ksum = exposure(j, dia_used)
-        o = obs[B]
-        A = scene.design_at(B, j)
-        psf_j = image_psf(int(scene.seeing_index[j]))
-        exp = dict(image=o["image"], saturated=o["full"], difference=o.get("difference"), kernel_sum=ksum,
-                   psf_at=lambda dx, dy, psf_j=psf_j: psf_j.evaluate(dx, dy, 1.0, 0.0, 0.0),
-                   target_psf=A[:, follow], true_psf=A, true_background=np.full(scene.n * scene.n, o["background"]),
-                   true_mean=o["mean"], true_peak_fraction=float(A.max()))
-        results = {}
-        for name, meth in methods.items():
-            try:
-                results[name] = meth.measure(exp)
-            except ValueError as exc:  # e.g. photutils cannot build a PSF from blended core stars: a failure
-                failures[name] = failures.get(name, 0) + 1
-                nan = np.full(len(follow), np.nan)
-                results[name] = dict(flux=nan, sigma=nan, mag=nan, mag_err=nan, zp=np.nan, error=str(exc)[:80])
-        r = results[args.photometry]
+        r = phot.measure(exposure(j)[B]["image"])
         frame_m = {}
         for i, k in enumerate(follow):
             ok = np.isfinite(r["mag"][i]) and r["flux"][i] / r["sigma"][i] >= 5
             frame_m[k] = (r["mag"][i] if ok else np.nan, r["mag_err"][i] if ok else np.nan)
-            row = dict(exposure=j, ut_hours=ut[j], airmass=airmass[j], seeing=seeing[j],
-                       seeing_model=scene.seeings[int(scene.seeing_index[j])], star=labels[k], true_mag=true_mag(B, k, j),
-                       kernel_sum=ksum, true_scale=float(np.median(rates_at(B, j)[constant] / ref_rate_all[constant])))
-            if "saturated" in r:
-                row["saturated"] = bool(r["saturated"][i])
-            for name, res in results.items():
-                row[f"{name}_mag"], row[f"{name}_err"] = res["mag"][i], res["mag_err"][i]
-            rows.append(row)
+            rows.append(dict(exposure=j, ut_hours=ut[j], airmass=airmass[j], seeing=seeing[j],
+                             seeing_model=scene.seeings[int(scene.seeing_index[j])], star=labels[k],
+                             true_mag=true_mag(B, k, j), saturated=bool(r["saturated"][i]),
+                             sextractor_mag=r["mag"][i], sextractor_err=r["mag_err"][i]))
         measured_frames.append(frame_m)
         if (n + 1) % max(1, len(frames) // 10) == 0:
             print(f"  measured {n + 1}/{len(frames)}", flush=True)
@@ -879,7 +780,9 @@ def main(argv=None):
     # pass 2: draw (the same exposures: the same seeds)
     with writer.saving(fig, str(args.output), dpi=args.dpi):
         for n, j in enumerate(frames):
-            obs, _ = exposure(j, True)
+            obs = exposure(j)
+            obs[B]["difference"], _ = difference_image(obs[B]["image"], obs[B]["full"], ref_image, ref_sat, scene.readnoise,
+                                                       half=args.kernel_half, clip=args.kernel_clip, fit_pixels=stamp_pixels)
             for k in follow:
                 h = history[k]
                 h["t"].append(ut[j])
@@ -891,15 +794,13 @@ def main(argv=None):
                  static_mag, pulsators, src, gaia_var, in_block, G, templates, bjd, true_mag,
                  dict(cycle=rsp_cycle, sed=rsp_sed, stars=rsp_stars),
                  dict(vmax=vmax, lw=lw, dlim=dlim, cmd_c=cmd_c, cmd_m=cmd_m, follow_m=follow_m, ut=(ut[0], ut[-1]),
-                      seeing=seeing, centre=block_centre_label(), n_ref=len(ref_frames), all_measured=all_measured,
+                      seeing=seeing, centre=block_centre_label(), n_ref=len(ref_frames),
                       rel=rel, sed_ylim=sed_ylim), ab)
             writer.grab_frame()
             if (n + 1) % max(1, len(frames) // 20) == 0:
                 print(f"  {n + 1}/{len(frames)}", flush=True)
     import csv
 
-    for name, count in failures.items():
-        print(f"photometry {name}: failed on {count} of {len(frames)} exposures (recorded as NaN)")
     with open(args.output.with_suffix(".photometry.csv"), "w", newline="") as handle:
         w = csv.DictWriter(handle, fieldnames=rows[0].keys())
         w.writeheader()
@@ -969,8 +870,7 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
     lc.set(ylim=(hi_ + pad, lo_ - 2.5 * pad), ylabel=rf"$\Delta m_{{\{B}}}$ (mag)")
     lc.legend(loc="upper left", ncol=4, fontsize=7.5, frameon=True, framealpha=0.85, edgecolor="none", columnspacing=0.8,
               handletextpad=0.3)
-    lc.set_title(f"Light curves ({ {'sextractor': 'SExtractor MAG_AUTO', 'dia': 'difference imaging'}.get(args.photometry, args.photometry) })",
-                 loc="left", weight="bold")
+    lc.set_title("Light curves (SExtractor MAG_AUTO)", loc="left", weight="bold")
     lc.set_title(f"UT {times[j].iso[11:16]} · airmass {airmass[j]:.2f} · seeing {lim['seeing'][j]:.2f}″", loc="right",
                  fontsize=11, color="#3c5262")
     plt.setp(lc.get_xticklabels(), visible=False)
@@ -1019,8 +919,6 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
                   fontsize=8, color="white", bbox={"facecolor": "#111726", "alpha": 0.65, "edgecolor": "none", "pad": 3})
 
     # --- spectra of the followed pulsators now
-    nm = templates.wave.to_value(u.nm)
-    keep = (nm >= 300) & (nm <= 1000)
     shown = []
     for k in follow:
         w, f = rsp["stars"][k].wave.to_value(u.nm), rsp["sed"][k][j]
