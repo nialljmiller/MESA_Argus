@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Export one field's precomputed physics for the interactive Argus page (demo/argus_demo.html).
+
+    python demo/export_demo.py                       # f294 -> demo/build/f294_784m11_623.json
+
+Everything here is the movie's own physics (m3_night_movie.py, ArgusSim), evaluated once:
+- every Gaia star: position, catalogue colour, template electron rates per band on AIRMASS_GRID (as the movie);
+- the night: per exposure UT, BJD, airmass, seeing and ArgusSim's five sky components per band (e/s/pixel);
+- ArgusSim Zemax PSFs per band on a 0.05" seeing grid x 8 x 8 sub-pixel phases (as the movie's Scene);
+- variable-star models (the field's own MESA RSP stars and a library, one per type): electron rates per band x
+  AIRMASS_GRID and above-atmosphere magnitudes at every model step of one cycle (the page interpolates linearly in
+  phase between steps, as RSPStar.sed does), and the 300-1000 nm SED at N_SED_PHASE of the steps.
+Library models are re-reddened to this field's E(B-V) and keep their own distance; the page rescales them.
+Arrays are gzipped float32, base64 encoded.
+"""
+
+from __future__ import annotations
+
+import base64
+import copy
+import gzip
+import json
+from pathlib import Path
+import sys
+import warnings
+
+import astropy.units as u
+import numpy as np
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
+import m3_night_movie as M  # noqa: E402
+from argus_sim import ABPhot, SpectralSky, SystemThroughput  # noqa: E402
+from argus_sim import c as ARGUS_CONFIG  # noqa: E402
+from argus_sim.observatory import Observatory, seasonal_seeing_params, seeing_at_airmass  # noqa: E402
+from plot_sed_observation import BANDS, FLAM, system_response  # noqa: E402
+
+FIELD = "f294_784m11_623"
+N_SED_PHASE = 100  # SED panel: this many of the model's steps per cycle
+SEEING_GRID = np.round(np.arange(0.60, 3.001, 0.05), 2)  # arcsec FWHM: the page snaps to it, as the movie does
+LIBRARY = {  # one model per type, from fields already modelled
+    "RRab": "rsp_f008_841p52_998_G416445908838640384",
+    "RRc": "rsp_f278_214m16_942_G4096776721732855040",
+    "HADS": "rsp_f255_305p11_269_G4444906841983925504",
+    "DCEP F": "rsp_f065_830p44_237_G229602496313775872",
+    "BL Her": "rsp_f260_012p03_816_G4389902192257874560",
+    "W Vir": "rsp_f286_702p23_009_G4521180822614788480",
+    "EB": "rsp_f098_580p58_321_G1001448801332222848",
+}
+
+
+def pack(a):
+    a = np.ascontiguousarray(a, dtype=np.float32)
+    return dict(shape=list(a.shape), data=base64.b64encode(gzip.compress(a.tobytes(), 9)).decode())
+
+
+def model_tables(model, ab):
+    """A variable-star model at its own steps of one cycle: phases, rates (phase, airmass) per band, magnitudes, SEDs."""
+    seds = model.flux
+    rate = {b: np.array([[ab.electrons_from_sed(band, model.wave, f * FLAM, airmass=x).value for x in M.AIRMASS_GRID]
+                         for f in seds]) for b, band in BANDS.items()}
+    mag = {b: np.array([float(ab.mag_from_sed(band, model.wave, f * FLAM)) for f in seds]) for b, band in BANDS.items()}
+    w = model.wave.to_value(u.nm)
+    shown = (w >= 300) & (w <= 1000)
+    rows = np.unique(np.searchsorted(model.phase, np.arange(N_SED_PHASE) / N_SED_PHASE).clip(0, len(seds) - 1))
+    return dict(kind=str(model.attrs["kind"]), period=float(model.period), phase=pack(model.phase),
+                rate={b: pack(r) for b, r in rate.items()}, mag={b: pack(m) for b, m in mag.items()},
+                sed_wave_nm=pack(w[shown]), sed_phase=pack(model.phase[rows]), sed=pack(seds[rows][:, shown]))
+
+
+def main():
+    M.use_cluster(FIELD)
+    M.set_block(M.CLUSTERS[FIELD].get("block_n", 3))
+    M.AREA_HALF = max(30.0 * 8.0, M.HALF + M.MARGIN)  # the movie's default --field 8
+    date = M.CLUSTERS[FIELD]["date"]
+    cfg = copy.deepcopy(ARGUS_CONFIG)
+    for key, value in (M.CLUSTERS[FIELD]["site"] or {}).items():
+        setattr(cfg.observatory, key, value)
+    tp = SystemThroughput(filters={"g": True, "rho": True}, throughput_loss=cfg.telescope.throughput_loss)
+    ab = ABPhot(throughput=tp, collecting_area=cfg.telescope.collecting_area)
+    stars, pulsators = M.load_scene(), M.load_pulsators()
+    src = np.asarray(stars["Source"]).astype(np.int64)
+    G = M.column(stars, "Gmag")
+    follow = M.choose_followed(stars, pulsators, 2)
+    times, bjd, airmass, alt, az = M.night_schedule(date, 2.0, cfg)
+
+    # every star's colour and template rates: as m3_night_movie.main
+    from astropy.table import Table
+
+    templates = M.Templates()
+    colour = M.column(stars, "BP-RP")
+    outer = Table.read(M.DATA / "gaia_dr3_core.ecsv")
+    r_out = 60 * np.hypot((M.column(outer, "RA_ICRS") - M.CENTRE.ra.deg) * np.cos(M.CENTRE.dec.rad),
+                          M.column(outer, "DE_ICRS") - M.CENTRE.dec.deg)
+    og, oc = M.column(outer, "Gmag"), M.column(outer, "BP-RP")
+    good = (r_out > 2.5) & np.isfinite(og) & np.isfinite(oc)
+    bins = np.arange(11.5, 20.51, 0.5)
+    centres = 0.5 * (bins[1:] + bins[:-1])
+    fiducial = np.array([np.median(oc[good & (og >= lo) & (og < hi)]) if np.sum(good & (og >= lo) & (og < hi)) >= 5 else np.nan
+                         for lo, hi in zip(bins[:-1], bins[1:])])
+    ok_f = np.isfinite(fiducial)
+    missing = ~(np.isfinite(colour) & (colour > -0.5) & (colour < 3.0))
+    colour = np.where(missing, np.interp(G, centres[ok_f], fiducial[ok_f]), colour)
+    gaia_var = np.array([int(s) in pulsators for s in src])
+    for k in np.nonzero(gaia_var)[0]:
+        v = pulsators[int(src[k])]
+        mean_c = v["mean"].get("BP", np.nan) - v["mean"].get("RP", np.nan)
+        low, high, typical = (0.2, 0.9, 0.55 if v["kind"] != "RRc" else 0.42) if v["kind"].startswith("RR") else (0.3, 1.3, 0.7)
+        colour[k] = mean_c if np.isfinite(mean_c) and low <= mean_c <= high else typical
+    t_index = np.array([templates.index(c_) for c_ in colour])
+    scale = 10 ** (-0.4 * (G - templates.g[t_index]))
+    static_rate = {b: np.zeros((len(stars), len(M.AIRMASS_GRID))) for b in BANDS}
+    static_mag = {b: np.zeros(len(stars)) for b in BANDS}
+    for i_t in np.unique(t_index):
+        s_ = templates.flux[i_t] * FLAM
+        on = t_index == i_t
+        for b, band in BANDS.items():
+            static_rate[b][on] = np.outer(scale[on], [ab.electrons_from_sed(band, templates.wave, s_, airmass=x).value
+                                                      for x in M.AIRMASS_GRID])
+            static_mag[b][on] = float(ab.mag_from_sed(band, templates.wave, s_)) - 2.5 * np.log10(scale[on])
+
+    # the field's own variables (as the movie) and the library (re-reddened to this field)
+    from mesa_argus import rsp
+
+    rsp_dir = {v["source"]: f"rsp_{rsp.PREFIX}{name}" for name, v in json.loads((M.DATA / "followed.json").read_text()).items()}
+    field_ebv = float(json.loads((M.DATA / "field.json").read_text())["rsp"]["ebv"])
+    models, native = [], []
+    for k in follow:
+        model = M.RSPStar(REPO / "runs" / rsp_dir[int(src[k])] / "pulsation.h5", ab)
+        t = model_tables(model, ab)
+        v = pulsators[int(src[k])]
+        t.update(name=f"Gaia DR3 {src[k]}", origin=FIELD, gaia_period=v["period"], epoch_bjd=v["epoch"], gaia_kind=v["kind"])
+        native.append(dict(star=int(k), model=len(models)))
+        models.append(t)
+    for kind, run in LIBRARY.items():
+        model = M.RSPStar(REPO / "runs" / run / "pulsation.h5", ab, ebv=field_ebv)
+        t = model_tables(model, ab)
+        t.update(name=f"{kind} library model", origin=run.removeprefix("rsp_"), library=True)
+        models.append(t)
+
+    # seeing, PSFs (the movie's Scene, on SEEING_GRID) and the sky per exposure
+    zenith_seeing = float(seasonal_seeing_params(times[0])[0])
+    seeing = seeing_at_airmass(zenith_seeing, airmass)
+
+    class Args:
+        field_angle, exptime = 1.44, 60.0
+
+    print(f"PSFs: {len(SEEING_GRID)} seeing values x {M.PSF_PHASES ** 2} phases x {len(BANDS)} bands …", flush=True)
+    scene = M.Scene(stars, Args, cfg, ab, SEEING_GRID)
+    # the movie fixes the stamp centroid c0 from its first seeing value; recompute it as the movie would for this night
+    movie_grid = np.round(np.arange(np.floor(seeing.min() * 20) / 20, seeing.max() + 0.05, 0.05), 2)
+    p0 = scene.lookup["rho", int(np.argmin(np.abs(SEEING_GRID - movie_grid[0]))), 0, 0]
+    yy, xx = np.indices(p0.shape)
+    c0 = ((p0 * yy).sum(), (p0 * xx).sum())
+    psf = {b: np.array([[scene.lookup[b, si, iy, ix] for iy in range(M.PSF_PHASES) for ix in range(M.PSF_PHASES)]
+                        for si in range(len(SEEING_GRID))]) for b in BANDS}
+    observatory = Observatory(cfg)
+    per_exposure = [observatory.sky_components_at(float(a_), float(z_), t_) for a_, z_, t_ in zip(alt, az, times)]
+    comp = {key: np.array([float(np.ravel(c_[key])[0]) for c_ in per_exposure]) for key in per_exposure[0]}
+    names = ("airglow", "zodiacal", "starlight", "moon", "artif")
+    sky = {}
+    for b, band in BANDS.items():
+        s = SpectralSky(ab.tp, ab, band)
+        sky[b] = {n_: getattr(s, f"e_per_s10_{n_}") * comp[f"{n_}_s10"] * scene.plate**2 for n_ in names}
+    ut = (times.jd - np.floor(times[0].jd - 0.5) - 0.5) * 24
+    response = {b: dict(base=pack(system_response(ab.tp, band, 0.0)), atmosphere=pack(np.asarray(tp.filt_wav.atmosphere, float)))
+                for b, band in BANDS.items()}
+
+    out = dict(
+        field=FIELD, name=M.CLUSTERS[FIELD]["name"], date=date, centre_label=M.block_centre_label(),
+        block_n=M.BLOCK_N, half_arcsec=M.HALF, minipix_arcsec=M.MINIPIX_PX * M.SKY_PX,
+        plate=scene.plate, n=scene.n, centre=scene.centre, exptime=60.0, fullwell=scene.fullwell,
+        readnoise=scene.readnoise, dark=scene.dark, psf_phases=M.PSF_PHASES, c0=list(c0),
+        airmass_grid=M.AIRMASS_GRID.tolist(), seeing_grid=SEEING_GRID.tolist(), bands=list(BANDS),
+        zenith_seeing=zenith_seeing, field_ebv=field_ebv,
+        stars=dict(source=[str(s) for s in src], x=pack(scene.x), y=pack(scene.y), dx=pack(stars["dx"]), dy=pack(stars["dy"]),
+                   G=pack(G), bp_rp_gaia=pack(M.column(stars, "BP-RP")), colour=pack(colour),
+                   in_block=pack(np.asarray(stars["in_block"], float)), gaia_var=pack(gaia_var.astype(float)),
+                   rate={b: pack(r) for b, r in static_rate.items()}, mag={b: pack(m) for b, m in static_mag.items()}),
+        native=native, models=models,
+        night=dict(ut=pack(ut), bjd=(bjd - 2460000.0).tolist(), airmass=pack(airmass), seeing=pack(seeing),
+                   moon_illum=pack(comp["illum_frac"]), moon_alt=pack(comp["moon_alt"]), sky_v=pack(comp["v_mag"]),
+                   sky={b: {n_: pack(v) for n_, v in c_.items()} for b, c_ in sky.items()}),
+        psf={b: pack(p) for b, p in psf.items()}, response=response, response_wave_nm=pack(ab.tp.wav.to_value(u.nm)),
+    )
+    path = REPO / "demo" / "build" / f"{FIELD}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out))
+    print(f"{path}: {path.stat().st_size / 1e6:.1f} MB; {len(stars)} stars, {len(times)} exposures, {len(models)} models")
+
+
+
+if __name__ == "__main__":
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        main()

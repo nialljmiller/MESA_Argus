@@ -293,15 +293,15 @@ class RSPStar:
     SEDs are f_lambda at 10 pc; the observer sees them at M3's distance with M3's reddening.
     """
 
-    def __init__(self, path, ab):
+    def __init__(self, path, ab, ebv=None):
         from mesa_argus import m67
 
         with h5py.File(path) as f:
             self.attrs = dict(f.attrs)
             wave, flux10, t = f["wavelength"][:], f["flux"][:], f["time_days"][:]
         self.wave = wave * u.AA
-        # the distance and reddening the model was made for (recorded in the file)
-        dm, ebv = float(self.attrs["distance_modulus"]), float(self.attrs["ebv"])
+        # the distance and reddening the model was made for (recorded in the file); ebv: another field's reddening
+        dm, ebv = float(self.attrs["distance_modulus"]), float(self.attrs["ebv"]) if ebv is None else ebv
         observed = m67.redden(wave, flux10 * (10.0 / 10 ** (dm / 5 + 1)) ** 2, ebv)
         rho = np.array([float(ab.mag_from_sed("rho", self.wave, f * FLAM)) for f in observed])
         # one full cycle ending at the last maximum light: RSP's own measured period (RRab light curves have a
