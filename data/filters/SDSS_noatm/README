@@ -1,0 +1,5 @@
+SDSS 2.5m imager point-source responses with the atmosphere removed.
+Source: https://classic.sdss.org/dr7/instruments/imager/filters/{u,g,r,i,z}.dat (Gunn et al. 2001)
+Transmission = (point-source response at airmass 1.3) / (atmospheric transmission at 1 airmass)^1.3
+i.e. filter + optics + CCD QE, no atmosphere (no telluric A-band, no Rayleigh/aerosol extinction).
+The data/filters/SDSS curves (SVO SLOAN/SDSS, Doi et al. 2010) INCLUDE the atmosphere at airmass 1.3.

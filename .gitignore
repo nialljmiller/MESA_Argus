@@ -5,7 +5,7 @@ mesa_work/.mesa_temp_cache/
 .mesa_temp_cache/
 
 # generated: assembled filter instrument, MESA runs, figures/HTML
-filters/
+/filters/
 runs/
 outputs/
 
