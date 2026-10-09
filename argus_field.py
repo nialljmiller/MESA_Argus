@@ -21,8 +21,10 @@ at once).
    - Not modelled: RRd (no stable double-mode RSP solution; --try-rrd to attempt), multi-mode / anomalous Cepheids,
      RV Tau, low-amplitude delta Scuti, double-mode HADS, eccentric binaries without a Gaia solution, evolved
      binaries, and every other class.
-   A chosen star is dropped (with the reason) if its inputs are missing: parallax S/N < 5 (Cepheids, HADS,
-   binaries), no ASAS-SN period or FLAME mass (HADS), no GSP-Phot Teff (binaries).
+   Distances: Gaia parallax if its S/N >= 3; otherwise a period-luminosity relation (RR Lyrae: M_G-[Fe/H],
+   Garofalo et al. 2022; Cepheids: Gaia period-Wesenheit, Ripepi et al. 2019; HADS: Ziaali et al. 2019).
+   A chosen star is dropped (with the reason) if its inputs are missing: parallax S/N < 3 (binaries), no FLAME
+   mass or GSP-Phot Teff (HADS), no GSP-Phot Teff (binaries).
 4. Models, one per star, cached in runs/rsp_<field>_G<source> (re-runs reuse them; a recorded failure in its FAILED
    file is final until that directory is deleted). Per-star parameters, the model checks (pulsators: limit cycle at
    Gaia's period, i.e. the star's mode; binaries: Gaia's eclipses reproduced) and every assumption are written to
@@ -49,6 +51,9 @@ SITES = {"argus": None,  # ArgusSim's configured site
          "sro": dict(latitude=37.07, longitude=-119.41, altitude=1400.0)}  # Sierra Remote Observatories
 RADIUS_DEG = 0.12  # Gaia query radius: covers the 8' x 8' simulated area
 Z_SUN = 0.0169
+MIN_PLX_SNR = 3.0  # parallax S/N for a parallax distance; below it, a period-luminosity distance (pulsators) or dropped (binaries)
+# period-Wesenheit relations, Milky Way, W = G - 1.90 (BP - RP) (Ripepi et al. 2019, A&A 625, A14, eq. 2 and Table 3)
+PW_RELATIONS = {"DCEP F": (-2.701, -3.320), "DCEP 1O": (-2.976, -4.095), "T2CEP": (-1.194, -2.381)}
 TRY_RRD = False  # --try-rrd: attempt the double-mode search anyway (mesa_argus.rsp.accept_double_mode)
 
 
@@ -170,7 +175,8 @@ def inventory(data, ra, dec, block_n=3):
             pf, p1 = (pf if np.isfinite(pf) and pf > 0 else np.nan), (p1 if np.isfinite(p1) and p1 > 0 else np.nan)
             klass, sub, mode = str(v["Class"]), str(v["SubClass"]), str(v["ModeClass"])
             row.update(amp_G=float(v["ptpG"]), G_mean=float(v["Gmagavg"]), epoch_bjd=float(v["EpochG"]) + 2455197.5,
-                       mh=float(v["[M/H]"]), period=pf if np.isfinite(pf) else p1)
+                       mh=float(v["[M/H]"]), period=pf if np.isfinite(pf) else p1,
+                       BP_mean=float(v["BPmagavg"]), RP_mean=float(v["RPmagavg"]))
             if klass == "DCEP" and mode in ("FUNDAMENTAL", "FIRST_OVERTONE"):
                 row.update(kind="DCEP F" if mode == "FUNDAMENTAL" else "DCEP 1O",
                            period=pf if mode == "FUNDAMENTAL" else p1, model="MESA RSP", why="")
@@ -248,8 +254,8 @@ def physical(row, stars, ra, dec):
     plx, e_plx = col(stars, "Plx")[k], col(stars, "e_Plx")[k]
     ebv = reddening(float(col(stars, "RA_ICRS")[k]), float(col(stars, "DE_ICRS")[k]))
     if row["kind"] == "EB":
-        if not (np.isfinite(plx) and np.isfinite(e_plx) and plx / e_plx >= 5):
-            return None, f"parallax S/N {plx / e_plx:.1f} < 5: no distance"
+        if not (np.isfinite(plx) and np.isfinite(e_plx) and plx / e_plx >= MIN_PLX_SNR):
+            return None, f"parallax S/N {plx / e_plx:.1f} < {MIN_PLX_SNR:g}: no distance"
         from astroquery.vizier import Vizier
         ap = Vizier(columns=["Source", "Teff", "logg"]).query_constraints(catalog="I/355/paramp", Source=str(row["source"]))
         val = lambda c: float(ap[0][c][0]) if ap and len(ap[0]) and not np.ma.is_masked(ap[0][c][0]) else np.nan  # noqa: E731
@@ -261,7 +267,8 @@ def physical(row, stars, ra, dec):
                                teff=f"Gaia DR3 GSP-Phot Teff {val('Teff'):.0f} K, log g {val('logg'):.2f} (system)",
                                z="assumed solar ([M/H] = 0) for the component atmospheres",
                                method=row["model"])), ""
-    good_plx = np.isfinite(plx) and np.isfinite(e_plx) and plx / e_plx >= 5
+    good_plx = np.isfinite(plx) and np.isfinite(e_plx) and plx / e_plx >= MIN_PLX_SNR
+    snr = plx / e_plx if np.isfinite(plx) and np.isfinite(e_plx) and e_plx > 0 else np.nan
     cepheid = row["kind"].startswith("DCEP") or row["kind"] in ("BL Her", "W Vir")
     hads = row["kind"] == "HADS"
     mh, mh_note = row["mh"], f"Gaia photometric [M/H] = {row['mh']:+.2f}"
@@ -279,12 +286,31 @@ def physical(row, stars, ra, dec):
     if good_plx:
         d_pc = 1000.0 / (plx + 0.017)
         dm, how = 5 * np.log10(d_pc) - 5, f"parallax {plx:.3f} +/- {e_plx:.3f} mas (+0.017 zero point) -> {d_pc / 1000:.2f} kpc"
-    elif cepheid or hads:
-        return None, f"parallax S/N {plx / e_plx:.1f} < 5: no distance"
+    elif cepheid:
+        rel = row["kind"] if row["kind"].startswith("DCEP") else "T2CEP"
+        a, b = PW_RELATIONS[rel]
+        w_obs = row["G_mean"] - 1.90 * (row["BP_mean"] - row["RP_mean"])
+        if not np.isfinite(w_obs):
+            return None, f"parallax S/N {snr:.1f} < {MIN_PLX_SNR:g} and no Gaia mean BP/RP for a Wesenheit distance"
+        w_abs = a + b * np.log10(row["period"])
+        dm = w_obs - w_abs
+        how = (f"parallax S/N {snr:.1f} < {MIN_PLX_SNR:g}: period-Wesenheit relation ({rel}, Ripepi et al. 2019 Table 3) "
+               f"W = {a} {b:+} log P = {w_abs:.2f}; W = G - 1.90 (BP-RP) = {w_obs:.2f} (reddening-free) -> "
+               f"{10 ** (dm / 5 + 1) / 1000:.2f} kpc")
+    elif hads:
+        bp_rp = float(col(stars, "BP-RP")[k])
+        if not np.isfinite(bp_rp):
+            return None, f"parallax S/N {snr:.1f} < {MIN_PLX_SNR:g} and no Gaia BP-RP for a P-L distance"
+        m_v = -2.94 * np.log10(row["period"]) - 1.34
+        g_v = -0.02704 + 0.01424 * bp_rp - 0.2156 * bp_rp ** 2 + 0.01426 * bp_rp ** 3
+        dm = row["G_mean"] - g_v - m_v - 3.1 * ebv
+        how = (f"parallax S/N {snr:.1f} < {MIN_PLX_SNR:g}: delta Scuti P-L relation M_V = -2.94 log P - 1.34 = {m_v:.2f} "
+               f"(Ziaali et al. 2019, fundamental mode); V = G - ({g_v:+.3f}) from BP-RP {bp_rp:.2f} (Riello et al. 2021), "
+               f"A_V = 3.1 E(B-V) -> {10 ** (dm / 5 + 1) / 1000:.2f} kpc")
     else:
         m_g = 0.32 * mh + 1.11
         dm = row["G_mean"] - m_g - 2.74 * ebv
-        how = (f"parallax S/N {plx / e_plx:.1f} < 5: M_G = 0.32 [Fe/H] + 1.11 = {m_g:.2f} (Garofalo et al. 2022), "
+        how = (f"parallax S/N {snr:.1f} < {MIN_PLX_SNR:g}: M_G = 0.32 [Fe/H] + 1.11 = {m_g:.2f} (Garofalo et al. 2022), "
                f"A_G = 2.74 E(B-V) -> {10 ** (dm / 5 + 1) / 1000:.2f} kpc")
     z = Z_SUN * 10 ** mh
     if row["kind"].startswith("DCEP"):
@@ -299,13 +325,21 @@ def physical(row, stars, ra, dec):
         x, mass, mass_note = 0.76, 0.55, "assumed: 0.55 Msun as MESA's rsp_Type_II_Cepheid"
     elif hads:
         from astroquery.vizier import Vizier
-        r = Vizier(columns=["Source", "Mass-Flame", "Lum-Flame"]).query_constraints(catalog="I/355/paramp",
-                                                                                     Source=str(row["source"]))
-        m_fl = float(r[0]["Mass-Flame"][0]) if r and len(r[0]) and np.isfinite(float(r[0]["Mass-Flame"][0] or np.nan)) else np.nan
-        if not np.isfinite(m_fl):
-            return None, "no Gaia DR3 FLAME mass"
-        x, mass = 0.70, m_fl
-        mass_note = "Gaia DR3 FLAME (isochrone mass from Gaia L and Teff; assumes a non-variable single star); X = 0.70 as MESA's rsp_Delta_Scuti"
+        r = Vizier(columns=["Source", "Mass-Flame", "Lum-Flame", "Teff"]).query_constraints(catalog="I/355/paramp",
+                                                                                             Source=str(row["source"]))
+        val = lambda c: float(r[0][c][0]) if r and len(r[0]) and not np.ma.is_masked(r[0][c][0]) else np.nan  # noqa: E731
+        m_fl, teff = val("Mass-Flame"), val("Teff")
+        x = 0.70
+        if np.isfinite(m_fl):
+            mass = m_fl
+            mass_note = "Gaia DR3 FLAME (isochrone mass from Gaia L and Teff; assumes a non-variable single star); X = 0.70 as MESA's rsp_Delta_Scuti"
+        elif np.isfinite(teff):
+            from mesa_argus.binary import ms_mass
+            mass = float(ms_mass(teff))
+            mass_note = (f"no Gaia FLAME mass: main-sequence mass for GSP-Phot Teff {teff:.0f} K (Pecaut & Mamajek 2013, "
+                         f"table 2022.04.16); HADS are slightly evolved, so this may underestimate; X = 0.70 as MESA's rsp_Delta_Scuti")
+        else:
+            return None, "no Gaia DR3 FLAME mass or GSP-Phot Teff"
     else:
         x, mass = 0.75, float(np.interp(mh, [-2.1, -1.5, 0.0], [0.75, 0.68, 0.55]))
         mass_note = "assumed from [M/H] (0.75 at -2.1, 0.68 at -1.5, 0.55 at 0.0)"

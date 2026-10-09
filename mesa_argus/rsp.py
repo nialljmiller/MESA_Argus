@@ -239,6 +239,10 @@ _waiting = 0
 
 
 def cores():
+    """Cores this process's RSP runs may use: $ARGUS_CORES (set by stage_batch.py to share the machine between
+    fields run at once), else config.toml [run] max_star_procs, else all."""
+    if os.environ.get("ARGUS_CORES"):
+        return max(1, int(os.environ["ARGUS_CORES"]))
     return int(C.config().get("run", {}).get("max_star_procs", 0) or 0) or os.cpu_count() or 1
 
 
