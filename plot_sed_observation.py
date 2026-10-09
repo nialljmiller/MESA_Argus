@@ -17,7 +17,8 @@ Point it at a folder to make a movie, one frame per SED::
 MESA writes the same SED once per filter, so one file per model is used, ordered by
 model number (other folders: by the trailing number in each file name). Every axis is
 fixed by the whole sequence; the CMD traces the evolutionary track and the light curve
-shows one exposure per state against model number. Long runs are evenly subsampled
+shows one exposure per state against star age (looked up by model number in
+../LOGS/history.data; model number when there is no history). Long runs are evenly subsampled
 to --max-frames (default 600; 0 renders every model). --save-data writes the per-frame
 photometry (with age, Teff and log g from LOGS/history.data) as a CSV.
 
@@ -386,16 +387,20 @@ def figure_axes(fig, margins=None):
     return cmd, lc, colour_ax, image_ax, sed_ax
 
 
-def draw_image_panel(fig, image_ax, args, shown, cfg):
-    """Synthetic detector stamp of the selected exposure in one band."""
+def draw_image_panel(fig, image_ax, args, shown, cfg, vrange=None):
+    """Synthetic detector stamp of the selected exposure in one band.
+
+    vrange (vmin, vmax) fixes the colour scale, so in a movie the sky stays put and the
+    star brightens and fades; by default the scale fits this one image.
+    """
     img = shown["exposure"]["image"]
     ny, nx = img.shape
     scale = cfg.telescope.plate_scale
     extent = np.array([-nx / 2, nx / 2, -ny / 2, ny / 2]) * scale
     norm = AsinhNorm(
         linear_width=max(1, np.sqrt(shown["background_e_pixel"] + cfg.telescope.readnoise**2)),
-        vmin=float(min(0, img.min())),
-        vmax=float(img.max()),
+        vmin=float(min(0, img.min())) if vrange is None else vrange[0],
+        vmax=float(img.max()) if vrange is None else vrange[1],
     )
     plotted = image_ax.imshow(img, origin="lower", interpolation="nearest", cmap="magma", norm=norm, extent=extent)
     image_ax.set_title(f"Synthetic exposure · {SYMBOLS[args.image_band]}", loc="left", weight="bold")
@@ -692,8 +697,25 @@ def make_movie(args, frames, key_label, ab, cfg):
     if len(states) < 2:
         raise ValueError("Fewer than two usable SEDs.")
 
+    # light-curve time axis: the model number in each file name looks up the star's age in
+    # ../LOGS/history.data; without an age for every frame, fall back to the file key
+    if history and all(state["key"] in history for state in states):
+        ages = np.array([history[state["key"]][0] for state in states])
+        unit, scale = next(
+            ((unit, scale) for unit, scale in (("Gyr", 1e9), ("Myr", 1e6), ("kyr", 1e3)) if ages.max() >= scale),
+            ("yr", 1.0),
+        )
+        x_label = f"Star age ({unit})"
+        for state, age in zip(states, ages):
+            state["x"] = age / scale
+    else:
+        if history:
+            warnings.warn(f"Not every model is in LOGS/history.data; plotting against {key_label.lower()}.", stacklevel=1)
+        x_label = key_label
+        for state in states:
+            state["x"] = state["key"]
+
     modulus = 5 * np.log10(args.distance_pc / 10.0) if args.absolute else 0.0
-    keys = np.array([s["key"] for s in states], dtype=float)
     true = {name: np.array([s["mag"][name] for s in states]) for name in BANDS}
     true_colour, true_y = true["beta"] - true["rho"], true["rho"] - modulus
 
@@ -713,6 +735,16 @@ def make_movie(args, frames, key_label, ab, cfg):
     fixed["sed"] = (max(min(floors) / 2, max(peaks) * 1e-6), max(peaks) * 2)
 
     setup = observing_setup(args, ab, cfg)
+    # one image colour scale for the whole movie, topped by the brightest expected pixel
+    # (capped at full well, where saturated frames clip)
+    shown = setup["bands"][args.image_band]
+    background_e = (shown["sky_rate"] + cfg.telescope.dark_current) * args.exptime
+    brightest = max(
+        ab.electrons_from_sed(BANDS[args.image_band], s["wave"], s["flux"], airmass=args.airmass,
+                              transparency=args.transparency).to_value(u.electron / u.s)
+        for s in states
+    ) * args.exptime * shown["psf"].max() + background_e
+    fixed["image"] = (0.0, float(min(brightest, cfg.telescope.fullwell)))
     seeds = np.random.SeedSequence(args.seed).spawn(len(states))
     if args.output.suffix.lower() == ".gif":
         writer = PillowWriter(fps=args.fps)
@@ -742,7 +774,7 @@ def make_movie(args, frames, key_label, ab, cfg):
                 })
             rows.append(row)
             fig.clear()
-            draw_movie_frame(fig, args, states, i, rows, result, key_label, history, fixed, modulus, ab, cfg)
+            draw_movie_frame(fig, args, states, i, rows, result, key_label, x_label, history, fixed, modulus, ab, cfg)
             writer.grab_frame()
             if (i + 1) % max(1, len(states) // 10) == 0 or i + 1 == len(states):
                 print(f"  {i + 1}/{len(states)}", flush=True)
@@ -762,13 +794,12 @@ def make_movie(args, frames, key_label, ab, cfg):
         )
 
 
-def draw_movie_frame(fig, args, states, i, rows, result, key_label, history, fixed, modulus, ab, cfg):
+def draw_movie_frame(fig, args, states, i, rows, result, key_label, x_label, history, fixed, modulus, ab, cfg):
     """One movie frame: evolutionary CMD and light curve so far, this state's exposure and spectrum."""
     cmd, lc, colour_ax, image_ax, sed_ax = figure_axes(fig, margins=(0.05, 0.95, 0.06, 0.88))
     state = states[i]
-    key_name = key_label.lower().replace(" ", "_")
-    keys = np.array([r[key_name] for r in rows], dtype=float)
-    all_keys = np.array([s["key"] for s in states], dtype=float)
+    all_keys = np.array([s["x"] for s in states], dtype=float)
+    keys = all_keys[: i + 1]
     true = {name: np.array([s["mag"][name] for s in states]) for name in BANDS}
     true_colour, true_y = true["beta"] - true["rho"], true["rho"] - modulus
     meas = {name: np.array([r[f"{name}_mag"] for r in rows]) for name in BANDS}
@@ -815,10 +846,10 @@ def draw_movie_frame(fig, args, states, i, rows, result, key_label, history, fix
     lc.legend(loc="lower right", bbox_to_anchor=(1.0, 1.005), ncol=2, frameon=False, borderaxespad=0)
     plt.setp(lc.get_xticklabels(), visible=False)
     span = all_keys[-1] - all_keys[0]
-    colour_ax.set(xlabel=key_label, ylabel=r"$\beta-\rho$ (mag)", ylim=fixed["colour"],
+    colour_ax.set(xlabel=x_label, ylabel=r"$\beta-\rho$ (mag)", ylim=fixed["colour"],
                   xlim=(all_keys[0] - 0.02 * span, all_keys[-1] + 0.02 * span))
 
-    draw_image_panel(fig, image_ax, args, result["bands"][args.image_band], cfg)
+    draw_image_panel(fig, image_ax, args, result["bands"][args.image_band], cfg, vrange=fixed["image"])
     draw_spectrum_panel(sed_ax, args, state["wave"], state["flux"], ab, ylim=fixed["sed"])
     title = args.title or (state["path"].parent.parent.name if state["path"].parent.name == "SED" else state["path"].parent.name)
     distance = f"  |  {args.distance_pc:g} pc" if args.distance_pc else ""

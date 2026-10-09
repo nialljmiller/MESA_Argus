@@ -1,0 +1,103 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - name: _r
+#   datatype: float64
+#   format: '{:8.6f}'
+#   description: Distance from center (322.49304697000+12.16700537000)[ICRS], at Epoch=J2016.0
+#   meta: !!omap
+#   - {ucd: POS_ANG_DIST_GENERAL}
+#   - {width: 8}
+#   - {precision: '6'}
+# - name: recno
+#   datatype: int32
+#   description: Record number assigned by the VizieR team. Should Not be used for identification.
+#   meta: !!omap
+#   - {ucd: RECORD}
+#   - {width: 8}
+# - name: Source
+#   datatype: int64
+#   description: Unique source identifier (source_id)
+#   meta: !!omap
+#   - {ucd: ID_MAIN}
+#   - {width: 19}
+# - name: SolID
+#   datatype: int64
+#   description: Solution Identifier (solution_id)
+#   meta: !!omap
+#   - {ucd: ID_VERSION}
+#   - {width: 18}
+# - name: Freq
+#   unit: 1 / d
+#   datatype: float64
+#   format: '{:21.14g}'
+#   description: '? Frequency of the LPV (frequency)'
+#   meta: !!omap
+#   - {ucd: VAR_FREQ}
+#   - {width: 21}
+#   - {precision: E14}
+#   - values: {'null': .nan}
+# - name: e_Freq
+#   unit: 1 / d
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Error on the frequency (frequency_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: Amp
+#   unit: mag
+#   datatype: float64
+#   format: '{:12.5g}'
+#   description: '? Amplitude of the LPV variability (amplitude)'
+#   meta: !!omap
+#   - {ucd: VAR_AMPLITUDE_VALUE}
+#   - {width: 12}
+#   - {precision: E5}
+#   - values: {'null': .nan}
+# - name: mdwlrp
+#   datatype: float64
+#   format: '{:13.6g}'
+#   description: '? Median of the pseudo-wavelength separations between the two highest peaks in RP spectra (median_delta_wl_rp)'
+#   meta: !!omap
+#   - {ucd: STAT_MEDIAN}
+#   - {width: 13}
+#   - {precision: E6}
+#   - values: {'null': .nan}
+# - name: isCstar
+#   datatype: uint8
+#   description: '[0/1]? Flag to mark C-stars (is_cstar)'
+#   meta: !!omap
+#   - {ucd: CODE_MISC}
+#   - {width: 1}
+#   - values: {'null': 255}
+# - name: RA_ICRS
+#   unit: deg
+#   datatype: float64
+#   format: '{:15.11f}'
+#   description: Right ascension (ICRS) at Ep=2016.0 (ra)
+#   meta: !!omap
+#   - {ucd: POS_EQ_RA_MAIN}
+#   - {width: 15}
+#   - {precision: '11'}
+# - name: DE_ICRS
+#   unit: deg
+#   datatype: float64
+#   format: '{:15.11f}'
+#   description: Declination (ICRS) at Ep=2016.0 (dec)
+#   meta: !!omap
+#   - {ucd: POS_EQ_DEC_MAIN}
+#   - {width: 15}
+#   - {precision: '11'}
+# meta: !!omap
+# - {ID: I_358_vlpv}
+# - {name: I/358/vlpv}
+# - {description: Long Period Variable stars (vari_long_period_variable)}
+# schema: astropy-2.0
+_r recno Source SolID Freq e_Freq Amp mdwlrp isCstar RA_ICRS DE_ICRS
+0.009536 2583 1745948392453561472 375316653866487564 "" "" "" 2.07 0 322.48656870497 12.17413504387
+0.004571 2582 1745948328028712960 375316653866487564 "" "" "" 3.104 0 322.49130888086 12.17124882108
+0.004264 2581 1745948323734097024 375316653866487564 "" "" "" 1.896 0 322.49313834467 12.16274194466
+0.020677 2580 1745948117575686528 375316653866487564 "" "" "" 1.896 0 322.50375160548 12.14917214098

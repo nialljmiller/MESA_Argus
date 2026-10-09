@@ -107,7 +107,7 @@ python plot_sed_observation.py runs/<track>/SED/beta_SED_00000010.csv --distance
 ```
 
 Point it at the run folder instead to get a movie of the whole track, one frame per model in
-model-number order (`--max-frames`, default 600, subsamples long runs; `--model-range` picks a phase):
+model-number order, with light curves against star age from `LOGS/history.data` (`--max-frames`, default 600, subsamples long runs; `--model-range` picks a phase):
 
 ```
 python plot_sed_observation.py runs/<track> --distance-pc 2000      # -> <track>_argus.mp4

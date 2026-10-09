@@ -15,3 +15,10 @@ __pycache__/
 
 # archived runs/outputs of past experiments (large)
 archive/
+
+# rendered media at the repo root (plot_sed_observation.py output)
+/*.mp4
+/*.png
+
+# old Gaia RSP experiment (large, unused)
+Gaia_RSP/

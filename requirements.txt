@@ -1,2 +1,11 @@
 numpy>=1.24
 matplotlib>=3.7
+scipy>=1.11
+astropy>=6.0
+astroquery>=0.4.7
+h5py>=3.9
+sep>=1.4
+photutils>=1.10
+phoebe>=2.5,<2.6
+# argus_sim (private): pip install "git+ssh://git@github.com/argus-hdps/ArgusSim.git@feat/arbitrary-sed-input"
+# movies also need ffmpeg on PATH

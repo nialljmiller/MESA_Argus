@@ -1,0 +1,94 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - name: _r
+#   datatype: float64
+#   format: '{:8.6f}'
+#   description: Distance from center (  8.84115112000+52.99808865000)[ICRS], at Epoch=J2016.0
+#   meta: !!omap
+#   - {ucd: POS_ANG_DIST_GENERAL}
+#   - {width: 8}
+#   - {precision: '6'}
+# - name: recno
+#   datatype: int32
+#   description: Record number assigned by the VizieR team. Should Not be used for identification.
+#   meta: !!omap
+#   - {ucd: RECORD}
+#   - {width: 8}
+# - name: Source
+#   datatype: int64
+#   description: Unique source identifier (source_id)
+#   meta: !!omap
+#   - {ucd: ID_MAIN}
+#   - {width: 19}
+# - name: SolID
+#   datatype: int64
+#   description: Solution Identifier (solution_id)
+#   meta: !!omap
+#   - {ucd: ID_VERSION}
+#   - {width: 18}
+# - name: Classifier
+#   datatype: string
+#   description: '[nTransits:5+] Classifier name used to produce this result (classifier_name)'
+#   meta: !!omap
+#   - {ucd: MODEL_ID}
+#   - {_votable_string_dtype: char}
+# - name: Class
+#   datatype: string
+#   description: Name of best class (in vcclassd.dat table) (best_class_name)
+#   meta: !!omap
+#   - {ucd: CLASS_CODE}
+#   - {_votable_string_dtype: char}
+#   - {_votable_arraysize: 26*}
+# - name: ClassSc
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: Score of the best class (best_class_score)
+#   meta: !!omap
+#   - {ucd: CODE_QUALITY}
+#   - {width: 14}
+#   - {precision: E7}
+# - name: RA_ICRS
+#   unit: deg
+#   datatype: float64
+#   format: '{:15.11f}'
+#   description: Right ascension (ICRS) at Ep=2016.0 (ra)
+#   meta: !!omap
+#   - {ucd: POS_EQ_RA_MAIN}
+#   - {width: 15}
+#   - {precision: '11'}
+# - name: DE_ICRS
+#   unit: deg
+#   datatype: float64
+#   format: '{:15.11f}'
+#   description: Declination (ICRS) at Ep=2016.0(dec)
+#   meta: !!omap
+#   - {ucd: POS_EQ_DEC_MAIN}
+#   - {width: 15}
+#   - {precision: '11'}
+# meta: !!omap
+# - {ID: I_358_vclassre}
+# - {name: I/358/vclassre}
+# - {description: Variability classification results of all classifiers (vari_classifier_result)}
+# schema: astropy-2.0
+_r recno Source SolID Classifier Class ClassSc RA_ICRS DE_ICRS
+0.107759 4585549 416443675447414400 375316653866487564 nTransits:5+ LPV 0.9556644 8.81049186315 52.89192524396
+0.111908 4585563 416444633227321600 375316653866487564 nTransits:5+ SOLAR_LIKE 0.4538533 8.99819149541 52.93826931272
+0.088367 4585565 416444701946849920 375316653866487564 nTransits:5+ SOLAR_LIKE 0.413497 8.95347622135 52.94123250449
+0.082004 4585566 416444839385822464 375316653866487564 nTransits:5+ SOLAR_LIKE 0.45723107 8.96259570856 52.96096930748
+0.060023 4585567 416444908105313536 375316653866487564 nTransits:5+ ECL 0.41113067 8.93521551622 52.97817860519
+0.089037 4585572 416445049845189888 375316653866487564 nTransits:5+ SOLAR_LIKE 0.58850867 8.98640597757 52.98128512269
+0.057825 4585577 416445354783555328 375316653866487564 nTransits:5+ DSCT|GDOR|SXPHE 0.44066736 8.93599952053 53.00735345833
+0.065238 4585584 416445526580579840 375316653866487564 nTransits:5+ SOLAR_LIKE 0.4280479 8.91638356639 52.95114472846
+0.012632 4585591 416445805751659392 375316653866487564 nTransits:5+ ECL 0.73760486 8.85413712252 52.98816483476
+0.006941 4585592 416445870178008064 375316653866487564 nTransits:5+ DSCT|GDOR|SXPHE 0.36179182 8.83028256258 52.99576797216
+9e-06 4585593 416445908838640384 375316653866487564 nTransits:5+ RR 0.9562321 8.84113708331 52.99808705993
+0.052849 4585594 416446114997066752 375316653866487564 nTransits:5+ ECL 0.11770102 8.92273924544 53.01765807364
+0.057795 4585596 416446488653376384 375316653866487564 nTransits:5+ SOLAR_LIKE 0.80352455 8.88625946724 53.04911887435
+0.068743 4585599 416446561673644288 375316653866487564 nTransits:5+ SOLAR_LIKE 0.7461464 8.84096232453 53.06683131547
+0.094062 4585609 416446973990538368 375316653866487564 nTransits:5+ SOLAR_LIKE 0.39606768 8.71462274524 52.94293897222
+0.062172 4585622 416447588164940032 375316653866487564 nTransits:5+ SOLAR_LIKE 0.42072907 8.73868176502 53.00601667986
+0.105891 4585627 416447828683072384 375316653866487564 nTransits:5+ S 0.5597068 8.66953138473 52.97487754868
+0.058663 4585653 416449104294291200 375316653866487564 nTransits:5+ DSCT|GDOR|SXPHE 0.68620354 8.76386732944 53.03386125832
+0.071513 4585655 416449409231156352 375316653866487564 nTransits:5+ ECL 0.37198505 8.81585020802 53.06796478145
+0.102589 4585693 416451337677294976 375316653866487564 nTransits:5+ SOLAR_LIKE 0.611158 8.99737290254 53.03923412372

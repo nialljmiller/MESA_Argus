@@ -1,0 +1,24 @@
+{
+ "G4521180822614788480": {
+  "source": 4521180822614788480,
+  "kind": "W Vir",
+  "period": 4.838686961182299,
+  "epoch_bjd": 2456911.5986066787,
+  "G": 13.709255,
+  "G_mean": 13.658229,
+  "amp_G": 0.7209253,
+  "dm": 13.241,
+  "ebv": 0.5563,
+  "z": 0.000534,
+  "x": 0.76,
+  "mass": 0.55,
+  "kap": "a09",
+  "notes": {
+   "distance": "parallax 0.208 +/- 0.014 mas (+0.017 zero point) -> 4.45 kpc",
+   "ebv": "Schlafly & Finkbeiner (2011), IRSA",
+   "z": "Gaia gives no [M/H]: assumed -1.5 (old population) -> Z = 0.0169 x 10^[M/H]; X = 0.76",
+   "mass": "assumed: 0.55 Msun as MESA's rsp_Type_II_Cepheid",
+   "opacities": "alpha-enhanced (a09)"
+  }
+ }
+}

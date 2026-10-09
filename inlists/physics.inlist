@@ -7,12 +7,12 @@
 ! =============================================================================
 
 &star_job
-      create_pre_main_sequence_model = .true.
+      create_pre_main_sequence_model = {create_pms}
       pgstar_flag = .false.
       history_columns_file = '{history_columns}'
-      save_model_when_terminate = .false.
+      save_model_when_terminate = {save_model}
       show_log_description_at_start = .false.
-/
+{star_job_extra}/
 
 &eos
 /
