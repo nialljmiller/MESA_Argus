@@ -95,6 +95,8 @@ def use(cluster):
 MODE = {"RRab": 0, "RRc": 1, "RRd": 0, "Type II Cepheid": 0, "DCEP F": 0, "DCEP 1O": 1, "BL Her": 0, "W Vir": 0,
         "HADS": 0}
 STAR = C.STAR_BIN
+RUN_LIMIT_S = 4 * 3600  # wall-clock budget of one MESA run; a star whose run exceeds it gets no model (held constant)
+DM_RUN_LIMIT_S = 8 * 3600  # the long RRd double-mode runs
 SED_INSTRUMENT = C.REPO / "filters" / "SEDonly" / "SEDonly"
 KICK = {"RRab": 40.0, "RRc": 20.0, "RRd": 30.0, "Type II Cepheid": 5.0,  # km/s, near full amplitude
         "DCEP F": 15.0, "DCEP 1O": 10.0, "BL Her": 4.5, "W Vir": 5.0, "HADS": 10.0}
@@ -269,17 +271,19 @@ def give_cores(n):
         _pool.notify_all()
 
 
-def run(directory: Path, text: str, log="out.txt"):
+def run(directory: Path, text: str, log="out.txt", limit_s=RUN_LIMIT_S):
     """Run MESA in directory; every RSP run goes through here, so the core pool covers all stars, convection sets
     and kicks of this process. The thread count used is written to directory/omp_threads."""
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "inlist").write_text(text)
     n = take_cores()
     (directory / "omp_threads").write_text(f"{n}\n")
-    with open(directory / log, "w") as out:
-        subprocess.run([str(STAR)], cwd=directory, stdout=out, stderr=subprocess.STDOUT,
-                       env=dict(os.environ, OMP_NUM_THREADS=str(n)))
-    give_cores(n)
+    try:
+        with open(directory / log, "w") as out:
+            subprocess.run([str(STAR)], cwd=directory, stdout=out, stderr=subprocess.STDOUT,
+                           env=dict(os.environ, OMP_NUM_THREADS=str(n)), timeout=limit_s)
+    finally:
+        give_cores(n)  # also after a timeout, or the other stars wait for these cores forever
     return (directory / log).read_text(errors="replace")
 
 
@@ -418,11 +422,11 @@ def accept_double_mode(label, target, base):
                  kick=KICK["RRd"], limit_periods=DM_PERIODS, grekm="0d0", history_interval=20, limit_steps=300)
         d = base / f"dm_{name}"
         shutil.rmtree(d, ignore_errors=True)
-        text = run(d, inlist(p, "limit"))
+        text = run(d, inlist(p, "limit"), limit_s=DM_RUN_LIMIT_S)
         if "NO CONVERGENCE IN RELAX_ENV" in text:  # MESA's own suggestion: a looser envelope-relaxation tolerance
             p["extra_controls"] = p["extra_controls"] + ["RSP_relax_dm_tolerance = 1d-5"]
             shutil.rmtree(d, ignore_errors=True)
-            text = run(d, inlist(p, "limit"))
+            text = run(d, inlist(p, "limit"), limit_s=DM_RUN_LIMIT_S)
         lines = period_lines(text)
         if len(lines) < 200 or not (d / "limit.mod").exists():
             return dict(set=name, ok=False, reason="run failed")
@@ -561,6 +565,14 @@ def model_star(label, target):
     done = base / "pulsation.h5"
     if done.exists() or (base / "FAILED").exists():
         return
+    try:
+        build(label, target, base, done)
+    except subprocess.TimeoutExpired:
+        (base / "FAILED").write_text(f"{label}: a MESA run exceeded its time limit\n")
+        print(f"  {label}: FAILED, a MESA run exceeded its time limit", flush=True)
+
+
+def build(label, target, base, done):
     params_file = base / "params.json"
     if params_file.exists():  # resume (models made before the non-linear mode check keep their own route)
         params = json.loads(params_file.read_text())
