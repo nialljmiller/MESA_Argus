@@ -22,7 +22,7 @@ at once).
      RV Tau, low-amplitude delta Scuti, double-mode HADS, eccentric binaries without a Gaia solution, evolved
      binaries, and every other class.
    A chosen star is dropped (with the reason) if its inputs are missing: parallax S/N < 5 (Cepheids, HADS,
-   binaries), no Gaia [M/H] (RRab/RRc), no ASAS-SN period or FLAME mass (HADS), no GSP-Phot Teff (binaries).
+   binaries), no ASAS-SN period or FLAME mass (HADS), no GSP-Phot Teff (binaries).
 4. Models, one per star, cached in runs/rsp_<field>_G<source> (re-runs reuse them; a recorded failure in its FAILED
    file is final until that directory is deleted). Per-star parameters, the model checks (pulsators: limit cycle at
    Gaia's period, i.e. the star's mode; binaries: Gaia's eclipses reproduced) and every assumption are written to
@@ -162,8 +162,6 @@ def inventory(data, ra, dec, block_n=3):
                 row.update(kind="RRab" if np.isfinite(pf) else "RRc", period=pf if np.isfinite(pf) else p1)
                 if not np.isfinite(row["epoch_bjd"]):
                     row["why"] = "no Gaia epoch of maximum: cannot phase a model"
-                elif not np.isfinite(row["mh"]):
-                    row["why"] = "no Gaia [M/H]: composition unknown, not modelled"
                 else:
                     row.update(model="MESA RSP", why="")
         elif s in cep:
@@ -271,6 +269,8 @@ def physical(row, stars, ra, dec):
         mh, mh_note = 0.0, "assumed solar ([M/H] = 0): HADS are Population I"
     if not np.isfinite(mh) and row["kind"] == "RRd":  # Gaia derives no [M/H] for double-mode RR Lyrae
         mh, mh_note = -1.5, "Gaia gives no [M/H] for RRd: assumed -1.5 (typical of Galactic double-mode RR Lyrae)"
+    if not np.isfinite(mh) and row["kind"] in ("RRab", "RRc"):
+        mh, mh_note = -1.5, "Gaia gives no [M/H]: assumed -1.5 (old population, as for Type II Cepheids)"
     if not np.isfinite(mh):
         if not cepheid:
             return None, "no Gaia [M/H]"
