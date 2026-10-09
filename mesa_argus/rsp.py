@@ -155,8 +155,23 @@ def luminosity(target):
     return m_bol_to_lsun(g - DM - A_G_PER_EBV * EBV)
 
 
+RSP_INSTRUMENT = C.REPO / "filters" / "RSP_ArgusGaia" / "RSP_ArgusGaia"
+
+
 def build_sed_instrument():
-    """A one-filter instrument with a short table: MESA pads each SED CSV to the filter's length."""
+    """The RSP runs' instruments, from `python -m mesa_argus setup`'s ArgusGaiaSDSS: Gaia + Argus (no SDSS), and a
+    one-filter instrument with a short table for the SED cycles (MESA pads each SED CSV to the filter's length)."""
+    import shutil
+
+    full = C.REPO / "filters" / "ArgusGaiaSDSS" / "ArgusGaiaSDSS"
+    if not full.exists():
+        raise SystemExit(f"{full} not found: run `python -m mesa_argus setup` first")
+    if not RSP_INSTRUMENT.exists():
+        RSP_INSTRUMENT.mkdir(parents=True)
+        names = ["G.dat", "Gbp.dat", "Grp.dat", "beta.dat", "rho.dat"]
+        for f in names:
+            shutil.copy(full / f, RSP_INSTRUMENT / f)
+        (RSP_INSTRUMENT / RSP_INSTRUMENT.name).write_text("\n".join(names) + "\n")
     if SED_INSTRUMENT.exists():
         return
     SED_INSTRUMENT.mkdir(parents=True)
@@ -198,7 +213,7 @@ def inlist(params, stage):
         controls += [f"RSP_target_steps_per_cycle = {params['steps']}", f"RSP_max_num_periods = {params.get('fine_periods', 3)}",
                      "history_interval = 1"]
     make_csv = ".true." if stage == "fine" else ".false."
-    instrument = SED_INSTRUMENT if stage == "fine" else C.REPO / "filters" / "RSP_ArgusGaia" / "RSP_ArgusGaia"
+    instrument = SED_INSTRUMENT if stage == "fine" else RSP_INSTRUMENT
     block = lambda name, lines: f"&{name}\n" + "".join(f"      {ln}\n" for ln in lines) + "/\n"  # noqa: E731
     return (block("star_job", star_job) + "&eos\n/\n"
             + block("kap", [f"Zbase = {params.get('z', Z)}d0"] + KAP[params.get("kap", KAP_MIX)])
@@ -685,6 +700,7 @@ TEST_CASES = {
 
 def validate(name):
     """Run a test-suite model with this module's inlists; compare RSP's period with the test suite's value."""
+    build_sed_instrument()
     case = TEST_CASES[name]
     params = dict(case["params"], limit_periods=case["at_period"])
     base = C.RUNS / f"rsp_validate_{name}"
