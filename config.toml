@@ -15,6 +15,8 @@ gaia_filters  = "filters/GAIA/GAIA"          # needs G.dat, Gbp.dat, Grp.dat
 argus_filters = "filters/Argus/System"       # needs beta.dat, rho.dat (system throughput)
 
 [run]
-workers = 9                   # MESA runs at once
-omp_threads = 1               # OpenMP threads per run
-max_star_procs = 9            # cap on `star` processes machine-wide, incl. ones started elsewhere (0 = no cap)
+workers = 9                   # stars modelled at once (each starts several MESA runs: convection sets, kicks)
+omp_threads = 1               # OpenMP threads per evolution-track run (python -m mesa_argus run)
+rsp_threads = 1               # OpenMP threads per RSP run (argus_field.py / rsp.py)
+max_star_procs = 9            # cores MESA may use (0 = all). Evolution runs: cap on `star` processes machine-wide.
+                              # RSP: at most max_star_procs / rsp_threads RSP runs at once, across all stars

@@ -43,6 +43,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
 
 import numpy as np
 
@@ -209,11 +210,30 @@ def inlist(params, stage):
             + block("controls", controls) + "&pgstar\n/\n")
 
 
+_slots = None
+_slots_lock = threading.Lock()
+
+
+def threads():
+    return max(1, int(C.config().get("run", {}).get("rsp_threads", 1)))
+
+
+def slots():
+    """MESA processes allowed at once in this run: config.toml [run] max_star_procs cores (0 = all), divided by
+    rsp_threads. Every RSP run goes through run(), so this caps the total across stars, convection sets and kicks."""
+    global _slots
+    with _slots_lock:
+        if _slots is None:
+            cores = int(C.config().get("run", {}).get("max_star_procs", 0) or 0) or os.cpu_count() or 1
+            _slots = threading.BoundedSemaphore(max(1, cores // threads()))
+    return _slots
+
+
 def run(directory: Path, text: str, log="out.txt", timeout=4 * 3600):
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "inlist").write_text(text)
-    env = dict(os.environ, OMP_NUM_THREADS="1")
-    with open(directory / log, "w") as out:
+    env = dict(os.environ, OMP_NUM_THREADS=str(threads()))
+    with slots(), open(directory / log, "w") as out:
         subprocess.run([str(STAR)], cwd=directory, stdout=out, stderr=subprocess.STDOUT, env=env, timeout=timeout)
     return (directory / log).read_text(errors="replace")
 
