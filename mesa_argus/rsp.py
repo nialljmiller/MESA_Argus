@@ -44,6 +44,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 
 import numpy as np
 
@@ -225,31 +226,60 @@ def inlist(params, stage):
             + block("controls", controls) + "&pgstar\n/\n")
 
 
-_slots = None
-_slots_lock = threading.Lock()
+# OpenMP threads per RSP run. Measured on a 32-core node (RRab and Cepheid, 20 periods; results identical at every
+# thread count): speed-up 2.65x at 4 threads, 3.8x at 8, 4.3x at 12, i.e. per-core efficiency 66%, 47%, 36%.
+# Auto mode (config.toml [run] rsp_threads = 0) gives each run, as it starts, the free cores / the runs waiting,
+# between 1 and AUTO_MAX_THREADS: threads only when cores would otherwise sit idle, never past 4, so a run holding
+# many cores for an hour does not hold up later runs.
+AUTO_MAX_THREADS = 4
+SETTLE_SECONDS = 1.0  # a star submits its runs together (convection sets, kicks): let them all register first
+_pool = threading.Condition()
+_free = None
+_waiting = 0
 
 
-def threads():
-    return max(1, int(C.config().get("run", {}).get("rsp_threads", 1)))
+def cores():
+    return int(C.config().get("run", {}).get("max_star_procs", 0) or 0) or os.cpu_count() or 1
 
 
-def slots():
-    """MESA processes allowed at once in this run: config.toml [run] max_star_procs cores (0 = all), divided by
-    rsp_threads. Every RSP run goes through run(), so this caps the total across stars, convection sets and kicks."""
-    global _slots
-    with _slots_lock:
-        if _slots is None:
-            cores = int(C.config().get("run", {}).get("max_star_procs", 0) or 0) or os.cpu_count() or 1
-            _slots = threading.BoundedSemaphore(max(1, cores // threads()))
-    return _slots
+def take_cores():
+    """Block until cores are free; return the OpenMP thread count for this run (also the cores it holds)."""
+    global _free, _waiting
+    fixed = int(C.config().get("run", {}).get("rsp_threads", 0) or 0)
+    with _pool:
+        if _free is None:
+            _free = cores()
+        _waiting += 1
+    time.sleep(SETTLE_SECONDS)
+    with _pool:
+        need = min(fixed, cores()) if fixed else 1
+        _pool.wait_for(lambda: _free >= need)
+        n = need if fixed else max(1, min(AUTO_MAX_THREADS, _free // _waiting))
+        _free -= n
+        _waiting -= 1
+    return n
+
+
+def give_cores(n):
+    global _free
+    with _pool:
+        _free += n
+        _pool.notify_all()
 
 
 def run(directory: Path, text: str, log="out.txt", timeout=4 * 3600):
+    """Run MESA in directory; every RSP run goes through here, so the core pool covers all stars, convection sets
+    and kicks of this process. The thread count used is written to directory/omp_threads."""
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "inlist").write_text(text)
-    env = dict(os.environ, OMP_NUM_THREADS=str(threads()))
-    with slots(), open(directory / log, "w") as out:
-        subprocess.run([str(STAR)], cwd=directory, stdout=out, stderr=subprocess.STDOUT, env=env, timeout=timeout)
+    n = take_cores()
+    try:
+        (directory / "omp_threads").write_text(f"{n}\n")
+        env = dict(os.environ, OMP_NUM_THREADS=str(n))
+        with open(directory / log, "w") as out:
+            subprocess.run([str(STAR)], cwd=directory, stdout=out, stderr=subprocess.STDOUT, env=env, timeout=timeout)
+    finally:
+        give_cores(n)
     return (directory / log).read_text(errors="replace")
 
 
