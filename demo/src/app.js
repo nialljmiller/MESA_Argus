@@ -24,6 +24,7 @@
       Object.assign(stars[star], { model, epoch: m.epoch_bjd - 2460000, period: m.gaia_period });
     });
     labelVariables();
+    hidden.clear();
     state.selected = null;
   }
   // V1, V2, ...: the variables in the order they entered the scene
@@ -77,33 +78,37 @@
     refTimer = setTimeout(() => { buildReference(); $("status").textContent = ""; displayLimits(); draw(); }, 50);
   }
 
-  // photometry of the whole night (SExtractor, as the movie) in a worker: the same exposures, measured in order; any
-  // change to the scene or conditions starts it again
+  // photometry of the whole night (SExtractor, as the movie) in a worker: the same exposures, measured from the playhead
+  // onward; any change to the scene or conditions starts it again. Playback waits for exposures not yet measured.
   const worker = new Worker(URL.createObjectURL(new Blob(["sim-src", "sep-src", "measure-src"].map((id) => $(id).textContent + "\n"),
                                                         { type: "text/javascript" })));
   worker.postMessage({ field: $("field-data").textContent });
   let phot = null, gen = 0, lcPending = false;
+  const hidden = new Set(); // variables left out of the light-curve panel (legend clicks)
+  const view = { lc: null, diff: null }; // the light-curve panels' y ranges once zoomed or panned (null: fitted)
   function measureNight() {
     const b = state.band, targets = variables(), ut = D.night.ut;
-    // the models over the night, each relative to its own mean over the night's exposures (as the movie)
+    if (phot && phot.band !== b) view.lc = view.diff = null;
+    // each model over the night (absolute magnitudes, as the true light curve)
     const modelT = Array.from({ length: 800 }, (_, i) => ut[0] + (i / 799) * (ut[N - 1] - ut[0]));
-    const models = targets.map((s) => {
-      const tt = Array.from({ length: N }, (_, j) => trueMag(s, b, j)), mean = tt.reduce((a, v) => a + v, 0) / N;
-      const curve = modelT.map((t) => Sim.modelMag(D.models[s.model], b, (D.night.bjd[0] + (t - ut[0]) / 24 - s.epoch) / s.period)
-                                       - 2.5 * Math.log10(s.scale) - mean);
-      return { true: tt, mean, curve };
-    });
-    phot = { gen: ++gen, band: b, targets, modelT, models, n: 0,
+    const models = targets.map((s) => ({
+      true: Array.from({ length: N }, (_, j) => trueMag(s, b, j)),
+      curve: modelT.map((t) => Sim.modelMag(D.models[s.model], b, (D.night.bjd[0] + (t - ut[0]) / 24 - s.epoch) / s.period)
+                                - 2.5 * Math.log10(s.scale)),
+    }));
+    phot = { gen: ++gen, band: b, targets, modelT, models, n: 0, measured: new Uint8Array(N), complete: !targets.length,
              mag: targets.map(() => new Float64Array(N).fill(NaN)), err: targets.map(() => new Float64Array(N).fill(NaN)) };
-    worker.postMessage({ gen, band: b, zenith: state.zenith, moon: state.moon, seed: state.seed,
-                         stars: stars.map(({ rate, mag0, ...d }) => d) });
+    if (targets.length) worker.postMessage({ gen, start: state.j, band: b, zenith: state.zenith, moon: state.moon, seed: state.seed,
+                                             stars: stars.map(({ rate, mag0, ...d }) => d) });
+    else worker.postMessage({ stop: true });
     $("measuring").textContent = targets.length ? `measuring the night: 0/${N} exposures` : "";
   }
   worker.onmessage = ({ data: r }) => {
     if (!phot || r.gen !== phot.gen) return;
-    if (r.done) { $("measuring").textContent = `measured ${N}/${N} exposures`; return; }
+    if (r.done) { phot.complete = true; $("measuring").textContent = `measured ${N}/${N} exposures`; return; }
     r.mag.forEach((m, t) => { phot.mag[t][r.j] = m; phot.err[t][r.j] = r.err[t]; });
-    phot.n = r.j + 1;
+    phot.measured[r.j] = 1;
+    phot.n++;
     $("measuring").textContent = `measuring the night: ${phot.n}/${N} exposures`;
     if (!lcPending) { lcPending = true; requestAnimationFrame(() => { lcPending = false; drawLightCurves(); }); }
   };
@@ -264,61 +269,63 @@
     ctx.fillText("Constant stars", ax.box.x + 26, ax.box.y + ax.box.h - 16);
   }
 
-  // light curves of the variables (SExtractor MAG_AUTO, as the movie): measured points up to this exposure, each star
-  // relative to the mean of its measurements (over the exposures measured so far), the model behind relative to its own
-  // mean over the night; below, measured - true
+  // light curves of the variables (SExtractor MAG_AUTO): measured magnitudes up to this exposure with the model's true
+  // magnitudes behind, absolute (calibrated as photometry.py does); below, measured - true. Ranges fitted to the stars
+  // shown unless zoomed or panned (wheel, drag; double-click fits again).
+  let lcLayout = null;
   function drawLightCurves() {
     const { ctx, w, h } = canvas("lc"), j = state.j, ut = D.night.ut, xl = [ut[0] - 0.1, ut[N - 1] + 0.1], B = SYMBOL[state.band];
     const P = phot && phot.band === state.band ? phot : { targets: [], models: [], mag: [], err: [], modelT: [] };
-    const rel = P.targets.map((_, t) => {
-      let sum = 0, k = 0;
-      for (const v of P.mag[t]) if (Number.isFinite(v)) { sum += v; k++; }
-      return k ? sum / k : NaN;
-    });
-    let lo = Infinity, hi = -Infinity;
+    const shown = P.targets.map((s) => !hidden.has(s));
+    let lo = Infinity, hi = -Infinity, dlo = 0, dhi = 0;
     P.targets.forEach((_, t) => {
-      for (const v of P.mag[t]) if (Number.isFinite(v)) { lo = Math.min(lo, v - rel[t]); hi = Math.max(hi, v - rel[t]); }
-      for (const v of P.models[t].true) { lo = Math.min(lo, v - P.models[t].mean); hi = Math.max(hi, v - P.models[t].mean); }
+      if (!shown[t]) return;
+      P.mag[t].forEach((v, q) => {
+        if (!Number.isFinite(v)) return;
+        lo = Math.min(lo, v); hi = Math.max(hi, v);
+        const d = v - P.models[t].true[q];
+        dlo = Math.min(dlo, d); dhi = Math.max(dhi, d);
+      });
+      for (const v of P.models[t].true) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
     });
-    if (!P.targets.length) { lo = -0.3; hi = 0.3; }
-    const pad = 0.08 * Math.max(hi - lo, 0.05);
+    if (!(hi >= lo)) { lo = 14.7; hi = 15.3; }
+    const pad = 0.08 * Math.max(hi - lo, 0.05), dm = 0.05 * Math.max(dhi - dlo, 0.02);
+    const fit = { lc: [hi + pad, lo - 2.5 * pad], diff: [dhi + dm, dlo - dm] };
     const top = 36, gap = 10, H = h - 92 - gap, box = { x: 76, y: top, w: w - 96, h: H * 2 / 3 };
     const box2 = { x: box.x, y: top + box.h + gap, w: box.w, h: H / 3 };
-    const ax = Plot.axes(ctx, box, xl, [hi + pad, lo - 2.5 * pad],
+    const ax = Plot.axes(ctx, box, xl, view.lc || fit.lc,
       { title: "Light curves (SExtractor MAG_AUTO)", titleRight: `UT ${hhmm(ut[j])} · airmass ${D.night.airmass[j].toFixed(2)} · seeing ${seeingAt(j).toFixed(2)}″`,
-        ylabel: `Δm${B} (mag)`, xlabels: false, ylabelOffset: 52 });
+        ylabel: `m${B} (AB mag)`, xlabels: false, ylabelOffset: 52 });
     ax.frame();
-    // measured - true over the exposures shown, autoscaled (and inverted) as matplotlib does
-    let dlo = 0, dhi = 0;
-    P.targets.forEach((_, t) => { for (let q = 0; q <= j; q++) { const d = P.mag[t][q] - P.models[t].true[q]; if (Number.isFinite(d)) { dlo = Math.min(dlo, d); dhi = Math.max(dhi, d); } } });
-    const dm = 0.05 * Math.max(dhi - dlo, 0.02);
-    const ax2 = Plot.axes(ctx, box2, xl, [dhi + dm, dlo - dm], { xlabel: `UT hours (${D.date} night)`, ylabel: "measured − true\n(mag)", ylabelOffset: 52 });
+    const ax2 = Plot.axes(ctx, box2, xl, view.diff || fit.diff, { xlabel: `UT hours (${D.date} night)`, ylabel: "measured − true\n(mag)", ylabelOffset: 52 });
     ax2.frame();
-    for (const a of [ax, ax2]) a.line([ut[j], ut[j]], [-10, 10], { color: "#455868", lw: 0.8, alpha: 0.35 });
+    for (const a of [ax, ax2]) a.line([ut[j], ut[j]], [-100, 100], { color: "#455868", lw: 0.8, alpha: 0.35 });
     ax2.line(xl, [0, 0], { color: "#808080", lw: 0.6, dash: [1, 2] });
     P.targets.forEach((s, t) => {
+      if (!shown[t]) return;
       const col = TAB10[s.colourIdx];
       ax.line(P.modelT, P.models[t].curve, { color: col, lw: 1.0, alpha: 0.35 });
       const xs = [], ys = [], d = [];
       for (let q = 0; q <= j; q++) {
         d.push(P.mag[t][q] - P.models[t].true[q]);
         if (!Number.isFinite(P.mag[t][q])) continue;
-        const y = P.mag[t][q] - rel[t], e = P.err[t][q];
+        const y = P.mag[t][q], e = P.err[t][q];
         xs.push(ut[q]); ys.push(y);
         ax.line([ut[q], ut[q]], [y - e, y + e], { color: col, lw: 0.5 });
       }
       ax.points(xs, ys, { color: col, r: 1.8 });
       ax2.line(ut.slice(0, j + 1), d, { color: col, lw: 0.8 });
     });
-    // legend (as the movie: upper left, four columns)
+    // legend (as the movie: upper left, four columns); click an entry to show or hide that star
     const kinds = new Set(P.targets.map((s) => D.models[s.model].kind));
     const modelName = [...(([...kinds].some((k) => k !== "EB")) ? ["MESA RSP"] : []), ...(kinds.has("EB") ? ["PHOEBE"] : [])].join(" / ");
-    const entries = P.targets.map((s) => ({ text: `${s.label} ${D.models[s.model].kind} ${s.period.toFixed(3)} d`, col: TAB10[s.colourIdx], point: true }));
+    const entries = P.targets.map((s, t) => ({ text: `${s.label} ${D.models[s.model].kind} ${s.period.toFixed(3)} d`, col: TAB10[s.colourIdx],
+                                              point: true, star: s, off: !shown[t] }));
     if (entries.length) entries.push({ text: `${modelName} model`, col: "#808080", point: false });
-    legend(ctx, box, entries, 4);
+    lcLayout = { axes: { lc: ax, diff: ax2 }, fit, legend: legend(ctx, box, entries, 4) };
   }
   function legend(ctx, box, entries, ncol) {
-    if (!entries.length) return;
+    if (!entries.length) return [];
     ctx.save();
     ctx.font = '10px "DejaVu Sans", sans-serif';
     const colW = [], rows = Math.ceil(entries.length / ncol), lh = 14;
@@ -326,15 +333,54 @@
     const W = colW.reduce((a, v) => a + v + 10, 0) + 4, H = rows * lh + 6, x0 = box.x + 6, y0 = box.y + 6;
     ctx.fillStyle = "rgba(255,255,255,0.85)"; ctx.fillRect(x0, y0, W, H);
     ctx.textBaseline = "middle"; ctx.textAlign = "left";
+    const rects = [];
     entries.forEach((e, i) => {
       const c = Math.floor(i / rows), r = i % rows, x = x0 + 4 + colW.slice(0, c).reduce((a, v) => a + v + 10, 0), y = y0 + 3 + r * lh + lh / 2;
+      rects.push({ x, y: y - lh / 2, w: colW[c], h: lh, star: e.star });
+      ctx.globalAlpha = e.off ? 0.3 : 1;
       ctx.strokeStyle = e.col; ctx.fillStyle = e.col;
       if (e.point) { ctx.beginPath(); ctx.arc(x + 8, y, 2.5, 0, 2 * Math.PI); ctx.fill(); }
       else { ctx.globalAlpha = 0.5; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 16, y); ctx.stroke(); ctx.globalAlpha = 1; }
       ctx.fillStyle = Plot.STYLE.label; ctx.fillText(e.text, x + 20, y);
+      ctx.globalAlpha = 1;
     });
     ctx.restore();
+    return rects;
   }
+
+  // light-curve panel: legend clicks, wheel zoom and drag pan of each y axis, double-click to fit again
+  function lcHit(ev) {
+    const r = $("lc").getBoundingClientRect(), px = ev.clientX - r.left, py = ev.clientY - r.top;
+    if (!lcLayout) return { px, py };
+    const entry = lcLayout.legend.find((e) => e.star && px >= e.x && px <= e.x + e.w && py >= e.y && py <= e.y + e.h);
+    const key = Object.keys(lcLayout.axes).find((k) => { const b = lcLayout.axes[k].box; return px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h; });
+    return { px, py, entry, key };
+  }
+  const yRange = (key) => view[key] || lcLayout.fit[key];
+  $("lc").addEventListener("wheel", (ev) => {
+    const { py, key } = lcHit(ev);
+    if (!key) return;
+    ev.preventDefault();
+    const b = lcLayout.axes[key].box, [y0, y1] = yRange(key), v = y0 + ((b.y + b.h - py) / b.h) * (y1 - y0), f = Math.exp(ev.deltaY * 0.002);
+    view[key] = [v + (y0 - v) * f, v + (y1 - v) * f];
+    drawLightCurves();
+  }, { passive: false });
+  let lcDrag = null;
+  $("lc").addEventListener("mousedown", (ev) => {
+    const { py, entry, key } = lcHit(ev);
+    if (entry) { if (hidden.has(entry.star)) hidden.delete(entry.star); else hidden.add(entry.star); drawLightCurves(); return; }
+    if (key) lcDrag = { key, py, range: yRange(key) };
+  });
+  window.addEventListener("mousemove", (ev) => {
+    if (!lcDrag) return;
+    const r = $("lc").getBoundingClientRect(), b = lcLayout.axes[lcDrag.key].box, [y0, y1] = lcDrag.range;
+    const shift = ((ev.clientY - r.top - lcDrag.py) / b.h) * (y1 - y0);
+    view[lcDrag.key] = [y0 + shift, y1 + shift];
+    drawLightCurves();
+  });
+  window.addEventListener("mouseup", () => { lcDrag = null; });
+  $("lc").addEventListener("dblclick", (ev) => { const { key } = lcHit(ev); if (key) { view[key] = null; drawLightCurves(); } });
+  $("lc").addEventListener("mousemove", (ev) => { const { entry, key } = lcHit(ev); $("lc").style.cursor = entry ? "pointer" : key ? "ns-resize" : ""; });
 
   function drawSED() {
     const { ctx, w, h } = canvas("sed"), j = state.j, X = D.night.airmass[j];
@@ -496,7 +542,11 @@
 
   // ---------------------------------------------------------------- controls
   $("exposure-slider").max = N - 1;
-  $("exposure-slider").oninput = (e) => { state.j = Number(e.target.value); draw(); };
+  $("exposure-slider").oninput = (e) => {
+    state.j = Number(e.target.value);
+    if (phot && !phot.complete) worker.postMessage({ gen: phot.gen, from: state.j });
+    draw();
+  };
   $("band").onchange = (e) => { state.band = e.target.value; sceneChanged(); };
   $("seeing").value = state.zenith;
   const seeingOut = () => { $("seeing-out").textContent = `${state.zenith.toFixed(2)}″`; };
@@ -518,7 +568,8 @@
   let last = 0;
   function tick(t) {
     if (!state.playing) return;
-    if (t - last >= 1000 / state.fps) { last = t; state.j = (state.j + 1) % N; draw(); }
+    const next = (state.j + 1) % N;
+    if (t - last >= 1000 / state.fps && (!phot || phot.complete || phot.measured[next])) { last = t; state.j = next; draw(); }
     requestAnimationFrame(tick);
   }
   $("play").onclick = () => {

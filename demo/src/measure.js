@@ -58,21 +58,29 @@ const Measure = (() => {
     return 2.3548 * Math.sqrt(0.5 * m2);
   }
 
-  // the worker: {field: JSON text} once, then jobs {gen, stars, band, zenith, moon, seed}; posts {gen, j, mag, err}
-  // for every exposure in order (NaN where the movie drops a point: no match or flux/sigma < 5), then {gen, done}.
-  // A newer job stops an older one between exposures.
+  // the worker: {field: JSON text} once, then jobs {gen, start, stars, band, zenith, moon, seed}; measures every
+  // exposure once, from `start` onward (wrapping round the night), posting {gen, j, mag, err} for each (NaN where the
+  // movie drops a point: no match or flux/sigma < 5), then {gen, done}. {stop} ends the job; {gen, from: j} moves it on to the first
+  // unmeasured exposure at or after j (the page's playhead); a newer job stops an older one between exposures.
   function worker() {
-    let ready = null, latest = -1;
+    let ready = null, job = null;
     self.onmessage = async ({ data: msg }) => {
       if (msg.field) { ready = Sim.unpackAll(JSON.parse(msg.field)); return; }
-      const gen = (latest = msg.gen), D = await ready;
-      if (latest !== gen) return;
+      if (msg.stop) { job = null; return; }
+      if (msg.from !== undefined) { if (job && job.gen === msg.gen) job.cursor = msg.from; return; }
+      const my = (job = { gen: msg.gen, cursor: msg.start }), gen = msg.gen, D = await ready;
+      if (job !== my) return;
+      const N = D.night.airmass.length, measured = new Uint8Array(N);
       const st = stars(D, msg.stars), cat = catalogue(D, st, msg.band);
       const phot = new SEP.Photometry(st.map((s) => s.x), st.map((s) => s.y), cat.mag, cat.flux, D.n, D.fullwell,
                                       cat.targets, cat.colour, fwhm(D, msg.band, msg.zenith));
-      for (let j = 0; j < D.night.airmass.length; j++) {
+      for (let left = N; left > 0; left--) {
         await new Promise((r) => setTimeout(r, 0));
-        if (latest !== gen) return;
+        if (job !== my) return;
+        let j = my.cursor % N;
+        while (measured[j]) j = (j + 1) % N;
+        measured[j] = 1;
+        my.cursor = (j + 1) % N;
         const cond = { seeing: seeingAt(msg.zenith, D.night.airmass[j]), moon: msg.moon };
         const { image } = Sim.observe(D, Sim.meanImage(D, st, msg.band, j, cond), exposureSeed(msg.seed, j));
         const r = phot.measure(image), ok = r.map((t) => Number.isFinite(t.mag) && t.flux / t.sigma >= 5);
