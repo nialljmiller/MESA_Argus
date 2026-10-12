@@ -25,6 +25,7 @@ def main():
         "/*DATA*/": (DEMO / "build" / f"{FIELD}.json").read_text(),
         "/*SIM*/": (DEMO / "src" / "sim.js").read_text(),
         "/*SEP*/": (DEMO / "src" / "sep.js").read_text(),
+        "/*MEASURE*/": (DEMO / "src" / "measure.js").read_text(),
         "/*PLOT*/": (DEMO / "src" / "plot.js").read_text(),
         "/*APP*/": (DEMO / "src" / "app.js").read_text(),
     }

@@ -43,9 +43,9 @@
   const inBlock = (s) => Math.abs((s.x - D.centre) * D.plate) <= D.half_arcsec && Math.abs((s.y - D.centre) * D.plate) <= D.half_arcsec;
 
   // ---------------------------------------------------------------- the night
-  const seeingAt = (j) => state.zenith * D.night.airmass[j] ** 0.6; // ArgusSim seeing_at_airmass
+  const seeingAt = (j) => Measure.seeingAt(state.zenith, D.night.airmass[j]);
   const cond = (j) => ({ seeing: seeingAt(j), moon: state.moon });
-  const exposureSeed = (j) => (Math.imul(state.seed, 1000003) + j) >>> 0;
+  const exposureSeed = (j) => Measure.exposureSeed(state.seed, j);
   function simulate(j, b = state.band) {
     const mean = Sim.meanImage(D, stars, b, j, cond(j));
     return { mean, ...Sim.observe(D, mean, exposureSeed(j)) };
@@ -76,6 +76,37 @@
     clearTimeout(refTimer);
     refTimer = setTimeout(() => { buildReference(); $("status").textContent = ""; displayLimits(); draw(); }, 50);
   }
+
+  // photometry of the whole night (SExtractor, as the movie) in a worker: the same exposures, measured in order; any
+  // change to the scene or conditions starts it again
+  const worker = new Worker(URL.createObjectURL(new Blob(["sim-src", "sep-src", "measure-src"].map((id) => $(id).textContent + "\n"),
+                                                        { type: "text/javascript" })));
+  worker.postMessage({ field: $("field-data").textContent });
+  let phot = null, gen = 0, lcPending = false;
+  function measureNight() {
+    const b = state.band, targets = variables(), ut = D.night.ut;
+    // the models over the night, each relative to its own mean over the night's exposures (as the movie)
+    const modelT = Array.from({ length: 800 }, (_, i) => ut[0] + (i / 799) * (ut[N - 1] - ut[0]));
+    const models = targets.map((s) => {
+      const tt = Array.from({ length: N }, (_, j) => trueMag(s, b, j)), mean = tt.reduce((a, v) => a + v, 0) / N;
+      const curve = modelT.map((t) => Sim.modelMag(D.models[s.model], b, (D.night.bjd[0] + (t - ut[0]) / 24 - s.epoch) / s.period)
+                                       - 2.5 * Math.log10(s.scale) - mean);
+      return { true: tt, mean, curve };
+    });
+    phot = { gen: ++gen, band: b, targets, modelT, models, n: 0,
+             mag: targets.map(() => new Float64Array(N).fill(NaN)), err: targets.map(() => new Float64Array(N).fill(NaN)) };
+    worker.postMessage({ gen, band: b, zenith: state.zenith, moon: state.moon, seed: state.seed,
+                         stars: stars.map(({ rate, mag0, ...d }) => d) });
+    $("measuring").textContent = targets.length ? `measuring the night: 0/${N} exposures` : "";
+  }
+  worker.onmessage = ({ data: r }) => {
+    if (!phot || r.gen !== phot.gen) return;
+    if (r.done) { $("measuring").textContent = `measured ${N}/${N} exposures`; return; }
+    r.mag.forEach((m, t) => { phot.mag[t][r.j] = m; phot.err[t][r.j] = r.err[t]; });
+    phot.n = r.j + 1;
+    $("measuring").textContent = `measuring the night: ${phot.n}/${N} exposures`;
+    if (!lcPending) { lcPending = true; requestAnimationFrame(() => { lcPending = false; drawLightCurves(); }); }
+  };
 
   // display limits fixed per scene (as the movie): vmax from the best-airmass exposure, asinh width from the sky
   let lim = {};
@@ -233,14 +264,76 @@
     ctx.fillText("Constant stars", ax.box.x + 26, ax.box.y + ax.box.h - 16);
   }
 
+  // light curves of the variables (SExtractor MAG_AUTO, as the movie): measured points up to this exposure, each star
+  // relative to the mean of its measurements (over the exposures measured so far), the model behind relative to its own
+  // mean over the night; below, measured - true
   function drawLightCurves() {
-    const { ctx, w, h } = canvas("lc"), j = state.j;
-    const ut = D.night.ut, xl = [ut[0] - 0.1, ut[N - 1] + 0.1];
-    const ax = Plot.axes(ctx, { x: 70, y: 36, w: w - 90, h: h - 92 }, xl, [0.3, -0.3],
-      { title: "Light curves", titleRight: `UT ${hhmm(ut[j])} · airmass ${D.night.airmass[j].toFixed(2)} · seeing ${seeingAt(j).toFixed(2)}″`,
-        xlabel: `UT hours (${D.date} night)`, ylabel: `Δm${SYMBOL[state.band]} (mag)` });
+    const { ctx, w, h } = canvas("lc"), j = state.j, ut = D.night.ut, xl = [ut[0] - 0.1, ut[N - 1] + 0.1], B = SYMBOL[state.band];
+    const P = phot && phot.band === state.band ? phot : { targets: [], models: [], mag: [], err: [], modelT: [] };
+    const rel = P.targets.map((_, t) => {
+      let sum = 0, k = 0;
+      for (const v of P.mag[t]) if (Number.isFinite(v)) { sum += v; k++; }
+      return k ? sum / k : NaN;
+    });
+    let lo = Infinity, hi = -Infinity;
+    P.targets.forEach((_, t) => {
+      for (const v of P.mag[t]) if (Number.isFinite(v)) { lo = Math.min(lo, v - rel[t]); hi = Math.max(hi, v - rel[t]); }
+      for (const v of P.models[t].true) { lo = Math.min(lo, v - P.models[t].mean); hi = Math.max(hi, v - P.models[t].mean); }
+    });
+    if (!P.targets.length) { lo = -0.3; hi = 0.3; }
+    const pad = 0.08 * Math.max(hi - lo, 0.05);
+    const top = 36, gap = 10, H = h - 92 - gap, box = { x: 76, y: top, w: w - 96, h: H * 2 / 3 };
+    const box2 = { x: box.x, y: top + box.h + gap, w: box.w, h: H / 3 };
+    const ax = Plot.axes(ctx, box, xl, [hi + pad, lo - 2.5 * pad],
+      { title: "Light curves (SExtractor MAG_AUTO)", titleRight: `UT ${hhmm(ut[j])} · airmass ${D.night.airmass[j].toFixed(2)} · seeing ${seeingAt(j).toFixed(2)}″`,
+        ylabel: `Δm${B} (mag)`, xlabels: false, ylabelOffset: 52 });
     ax.frame();
-    ax.line([ut[j], ut[j]], [-1, 1], { color: "#455868", lw: 0.8, alpha: 0.35 });
+    // measured - true over the exposures shown, autoscaled (and inverted) as matplotlib does
+    let dlo = 0, dhi = 0;
+    P.targets.forEach((_, t) => { for (let q = 0; q <= j; q++) { const d = P.mag[t][q] - P.models[t].true[q]; if (Number.isFinite(d)) { dlo = Math.min(dlo, d); dhi = Math.max(dhi, d); } } });
+    const dm = 0.05 * Math.max(dhi - dlo, 0.02);
+    const ax2 = Plot.axes(ctx, box2, xl, [dhi + dm, dlo - dm], { xlabel: `UT hours (${D.date} night)`, ylabel: "measured − true\n(mag)", ylabelOffset: 52 });
+    ax2.frame();
+    for (const a of [ax, ax2]) a.line([ut[j], ut[j]], [-10, 10], { color: "#455868", lw: 0.8, alpha: 0.35 });
+    ax2.line(xl, [0, 0], { color: "#808080", lw: 0.6, dash: [1, 2] });
+    P.targets.forEach((s, t) => {
+      const col = TAB10[s.colourIdx];
+      ax.line(P.modelT, P.models[t].curve, { color: col, lw: 1.0, alpha: 0.35 });
+      const xs = [], ys = [], d = [];
+      for (let q = 0; q <= j; q++) {
+        d.push(P.mag[t][q] - P.models[t].true[q]);
+        if (!Number.isFinite(P.mag[t][q])) continue;
+        const y = P.mag[t][q] - rel[t], e = P.err[t][q];
+        xs.push(ut[q]); ys.push(y);
+        ax.line([ut[q], ut[q]], [y - e, y + e], { color: col, lw: 0.5 });
+      }
+      ax.points(xs, ys, { color: col, r: 1.8 });
+      ax2.line(ut.slice(0, j + 1), d, { color: col, lw: 0.8 });
+    });
+    // legend (as the movie: upper left, four columns)
+    const kinds = new Set(P.targets.map((s) => D.models[s.model].kind));
+    const modelName = [...(([...kinds].some((k) => k !== "EB")) ? ["MESA RSP"] : []), ...(kinds.has("EB") ? ["PHOEBE"] : [])].join(" / ");
+    const entries = P.targets.map((s) => ({ text: `${s.label} ${D.models[s.model].kind} ${s.period.toFixed(3)} d`, col: TAB10[s.colourIdx], point: true }));
+    if (entries.length) entries.push({ text: `${modelName} model`, col: "#808080", point: false });
+    legend(ctx, box, entries, 4);
+  }
+  function legend(ctx, box, entries, ncol) {
+    if (!entries.length) return;
+    ctx.save();
+    ctx.font = '10px "DejaVu Sans", sans-serif';
+    const colW = [], rows = Math.ceil(entries.length / ncol), lh = 14;
+    entries.forEach((e, i) => { const c = Math.floor(i / rows); colW[c] = Math.max(colW[c] || 0, 22 + ctx.measureText(e.text).width); });
+    const W = colW.reduce((a, v) => a + v + 10, 0) + 4, H = rows * lh + 6, x0 = box.x + 6, y0 = box.y + 6;
+    ctx.fillStyle = "rgba(255,255,255,0.85)"; ctx.fillRect(x0, y0, W, H);
+    ctx.textBaseline = "middle"; ctx.textAlign = "left";
+    entries.forEach((e, i) => {
+      const c = Math.floor(i / rows), r = i % rows, x = x0 + 4 + colW.slice(0, c).reduce((a, v) => a + v + 10, 0), y = y0 + 3 + r * lh + lh / 2;
+      ctx.strokeStyle = e.col; ctx.fillStyle = e.col;
+      if (e.point) { ctx.beginPath(); ctx.arc(x + 8, y, 2.5, 0, 2 * Math.PI); ctx.fill(); }
+      else { ctx.globalAlpha = 0.5; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 16, y); ctx.stroke(); ctx.globalAlpha = 1; }
+      ctx.fillStyle = Plot.STYLE.label; ctx.fillText(e.text, x + 20, y);
+    });
+    ctx.restore();
   }
 
   function drawSED() {
@@ -350,7 +443,7 @@
     $("sel-delete").onclick = () => { stars.splice(state.selected, 1); state.selected = null; labelVariables(); sceneChanged(); };
   }
 
-  function sceneChanged() { displayLimits(); referenceChanged(); draw(); }
+  function sceneChanged() { displayLimits(); referenceChanged(); measureNight(); draw(); }
 
   function toPixel(ev) {
     const r = $("exposure").getBoundingClientRect(), ax = exposureAxes;
@@ -385,7 +478,7 @@
 
   function addConstant(x, y, G, colour) {
     const t = D.templates, i = nearestIndex(t.bp_rp, colour);
-    stars.push({ x, y, G, colour: t.bp_rp[i], scale: 10 ** (-0.4 * (G - t.G)),
+    stars.push({ x, y, G, template: i, colour: t.bp_rp[i], scale: 10 ** (-0.4 * (G - t.G)),
       rate: Object.fromEntries(D.bands.map((b) => [b, t.rate[b].subarray(i * NA, (i + 1) * NA)])),
       mag0: Object.fromEntries(D.bands.map((b) => [b, t.mag[b][i]])) });
     state.selected = stars.length - 1;
@@ -439,5 +532,6 @@
   seeingOut(); moonOut(); speedOut();
   displayLimits();
   buildReference();
+  measureNight();
   draw();
 })();

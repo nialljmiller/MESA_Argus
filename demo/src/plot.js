@@ -51,7 +51,10 @@ const Plot = (() => {
       if (opt.xlabel) { ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText(opt.xlabel, box.x + box.w / 2, box.y + box.h + 22); }
       if (opt.ylabel) {
         ctx.save(); ctx.translate(box.x - (opt.ylabelOffset || 42), box.y + box.h / 2); ctx.rotate(-Math.PI / 2);
-        ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.fillText(opt.ylabel, 0, 0); ctx.restore();
+        ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+        const lines = opt.ylabel.split("\n");
+        lines.forEach((t, i) => ctx.fillText(t, 0, (i - lines.length + 1) * 14));
+        ctx.restore();
       }
       if (opt.title) {
         ctx.font = `bold 14px ${STYLE.font}`; ctx.textAlign = "left"; ctx.textBaseline = "bottom";

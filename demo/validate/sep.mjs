@@ -6,6 +6,8 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const Sim = require("../src/sim.js"), SEP = require("../src/sep.js");
+Object.assign(globalThis, { Sim, SEP });
+const Measure = require("../src/measure.js");
 
 const root = new URL("../build/", import.meta.url), dir = new URL("validate_sep/", root);
 mkdirSync(dir, { recursive: true });
@@ -15,9 +17,9 @@ const NA = D.airmass_grid.length;
 // the scene as the page builds it, plus `extra` random constant stars and `vars` library variables (seeded)
 function scene(extra, vars, seed) {
   const stars = D.stars.source.map((_, i) => ({
-    x: D.stars.x[i], y: D.stars.y[i], scale: 1, colour: D.stars.colour[i], mag0: D.stars.mag.rho[i],
+    x: D.stars.x[i], y: D.stars.y[i], scale: 1, colour: D.stars.colour[i],
     rate: Object.fromEntries(D.bands.map((b) => [b, D.stars.rate[b].subarray(i * NA, (i + 1) * NA)])),
-    magb: Object.fromEntries(D.bands.map((b) => [b, D.stars.mag[b][i]])),
+    mag0: Object.fromEntries(D.bands.map((b) => [b, D.stars.mag[b][i]])),
   }));
   for (const { star, model } of D.native) Object.assign(stars[star], { model, epoch: D.models[model].epoch_bjd - 2460000, period: D.models[model].gaia_period });
   const g = Sim.rng(seed), t = D.templates;
@@ -25,7 +27,7 @@ function scene(extra, vars, seed) {
     const i = Math.floor(g.uniform() * t.bp_rp.length), G = 13 + 7 * g.uniform(), scale = 10 ** (-0.4 * (G - t.G));
     stars.push({ x: 10 + (D.n - 20) * g.uniform(), y: 10 + (D.n - 20) * g.uniform(), scale, colour: t.bp_rp[i],
       rate: Object.fromEntries(D.bands.map((b) => [b, t.rate[b].subarray(i * NA, (i + 1) * NA)])),
-      magb: Object.fromEntries(D.bands.map((b) => [b, t.mag[b][i] - 2.5 * Math.log10(scale)])) });
+      mag0: Object.fromEntries(D.bands.map((b) => [b, t.mag[b][i]])) });
   }
   const lib = D.models.map((m, i) => i).filter((i) => D.models[i].library);
   for (let k = 0; k < vars; k++) {
@@ -36,41 +38,6 @@ function scene(extra, vars, seed) {
   return stars;
 }
 
-// catalogue inputs as the movie builds them: magnitude (variables: intensity mean), flux at airmass 1 (variables: mean
-// over the night's exposures), Gaia BP-RP
-function catalogue(stars, band) {
-  const mag = [], flux = [], colour = [], targets = [];
-  stars.forEach((s, i) => {
-    colour.push(s.colour);
-    if (s.model === undefined) {
-      mag.push(s.magb[band]);
-      flux.push(s.scale * s.rate[band][0] * D.exptime);
-    } else {
-      const m = D.models[s.model];
-      let fm = 0;
-      for (let q = 0; q < 200; q++) fm += 10 ** (-0.4 * Sim.modelMag(m, band, q / 200)) / 200;
-      mag.push(-2.5 * Math.log10(fm) - 2.5 * Math.log10(s.scale));
-      let r = 0;
-      for (let j = 0; j < D.night.airmass.length; j++) {
-        const aw = Sim.airmassWeights(D.airmass_grid, D.night.airmass[j]);
-        for (let q = 0; q < 200; q++) r += Sim.modelRate(m, band, q / 200, aw) / 200;
-      }
-      flux.push(s.scale * r / D.night.airmass.length * D.exptime);
-      targets.push(i);
-    }
-  });
-  return { mag, flux, colour, targets };
-}
-
-// the movie's FWHM: second moment of the sub-pixel-phase-0 PSF stamp at the reference seeing
-function fwhmAt(band, seeing) {
-  const si = Sim.seeingIndex(D, seeing), S = D.psf[band].shape[2], base = si * D.psf[band].shape[1] * S * S;
-  let cy = 0, cx = 0, m2 = 0;
-  for (let r = 0; r < S; r++) for (let c = 0; c < S; c++) { const p = D.psf[band][base + r * S + c]; cy += p * r; cx += p * c; }
-  for (let r = 0; r < S; r++) for (let c = 0; c < S; c++) m2 += D.psf[band][base + r * S + c] * ((r - cy) ** 2 + (c - cx) ** 2);
-  return 2.3548 * Math.sqrt(0.5 * m2);
-}
-
 const CASES = [
   { name: "native_rho_165", extra: 0, vars: 0, band: "rho", j: 165 },
   { name: "native_rho_0", extra: 0, vars: 0, band: "rho", j: 0 },
@@ -78,14 +45,12 @@ const CASES = [
   { name: "crowded_rho_165", extra: 1500, vars: 7, band: "rho", j: 165 },
   { name: "packed_rho_165", extra: 6000, vars: 7, band: "rho", j: 165 },
 ];
-const seeingAt = (j) => D.zenith_seeing * D.night.airmass[j] ** 0.6;
-let bestSeeing = Infinity;
-for (let j = 0; j < D.night.airmass.length; j++) bestSeeing = Math.min(bestSeeing, seeingAt(j));
+const seeingAt = (j) => Measure.seeingAt(D.zenith_seeing, D.night.airmass[j]);
 
 const mode = process.argv[2];
 for (const c of CASES) {
   const stars = scene(c.extra, c.vars, 7 + c.extra);
-  const cat = catalogue(stars, c.band), fwhm = fwhmAt(c.band, bestSeeing), x = stars.map((s) => s.x), y = stars.map((s) => s.y);
+  const cat = Measure.catalogue(D, stars, c.band), fwhm = Measure.fwhm(D, c.band, D.zenith_seeing), x = stars.map((s) => s.x), y = stars.map((s) => s.y);
   if (mode === "make") {
     const mean = Sim.meanImage(D, stars, c.band, c.j, { seeing: seeingAt(c.j), moon: 1 });
     const { image } = Sim.observe(D, mean, 1000 + c.j);

@@ -55,6 +55,7 @@
     <label>Speed <input type="range" id="speed" min="1" max="24" value="8"><span class="readout" id="speed-out"></span></label>
     <label>Band
       <select id="band"><option value="rho">ρ (rho)</option><option value="beta">β (beta)</option></select></label>
+    <div class="readout" id="measuring"></div>
   </fieldset>
   <fieldset>
     <legend>Conditions</legend>
@@ -78,8 +79,9 @@
 </div>
 <script id="colormaps" type="application/json">/*COLORMAPS*/</script>
 <script id="field-data" type="application/json">/*DATA*/</script>
-<script>/*SIM*/</script>
-<script>/*SEP*/</script>
+<script id="sim-src">/*SIM*/</script>
+<script id="sep-src">/*SEP*/</script>
+<script id="measure-src">/*MEASURE*/</script>
 <script>/*PLOT*/</script>
 <script>/*APP*/</script>
 </body>
