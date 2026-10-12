@@ -1,0 +1,92 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - name: ASASSN-V
+#   datatype: string
+#   description: ASAS-SN identifier (JHHMMSS.ss+DDMMSS.s) (asassn_name)
+#   meta: !!omap
+#   - {ucd: ID_MAIN}
+#   - {_votable_string_dtype: char}
+# - name: Per
+#   unit: d
+#   datatype: float32
+#   format: '{:11.4g}'
+#   description: '[0.03/1923]? Period (period)'
+#   meta: !!omap
+#   - {ucd: TIME_PERIOD}
+#   - {width: 11}
+#   - {precision: E4}
+#   - values: {'null': .nan}
+# - name: Amp
+#   unit: mag
+#   datatype: float32
+#   format: '{:5.2f}'
+#   description: '[0/11.31] Amplitude (amplitude)'
+#   meta: !!omap
+#   - {ucd: VAR_AMPLITUDE_VALUE}
+#   - {width: 5}
+#   - {precision: '2'}
+# - name: Type
+#   datatype: string
+#   description: Variability type (variable_type) (1)
+#   meta: !!omap
+#   - {ucd: VAR_CLASS}
+#   - {_votable_string_dtype: char}
+#   - {_votable_arraysize: 8*}
+# - name: HJD
+#   unit: d
+#   datatype: float64
+#   format: '{:13.5f}'
+#   description: Heliocentric Julian Date (epoch_hjd)
+#   meta: !!omap
+#   - {ucd: TIME_DATE}
+#   - {width: 13}
+#   - {precision: '5'}
+# - name: Vmag
+#   unit: mag
+#   datatype: float32
+#   format: '{:5.2f}'
+#   description: '[1.64/18.89] Mean Johnson V-band magnitude (mean_vmag)'
+#   meta: !!omap
+#   - {ucd: PHOT_JHN_V}
+#   - {width: 5}
+#   - {precision: '2'}
+# - name: GaiaDR3
+#   datatype: int64
+#   description: '? Gaia EDR3 source ID (edr3_source_id)'
+#   meta: !!omap
+#   - {ucd: ID_CROSSID}
+#   - {width: 19}
+#   - values: {'null': -9223372036854775808}
+# - name: RAJ2000
+#   unit: deg
+#   datatype: float64
+#   format: '{:9.5f}'
+#   description: Right ascension in decimal degrees (J2000)
+#   meta: !!omap
+#   - {ucd: POS_EQ_RA_MAIN}
+#   - {width: 9}
+#   - {precision: '5'}
+# - name: DEJ2000
+#   unit: deg
+#   datatype: float64
+#   format: '{:9.5f}'
+#   description: Declination in decimal degrees (J2000)
+#   meta: !!omap
+#   - {ucd: POS_EQ_DEC_MAIN}
+#   - {width: 9}
+#   - {precision: '5'}
+# meta: !!omap
+# - {ID: II_366_catv2021}
+# - {name: II/366/catv2021}
+# - {description: 'ASAS-SN catalog of variable stars (from the ASAS-SN Variable Stars Database (AVSD); http://asas-sn.osu.edu/variables
+#     on 10-Sep-2024) (08-Oct-2021 version)'}
+# schema: astropy-2.0
+ASASSN-V Per Amp Type HJD Vmag GaiaDR3 RAJ2000 DEJ2000
+J235817.88+611315.3 4.8753 0.57 DCEP 2458033.71406 11.09 2011892703004353792 359.57449 61.22093
+J235818.00+611256.4 4.8746 0.52 CWB 2457927.07254 12.69 2011892703004359680 359.575 61.21566
+J235732.68+611104.3 "" 0.24 L 2458026.83885 11.05 2011898063123539584 359.38617 61.18453
+J235722.51+611318.3 335.45 0.11 SR 2457357.76305 12.08 2011899059555892224 359.34379 61.22174
+J235809.21+611248.0 "" 0.51 VAR 2457039.72038 10.18 2011892320749270912 359.53838 61.21334
+J235843.06+610939.3 "" 0.34 GCAS 2457309.85137 10.16 2011888476756645504 359.67942 61.16091
+J235807.25+611142.8 "" 0.23 GCAS: 2457037.72261 11.01 2011892084529086848 359.5302 61.19521

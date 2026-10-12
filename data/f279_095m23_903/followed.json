@@ -1,0 +1,90 @@
+{
+ "G4077588525725997952": {
+  "source": 4077588525725997952,
+  "kind": "RRab",
+  "period": 0.5546529923421614,
+  "epoch_bjd": 2456912.849690098,
+  "G": 17.463312,
+  "G_mean": 17.168789,
+  "amp_G": 0.9828468,
+  "dm": 15.774,
+  "ebv": 0.2792,
+  "z": 0.000534,
+  "x": 0.75,
+  "mass": 0.68,
+  "kap": "a09",
+  "notes": {
+   "distance": "parallax S/N 1.8 < 3: M_G = 0.32 [Fe/H] + 1.11 = 0.63 (Garofalo et al. 2022), A_G = 2.74 E(B-V) -> 14.28 kpc",
+   "ebv": "Schlafly & Finkbeiner (2011), IRSA",
+   "z": "Gaia gives no [M/H]: assumed -1.5 (old population, as for Type II Cepheids) -> Z = 0.0169 x 10^[M/H]; X = 0.75",
+   "mass": "assumed from [M/H] (0.75 at -2.1, 0.68 at -1.5, 0.55 at 0.0)",
+   "opacities": "alpha-enhanced (a09)"
+  }
+ },
+ "G4077588452718318080": {
+  "source": 4077588452718318080,
+  "kind": "BL Her",
+  "period": 1.6906981023252505,
+  "epoch_bjd": 2456944.512138556,
+  "G": 12.324228,
+  "G_mean": 12.279569,
+  "amp_G": 0.5714325,
+  "dm": 12.148,
+  "ebv": 0.2795,
+  "z": 0.000534,
+  "x": 0.76,
+  "mass": 0.55,
+  "kap": "a09",
+  "notes": {
+   "distance": "parallax 0.355 +/- 0.028 mas (+0.017 zero point) -> 2.69 kpc",
+   "ebv": "Schlafly & Finkbeiner (2011), IRSA",
+   "z": "Gaia gives no [M/H]: assumed -1.5 (old population) -> Z = 0.0169 x 10^[M/H]; X = 0.76",
+   "mass": "assumed: 0.55 Msun as MESA's rsp_Type_II_Cepheid",
+   "opacities": "alpha-enhanced (a09)"
+  }
+ },
+ "G4077587598099748224": {
+  "source": 4077587598099748224,
+  "kind": "RRc",
+  "period": 0.32262429420062244,
+  "epoch_bjd": 2456913.021436253,
+  "G": 14.009864,
+  "G_mean": 14.067052,
+  "amp_G": 0.42907342,
+  "dm": 12.615,
+  "ebv": 0.281,
+  "z": 0.000488,
+  "x": 0.75,
+  "mass": 0.685,
+  "kap": "a09",
+  "notes": {
+   "distance": "parallax 0.283 +/- 0.027 mas (+0.017 zero point) -> 3.33 kpc",
+   "ebv": "Schlafly & Finkbeiner (2011), IRSA",
+   "z": "Gaia photometric [M/H] = -1.54 -> Z = 0.0169 x 10^[M/H]; X = 0.75",
+   "mass": "assumed from [M/H] (0.75 at -2.1, 0.68 at -1.5, 0.55 at 0.0)",
+   "opacities": "alpha-enhanced (a09)"
+  }
+ },
+ "G4077588830675524352": {
+  "source": 4077588830675524352,
+  "kind": "RRc",
+  "period": 0.3840158398692699,
+  "epoch_bjd": 2456912.90600784,
+  "G": 13.996089,
+  "G_mean": 13.990711,
+  "amp_G": 0.39804354,
+  "dm": 12.619,
+  "ebv": 0.2796,
+  "z": 0.000534,
+  "x": 0.75,
+  "mass": 0.68,
+  "kap": "a09",
+  "notes": {
+   "distance": "parallax 0.282 +/- 0.030 mas (+0.017 zero point) -> 3.34 kpc",
+   "ebv": "Schlafly & Finkbeiner (2011), IRSA",
+   "z": "Gaia gives no [M/H]: assumed -1.5 (old population, as for Type II Cepheids) -> Z = 0.0169 x 10^[M/H]; X = 0.75",
+   "mass": "assumed from [M/H] (0.75 at -2.1, 0.68 at -1.5, 0.55 at 0.0)",
+   "opacities": "alpha-enhanced (a09)"
+  }
+ }
+}

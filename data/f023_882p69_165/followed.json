@@ -1,0 +1,24 @@
+{
+ "G532154114497164288": {
+  "source": 532154114497164288,
+  "kind": "RRc",
+  "period": 0.22765736177360982,
+  "epoch_bjd": 2456897.908977668,
+  "G": 16.372862,
+  "G_mean": 16.37282,
+  "amp_G": 0.34855253,
+  "dm": 13.541,
+  "ebv": 0.6821,
+  "z": 0.003924,
+  "x": 0.75,
+  "mass": 0.605,
+  "kap": "gs98",
+  "notes": {
+   "distance": "parallax 0.179 +/- 0.043 mas (+0.017 zero point) -> 5.11 kpc",
+   "ebv": "Schlafly & Finkbeiner (2011), IRSA",
+   "z": "Gaia photometric [M/H] = -0.63 -> Z = 0.0169 x 10^[M/H]; X = 0.75",
+   "mass": "assumed from [M/H] (0.75 at -2.1, 0.68 at -1.5, 0.55 at 0.0)",
+   "opacities": "solar-scaled (gs98)"
+  }
+ }
+}

@@ -1,0 +1,91 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - name: _r
+#   datatype: float64
+#   format: '{:8.6f}'
+#   description: Distance from center ( 23.88182233000+69.16540007000)[ICRS], at Epoch=J2016.0
+#   meta: !!omap
+#   - {ucd: POS_ANG_DIST_GENERAL}
+#   - {width: 8}
+#   - {precision: '6'}
+# - name: recno
+#   datatype: int32
+#   description: Record number assigned by the VizieR team. Should Not be used for identification.
+#   meta: !!omap
+#   - {ucd: RECORD}
+#   - {width: 8}
+# - name: Source
+#   datatype: int64
+#   description: Unique source identifier (source_id)
+#   meta: !!omap
+#   - {ucd: ID_MAIN}
+#   - {width: 19}
+# - name: SolID
+#   datatype: int64
+#   description: Solution Identifier (solution_id)
+#   meta: !!omap
+#   - {ucd: ID_VERSION}
+#   - {width: 18}
+# - name: Classifier
+#   datatype: string
+#   description: '[nTransits:5+] Classifier name used to produce this result (classifier_name)'
+#   meta: !!omap
+#   - {ucd: MODEL_ID}
+#   - {_votable_string_dtype: char}
+# - name: Class
+#   datatype: string
+#   description: Name of best class (in vcclassd.dat table) (best_class_name)
+#   meta: !!omap
+#   - {ucd: CLASS_CODE}
+#   - {_votable_string_dtype: char}
+#   - {_votable_arraysize: 26*}
+# - name: ClassSc
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: Score of the best class (best_class_score)
+#   meta: !!omap
+#   - {ucd: CODE_QUALITY}
+#   - {width: 14}
+#   - {precision: E7}
+# - name: RA_ICRS
+#   unit: deg
+#   datatype: float64
+#   format: '{:15.11f}'
+#   description: Right ascension (ICRS) at Ep=2016.0 (ra)
+#   meta: !!omap
+#   - {ucd: POS_EQ_RA_MAIN}
+#   - {width: 15}
+#   - {precision: '11'}
+# - name: DE_ICRS
+#   unit: deg
+#   datatype: float64
+#   format: '{:15.11f}'
+#   description: Declination (ICRS) at Ep=2016.0(dec)
+#   meta: !!omap
+#   - {ucd: POS_EQ_DEC_MAIN}
+#   - {width: 15}
+#   - {precision: '11'}
+# meta: !!omap
+# - {ID: I_358_vclassre}
+# - {name: I/358/vclassre}
+# - {description: Variability classification results of all classifiers (vari_classifier_result)}
+# schema: astropy-2.0
+_r recno Source SolID Classifier Class ClassSc RA_ICRS DE_ICRS
+0.112335 6364225 532151189621702784 375316653866487564 nTransits:5+ ECL 0.37501955 23.9983290266 69.061026591
+0.069851 6364241 532152259071321472 375316653866487564 nTransits:5+ SOLAR_LIKE 0.49751016 23.90257213519 69.0959417849
+0.019508 6364270 532154045778081536 375316653866487564 nTransits:5+ S 0.8678724 23.86033882867 69.14745174551
+0.028004 6364272 532154114497164288 375316653866487564 nTransits:5+ RR 0.36697143 23.81091168047 69.15324297599
+4.3e-05 6364274 532154183216635520 375316653866487564 nTransits:5+ CEP 0.36643568 23.88181314071 69.16535690896
+0.049513 6364282 532154526814417920 375316653866487564 nTransits:5+ ECL 0.9070552 23.99319384216 69.19514246385
+0.069296 6364439 532160333609777024 375316653866487564 nTransits:5+ S 0.9839389 24.04078210345 69.20554131413
+0.083443 6364454 532160745926616448 375316653866487564 nTransits:5+ SOLAR_LIKE 0.17070518 23.9837301828 69.24058977407
+0.073661 6365726 532199366272615424 375316653866487564 nTransits:5+ SOLAR_LIKE 0.6355807 23.73356314884 69.1140317536
+0.084608 6365734 532199434992088192 375316653866487564 nTransits:5+ SOLAR_LIKE 0.42752078 23.68111264172 69.12010207463
+0.066415 6365738 532199572431026432 375316653866487564 nTransits:5+ SOLAR_LIKE 0.54784566 23.69973246551 69.15078176247
+0.05888 6365790 532201324777666048 375316653866487564 nTransits:5+ SOLAR_LIKE 0.13473773 23.72369397108 69.18290152163
+0.073216 6365796 532201462216596096 375316653866487564 nTransits:5+ SOLAR_LIKE 0.70452124 23.74375333867 69.2197602674
+0.102422 6365820 532202007675081728 375316653866487564 nTransits:5+ ECL 0.7351246 23.79022789483 69.26252708463
+0.103929 6365821 532202042034817152 375316653866487564 nTransits:5+ ECL 0.7710428 23.76146677612 69.26014577792
+0.111207 6365822 532202080691859072 375316653866487564 nTransits:5+ SOLAR_LIKE 0.41685802 23.77760720634 69.27027916118
+0.115073 6365827 532202183772526720 375316653866487564 nTransits:5+ S 0.6264323 23.58264359222 69.20946479926

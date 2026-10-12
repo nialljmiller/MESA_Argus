@@ -1,0 +1,398 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - name: _r
+#   datatype: float64
+#   format: '{:8.6f}'
+#   description: Distance from center (359.53931638000+61.21370257000)[ICRS], at Epoch=J2016.0
+#   meta: !!omap
+#   - {ucd: POS_ANG_DIST_GENERAL}
+#   - {width: 8}
+#   - {precision: '6'}
+# - name: recno
+#   datatype: int32
+#   description: Record number assigned by the VizieR team. Should Not be used for identification.
+#   meta: !!omap
+#   - {ucd: RECORD}
+#   - {width: 8}
+# - name: Source
+#   datatype: int64
+#   description: Unique source identifier (source_id)
+#   meta: !!omap
+#   - {ucd: ID_MAIN}
+#   - {width: 19}
+# - name: SolID
+#   datatype: int64
+#   description: Solution Identifier (solution_id)
+#   meta: !!omap
+#   - {ucd: ID_VERSION}
+#   - {width: 18}
+# - name: Rank
+#   datatype: float64
+#   format: '{:11.8f}'
+#   description: '[0/1] Number between 0 (worst) and 1 (best) (global_ranking)'
+#   meta: !!omap
+#   - {ucd: CODE_MISC}
+#   - {width: 11}
+#   - {precision: '8'}
+# - name: TimeRef
+#   unit: d
+#   datatype: float64
+#   format: '{:18.13f}'
+#   description: Reference time used for the geometric model fit, JD-2455197.5 (reference_time)
+#   meta: !!omap
+#   - {ucd: TIME_EPOCH}
+#   - {width: 18}
+#   - {precision: '13'}
+# - name: Freq
+#   unit: 1 / d
+#   datatype: float64
+#   format: '{:22.19f}'
+#   description: Frequency of geometric model of the eclipsing binary light curve (frequency)
+#   meta: !!omap
+#   - {ucd: OBS_FREQUENCY}
+#   - {width: 22}
+#   - {precision: '19'}
+# - name: e_Freq
+#   unit: 1 / d
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: Uncertainty of frequency (frequency_error)
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+# - name: magModRef
+#   unit: mag
+#   datatype: float64
+#   format: '{:10.7f}'
+#   description: Magnitude reference level of geometric model (geom_model_reference_level)
+#   meta: !!omap
+#   - {ucd: MODEL_MAG_VALUE}
+#   - {width: 10}
+#   - {precision: '7'}
+# - name: e_magModRef
+#   unit: mag
+#   datatype: float64
+#   format: '{:13.6g}'
+#   description: Uncertainty of geom Model Reference Level (geom_model_reference_level_error)
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 13}
+#   - {precision: E6}
+# - name: PhaseGauss1
+#   datatype: float64
+#   format: '{:13.6g}'
+#   description: '? Phase of the Gaussian 1 component (geom_model_gaussian1_phase)'
+#   meta: !!omap
+#   - {ucd: TIME_PHASE}
+#   - {width: 13}
+#   - {precision: E6}
+#   - values: {'null': .nan}
+# - name: e_PhaseGauss1
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Uncertainty of geom Model Gaussian1 Phase (geom_model_gaussian1_phase_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: sigPhaseGauss1
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Standard deviation [phase] of Gaussian 1 component (geom_model_gaussian1_sigma)'
+#   meta: !!omap
+#   - {ucd: STAT_STDEV}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: e_sigPhaseGauss1
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Uncertainty of geom Model Gaussian1 Sigma (geom_model_gaussian1_sigma_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: DepthGauss1
+#   unit: mag
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Magnitude depth of Gaussian 1 component (geom_model_gaussian1_depth)'
+#   meta: !!omap
+#   - {ucd: VAR_AMPLITUDE_VALUE}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: e_DepthGauss1
+#   unit: mag
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Uncertainty of geom Model Gaussian1 Depth (geom_model_gaussian1_depth_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: PhaseGauss2
+#   datatype: float64
+#   format: '{:13.6g}'
+#   description: '? Phase of Gaussian 2 component (geom_model_gaussian2_phase)'
+#   meta: !!omap
+#   - {ucd: TIME_PHASE}
+#   - {width: 13}
+#   - {precision: E6}
+#   - values: {'null': .nan}
+# - name: e_PhaseGauss2
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Uncertainty of geom Model Gaussian2 Phase (geom_model_gaussian2_phase_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: sigPhaseGauss2
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Standard deviation [phase] of Gaussian 2 component (geom_model_gaussian2_sigma)'
+#   meta: !!omap
+#   - {ucd: STAT_STDEV}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: e_sigPhaseGauss2
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Uncertainty of geom Model Gaussian2 Sigma (geom_model_gaussian2_sigma_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: DepthGauss2
+#   unit: mag
+#   datatype: float64
+#   format: '{:13.6g}'
+#   description: '? Magnitude depth of Gaussian2 component (geom_model_gaussian2_depth)'
+#   meta: !!omap
+#   - {ucd: VAR_AMPLITUDE_VALUE}
+#   - {width: 13}
+#   - {precision: E6}
+#   - values: {'null': .nan}
+# - name: e_DepthGauss2
+#   unit: mag
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Uncertainty of geom Model Gaussian2 Depth (geom_model_gaussian2_depth_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: AmpCHP
+#   unit: mag
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Amplitude of the cosine component with half the period of the geometric model (geom_model_cosine_half_period_amplitude)'
+#   meta: !!omap
+#   - {ucd: VAR_AMPLITUDE_VALUE}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: e_AmpCHP
+#   unit: mag
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Uncertainty of geom Model Cosine Half Period Amplitude (geom_model_cosine_half_period_amplitude_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: PhaseCHP
+#   datatype: float64
+#   format: '{:13.10f}'
+#   description: '? Reference phase of the cosine component with half the period of the geometric model (geom_model_cosine_half_period_phase)'
+#   meta: !!omap
+#   - {ucd: TIME_PHASE}
+#   - {width: 13}
+#   - {precision: '10'}
+#   - values: {'null': .nan}
+# - name: e_PhaseCHP
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Uncertainty of geom Model Cosine Half Period Phase (geom_model_cosine_half_period_phase_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: ModelType
+#   datatype: string
+#   description: Type of geometrical model of the light curve (model_type) (1)
+#   meta: !!omap
+#   - {ucd: MODEL_ID}
+#   - {_votable_string_dtype: char}
+#   - {_votable_arraysize: 41*}
+# - name: Nparam
+#   datatype: uint8
+#   description: '[4/9] Number of free parameters of the geometric model (num_model_parameters)'
+#   meta: !!omap
+#   - {ucd: NUMBER}
+#   - {width: 1}
+# - name: rchi2
+#   datatype: float64
+#   format: '{:15.9f}'
+#   description: Reduced Chi2 of the geometrical model fit (reduced_chi2)
+#   meta: !!omap
+#   - {ucd: FIT_CHI2}
+#   - {width: 15}
+#   - {precision: '9'}
+# - name: PhaseE1
+#   datatype: float64
+#   format: '{:13.6g}'
+#   description: '? Primary eclipse: phase at geometrically deepest point (derived_primary_ecl_phase)'
+#   meta: !!omap
+#   - {ucd: TIME_PHASE}
+#   - {width: 13}
+#   - {precision: E6}
+#   - values: {'null': .nan}
+# - name: e_PhaseE1
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Primary eclipse: uncertainty of derived Primary Ecl Phase (derived_primary_ecl_phase_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: DurE1
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Primary eclipse: duration [phase fraction] (derived_primary_ecl_duration)'
+#   meta: !!omap
+#   - {ucd: TIME_INTERVAL}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: e_DurE1
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Primary eclipse: uncertainty of derived Primary Ecl Duration (derived_primary_ecl_duration_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: DepthE1
+#   unit: mag
+#   datatype: float64
+#   format: '{:13.10f}'
+#   description: '? Primary eclipse: depth (derived_primary_ecl_depth)'
+#   meta: !!omap
+#   - {ucd: VAR_PRIM-MIN}
+#   - {width: 13}
+#   - {precision: '10'}
+#   - values: {'null': .nan}
+# - name: e_DepthE1
+#   unit: mag
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Primary eclipse: uncertainty of derived Primary Ecl Depth (derived_primary_ecl_depth_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: PhaseE2
+#   datatype: float64
+#   format: '{:13.6g}'
+#   description: '? Secondary eclipse: phase at geometrically second deepest point (derived_secondary_ecl_phase)'
+#   meta: !!omap
+#   - {ucd: TIME_PHASE}
+#   - {width: 13}
+#   - {precision: E6}
+#   - values: {'null': .nan}
+# - name: e_PhaseE2
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Secondary eclipse: uncertainty of derived Secondary Ecl Phase (derived_secondary_ecl_phase_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: DurE2
+#   datatype: float64
+#   format: '{:13.6g}'
+#   description: '? Secondary eclipse: duration [phase fraction] (derived_secondary_ecl_duration)'
+#   meta: !!omap
+#   - {ucd: TIME_INTERVAL}
+#   - {width: 13}
+#   - {precision: E6}
+#   - values: {'null': .nan}
+# - name: e_DurE2
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Secondary eclipse: uncertainty of derived Secondary Ecl Duration (derived_secondary_ecl_duration_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: DepthE2
+#   unit: mag
+#   datatype: float64
+#   format: '{:13.6g}'
+#   description: '? Secondary eclipse: depth (derived_secondary_ecl_depth)'
+#   meta: !!omap
+#   - {ucd: VAR_SEC-MIN}
+#   - {width: 13}
+#   - {precision: E6}
+#   - values: {'null': .nan}
+# - name: e_DepthE2
+#   unit: mag
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: '? Secondary eclipse: uncertainty of derived Secondary Ecl Depth (derived_secondary_ecl_depth_error)'
+#   meta: !!omap
+#   - {ucd: ERROR}
+#   - {width: 14}
+#   - {precision: E7}
+#   - values: {'null': .nan}
+# - name: RA_ICRS
+#   unit: deg
+#   datatype: float64
+#   format: '{:15.11f}'
+#   description: Right ascension (ICRS) at Ep=2016.0 (ra)
+#   meta: !!omap
+#   - {ucd: POS_EQ_RA_MAIN}
+#   - {width: 15}
+#   - {precision: '11'}
+# - name: DE_ICRS
+#   unit: deg
+#   datatype: float64
+#   format: '{:15.11f}'
+#   description: Declination (ICRS) at Ep=2016.0 (dec)
+#   meta: !!omap
+#   - {ucd: POS_EQ_DEC_MAIN}
+#   - {width: 15}
+#   - {precision: '11'}
+# meta: !!omap
+# - {ID: I_358_veb}
+# - {name: I/358/veb}
+# - {description: Properties of the eclipsing binaries resulting from the variability analysis (vari_eclipsing_binary)}
+# schema: astropy-2.0
+_r recno Source SolID Rank TimeRef Freq e_Freq magModRef e_magModRef PhaseGauss1 e_PhaseGauss1 sigPhaseGauss1 e_sigPhaseGauss1 DepthGauss1 e_DepthGauss1 PhaseGauss2 e_PhaseGauss2 sigPhaseGauss2 e_sigPhaseGauss2 DepthGauss2 e_DepthGauss2 AmpCHP e_AmpCHP PhaseCHP e_PhaseCHP ModelType Nparam rchi2 PhaseE1 e_PhaseE1 DurE1 e_DurE1 DepthE1 e_DepthE1 PhaseE2 e_PhaseE2 DurE2 e_DurE2 DepthE2 e_DepthE2 RA_ICRS DE_ICRS
+0.115743 159633 2011887682175087360 375316653866487564 0.643411 2181.680479419345 0.5312525000567173 2.2168663e-06 17.120447 0.001522064 0.07549391 8.892387e-05 0.015531058 0.00028926216 0.49427298 0.011696015 0.5749097 0.0001727086 0.016446019 0.0011989992 0.2634656 0.017226342 "" "" "" "" TWOGAUSSIANS 8 2.564304 0.07549391 8.892387e-05 0.08697392 0.0016198681 0.49427298 0.011696015 0.5749097 0.0001727086 0.0920977 0.0067143957 0.2634656 0.017226342 359.52829196557 61.09808205369
+0.073928 159634 2011888373677428608 375316653866487564 0.43768266 2147.7848863372374 1.634619662813357 4.3108288e-05 19.1451 0.01402888 0.2583117 0.011655624 0.06189066 0.012528633 0.15785518 0.04653168 0.7793826 0.014049641 0.08251593 0.015114027 0.1413951 0.01743428 "" "" "" "" TWOGAUSSIANS 8 4.775557 0.2583117 0.011655624 0.34658772 0.070160344 0.1574191 0.046591558 0.7793826 0.014049641 0.4 0.0 0.140959 0.016829642 359.57372114751 61.14165961486
+0.066094 159637 2011891358667345408 375316653866487564 0.50927144 2188.367515131964 3.4293127185236645 1.6790702e-05 17.294497 0.008699725 0.2438135 0.0053224163 0.081632674 0.006579597 0.3485733 0.016586917 0.7436171 0.0041329097 0.07630348 0.0048113354 0.390979 0.020011218 "" "" "" "" TWOGAUSSIANS 8 39.066845 0.7436171 0.0041329097 0.4 0.0 0.38609362 0.020021759 0.2438135 0.0053224163 0.4 0.0 0.3436879 0.016599588 359.61542761462 61.1587222053
+0.052643 159638 2011891981449884160 375316653866487564 0.53034353 2209.3492168849716 0.34090229689486234 8.877755e-06 15.864736 0.0009211805 0.2069575 0.025816835 0.035630837 0.06389586 0.0042986665 0.017298365 0.938426 0.0012166079 0.01258806 0.0009702282 0.1114743 0.012854555 "" "" "" "" TWOGAUSSIANS 8 3.4025745 0.938426 0.0012166079 0.07049314 0.005433278 0.11147428 0.012854555 0.2069575 0.025816835 0.1995327 0.35781682 0.004298667 0.017298365 359.46888873437 61.17345791136
+0.027656 159639 2011892187608675968 375316653866487564 0.49701908 2203.6593511747883 0.9018823626066083 2.1902953e-05 16.507309 0.001399204 0.2149975 0.0029659646 0.01617438 0.008392257 0.025238665 0.009766828 0.7059421 0.007963226 0.031711265 0.006190804 0.07467048 0.0036057567 0.010716106 0.001998583 0.21499749 0.0029659646 TWOGAUSSIANS_WITH_ELLIPSOIDAL_ON_ECLIPSE1 9 4.7184834 0.7061421 0.007780829 0.17758308 0.0346685 0.09603492 0.0030680646 0.2149975 0.0029659646 0.09057652 0.04699664 0.04667088 0.009123907 359.49459254635 61.19635996106
+0.113093 159641 2011894416684769792 375316653866487564 0.59093153 2177.5733133839653 0.4509187074215864 4.1311177e-06 19.071247 0.002702038 0.329042 0.0022820004 0.016088983 0.0026742958 0.53778577 0.2674177 0.8295072 0.00029346862 0.015127969 0.0004485658 0.5291752 0.021690475 "" "" "" "" TWOGAUSSIANS 8 1.1574202 0.329042 0.0022820004 0.09009831 0.014976056 0.53778577 0.2674177 0.8295072 0.00029346862 0.08471663 0.0025119686 0.5291752 0.021690475 359.71895732124 61.28667006308
+0.038317 159649 2011904003051325312 375316653866487564 0.5741727 2178.281239700005 3.4984855809830666 3.738175e-06 18.903824 0.007655568 0.2501704 0.0012910252 0.045883276 0.0014916719 0.48986506 0.023341639 0.7492139 0.0014289995 0.03810422 0.0027814663 0.4995214 0.049121894 0.11040349 0.012339856 0.25017038 0.0012910252 TWOGAUSSIANS_WITH_ELLIPSOIDAL_ON_ECLIPSE1 9 2.6518202 0.7492639 0.001352993 0.21338364 0.015576211 0.72032034 0.05467978 0.2501704 0.0012910252 0.2569464 0.008353363 0.7106716 0.015501026 359.46063055056 61.20802709848
+0.065813 159650 2011904862047364864 375316653866487564 0.43089527 2164.366526046312 0.07628410226538258 5.7410503e-05 18.311995 0.02453109 0.2146317 0.011836685 0.10637693 0.035755176 0.09415908 0.022416933 0.7383668 0.008219468 0.052535683 0.037015438 0.1699315 0.048757438 "" "" "" "" TWOGAUSSIANS 8 8.109657 0.7383668 0.008130247 0.29419982 0.11195635 0.1690077 0.062170167 0.2146317 0.011836685 0.4 0.0 0.09323056 0.013229767 359.57080244989 61.27774886524
+0.088993 159651 2011905519176519168 375316653866487564 0.46052566 2253.02764115807 1.841535738564198 2.5328676e-05 19.759928 0.008152702 0.1498807 0.0067593413 0.05378614 0.0051472746 0.3413396 0.03409832 0.6650031 0.007957891 0.08478823 0.011317933 0.1631505 0.053791385 "" "" "" "" TWOGAUSSIANS 8 1.3249887 0.1498807 0.0067593413 0.3012024 0.028824737 0.34092185 0.03409111 0.6650031 0.007957891 0.4 0.0 0.1627328 0.054014638 359.53954027906 61.30269508111

@@ -1,0 +1,47 @@
+{
+ "G4471617518483574528": {
+  "source": 4471617518483574528,
+  "kind": "RRc",
+  "period": 0.24620022421015111,
+  "epoch_bjd": 2456917.210902268,
+  "G": 15.202838,
+  "G_mean": 15.172868,
+  "amp_G": 0.27662513,
+  "dm": 13.352,
+  "ebv": 0.1542,
+  "z": 0.032573,
+  "x": 0.75,
+  "mass": 0.55,
+  "kap": "gs98",
+  "notes": {
+   "distance": "parallax 0.197 +/- 0.031 mas (+0.017 zero point) -> 4.68 kpc",
+   "ebv": "Schlafly & Finkbeiner (2011), IRSA",
+   "z": "Gaia photometric [M/H] = +0.28 -> Z = 0.0169 x 10^[M/H]; X = 0.75",
+   "mass": "assumed from [M/H] (0.75 at -2.1, 0.68 at -1.5, 0.55 at 0.0)",
+   "opacities": "solar-scaled (gs98)"
+  }
+ },
+ "G4471617346684870656": {
+  "source": 4471617346684870656,
+  "kind": "HADS",
+  "period": 0.11879999935626984,
+  "epoch_bjd": 2457042.16847,
+  "G": 15.127334,
+  "G_mean": 15.127334,
+  "amp_G": 0.17000000178813934,
+  "dm": 13.225,
+  "ebv": 0.1574,
+  "z": 0.0169,
+  "x": 0.7,
+  "mass": 1.688,
+  "kap": "gs98",
+  "notes": {
+   "distance": "parallax 0.209 +/- 0.027 mas (+0.017 zero point) -> 4.42 kpc",
+   "ebv": "Schlafly & Finkbeiner (2011), IRSA",
+   "z": "assumed solar ([M/H] = 0): HADS are Population I -> Z = 0.0169 x 10^[M/H]; X = 0.7",
+   "mass": "Gaia DR3 FLAME (isochrone mass from Gaia L and Teff; assumes a non-variable single star); X = 0.70 as MESA's rsp_Delta_Scuti",
+   "opacities": "solar-scaled (gs98)",
+   "convection": "RADIATIVE MODEL: convection off (RSP_alfa = 0). With RSP's turbulent convection HADS modes are only neutrally stable; the radiative model pulsates, but its amplitude is not limited by convection (less physical than the RR Lyrae / Cepheid models)"
+  }
+ }
+}

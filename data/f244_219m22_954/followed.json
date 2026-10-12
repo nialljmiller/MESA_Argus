@@ -1,0 +1,68 @@
+{
+ "G6050422860560309888": {
+  "source": 6050422860560309888,
+  "kind": "RRab",
+  "period": 0.6141340811324719,
+  "epoch_bjd": 2456906.960414982,
+  "G": 14.962024,
+  "G_mean": 14.975471,
+  "amp_G": 0.44181588,
+  "dm": 13.842,
+  "ebv": 0.1837,
+  "z": 0.000534,
+  "x": 0.75,
+  "mass": 0.68,
+  "kap": "a09",
+  "notes": {
+   "distance": "parallax S/N 0.2 < 3: M_G = 0.32 [Fe/H] + 1.11 = 0.63 (Garofalo et al. 2022), A_G = 2.74 E(B-V) -> 5.87 kpc",
+   "ebv": "Schlafly & Finkbeiner (2011), IRSA",
+   "z": "Gaia gives no [M/H]: assumed -1.5 (old population, as for Type II Cepheids) -> Z = 0.0169 x 10^[M/H]; X = 0.75",
+   "mass": "assumed from [M/H] (0.75 at -2.1, 0.68 at -1.5, 0.55 at 0.0)",
+   "opacities": "alpha-enhanced (a09)"
+  }
+ },
+ "G6050423131140706432": {
+  "source": 6050423131140706432,
+  "kind": "RRc",
+  "period": 0.3864339435936429,
+  "epoch_bjd": 2456939.2744969656,
+  "G": 16.017506,
+  "G_mean": 15.996417,
+  "amp_G": 0.38255233,
+  "dm": 14.901,
+  "ebv": 0.1815,
+  "z": 0.000424,
+  "x": 0.75,
+  "mass": 0.692,
+  "kap": "a09",
+  "notes": {
+   "distance": "parallax S/N 2.9 < 3: M_G = 0.32 [Fe/H] + 1.11 = 0.60 (Garofalo et al. 2022), A_G = 2.74 E(B-V) -> 9.56 kpc",
+   "ebv": "Schlafly & Finkbeiner (2011), IRSA",
+   "z": "Gaia photometric [M/H] = -1.60 -> Z = 0.0169 x 10^[M/H]; X = 0.75",
+   "mass": "assumed from [M/H] (0.75 at -2.1, 0.68 at -1.5, 0.55 at 0.0)",
+   "opacities": "alpha-enhanced (a09)"
+  }
+ },
+ "G6050423096777893248": {
+  "source": 6050423096777893248,
+  "kind": "RRc",
+  "period": 0.31698802309453106,
+  "epoch_bjd": 2456907.429016217,
+  "G": 16.034918,
+  "G_mean": 16.029837,
+  "amp_G": 0.14045565,
+  "dm": 14.903,
+  "ebv": 0.1815,
+  "z": 0.000534,
+  "x": 0.75,
+  "mass": 0.68,
+  "kap": "a09",
+  "notes": {
+   "distance": "parallax S/N -0.5 < 3: M_G = 0.32 [Fe/H] + 1.11 = 0.63 (Garofalo et al. 2022), A_G = 2.74 E(B-V) -> 9.56 kpc",
+   "ebv": "Schlafly & Finkbeiner (2011), IRSA",
+   "z": "Gaia gives no [M/H]: assumed -1.5 (old population, as for Type II Cepheids) -> Z = 0.0169 x 10^[M/H]; X = 0.75",
+   "mass": "assumed from [M/H] (0.75 at -2.1, 0.68 at -1.5, 0.55 at 0.0)",
+   "opacities": "alpha-enhanced (a09)"
+  }
+ }
+}
