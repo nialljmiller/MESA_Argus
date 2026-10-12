@@ -1,0 +1,84 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - name: _r
+#   datatype: float64
+#   format: '{:8.6f}'
+#   description: Distance from center (294.78440636000-11.62349392000)[ICRS], at Epoch=J2016.0
+#   meta: !!omap
+#   - {ucd: POS_ANG_DIST_GENERAL}
+#   - {width: 8}
+#   - {precision: '6'}
+# - name: recno
+#   datatype: int32
+#   description: Record number assigned by the VizieR team. Should Not be used for identification.
+#   meta: !!omap
+#   - {ucd: RECORD}
+#   - {width: 8}
+# - name: Source
+#   datatype: int64
+#   description: Unique source identifier (source_id)
+#   meta: !!omap
+#   - {ucd: ID_MAIN}
+#   - {width: 19}
+# - name: SolID
+#   datatype: int64
+#   description: Solution Identifier (solution_id)
+#   meta: !!omap
+#   - {ucd: ID_VERSION}
+#   - {width: 18}
+# - name: Classifier
+#   datatype: string
+#   description: '[nTransits:5+] Classifier name used to produce this result (classifier_name)'
+#   meta: !!omap
+#   - {ucd: MODEL_ID}
+#   - {_votable_string_dtype: char}
+# - name: Class
+#   datatype: string
+#   description: Name of best class (in vcclassd.dat table) (best_class_name)
+#   meta: !!omap
+#   - {ucd: CLASS_CODE}
+#   - {_votable_string_dtype: char}
+#   - {_votable_arraysize: 26*}
+# - name: ClassSc
+#   datatype: float64
+#   format: '{:14.7g}'
+#   description: Score of the best class (best_class_score)
+#   meta: !!omap
+#   - {ucd: CODE_QUALITY}
+#   - {width: 14}
+#   - {precision: E7}
+# - name: RA_ICRS
+#   unit: deg
+#   datatype: float64
+#   format: '{:15.11f}'
+#   description: Right ascension (ICRS) at Ep=2016.0 (ra)
+#   meta: !!omap
+#   - {ucd: POS_EQ_RA_MAIN}
+#   - {width: 15}
+#   - {precision: '11'}
+# - name: DE_ICRS
+#   unit: deg
+#   datatype: float64
+#   format: '{:15.11f}'
+#   description: Declination (ICRS) at Ep=2016.0(dec)
+#   meta: !!omap
+#   - {ucd: POS_EQ_DEC_MAIN}
+#   - {width: 15}
+#   - {precision: '11'}
+# meta: !!omap
+# - {ID: I_358_vclassre}
+# - {name: I/358/vclassre}
+# - {description: Variability classification results of all classifiers (vari_classifier_result)}
+# schema: astropy-2.0
+_r recno Source SolID Classifier Class ClassSc RA_ICRS DE_ICRS
+0.101062 4620007 4186917639805580416 375316653866487564 nTransits:5+ RS 0.3829155 294.8473770194 -11.70355875236
+0.103894 4620008 4186917845964010240 375316653866487564 nTransits:5+ ECL 0.5648657 294.8703727328 -11.68436500207
+0.104294 4620010 4186918189561400320 375316653866487564 nTransits:5+ LPV 0.9564524 294.88405052164 -11.66027172829
+0.104057 4620013 4186919044256211712 375316653866487564 nTransits:5+ ECL 0.92022574 294.74599633167 -11.72051440658
+0.094268 4620015 4186919323432808576 375316653866487564 nTransits:5+ RR 0.3382881 294.73541915967 -11.70464065586
+0.038487 4620016 4186921728614505856 375316653866487564 nTransits:5+ RR 0.6869412 294.76724788457 -11.65811775479
+0.000696 4620019 4186922244010590592 375316653866487564 nTransits:5+ DSCT|GDOR|SXPHE 0.86072934 294.78507417996 -11.62373310331
+0.068627 4620036 4186933891961934464 375316653866487564 nTransits:5+ SOLAR_LIKE 0.33605343 294.71699107568 -11.60481081748
+0.066431 4626933 4192926397831832576 375316653866487564 nTransits:5+ ECL 0.742927 294.84465675298 -11.59299799993
+0.066258 4626934 4192927497341390848 375316653866487564 nTransits:5+ ECL 0.40705243 294.80313001577 -11.55982560139
