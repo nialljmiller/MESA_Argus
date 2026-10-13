@@ -2,9 +2,10 @@
 """Simulate stars: each [[star]] / [[set]] of a star file is built into its own folder, stars/<name>/.
 
     python make_stars.py examples/stars/variables.toml          # build every star in the file (skips those built)
+    python make_stars.py examples/stars/f294_field.toml examples/stars/transients.toml   # several files
     python make_stars.py examples/stars/variables.toml --only wuma_035
     python make_stars.py examples/stars/variables.toml --rebuild wuma_035   # rebuild one whose definition changed
-    python make_stars.py --gaia-list 294.7844 -11.6235 --write my_stars.toml  # a Gaia field: what can be modelled
+    python make_stars.py --gaia-list 294.7844 -11.6235 --write my_field.toml --write-observation my_obs.toml
     python make_stars.py --gaia-list 294.78 -11.62 --gaia-list 273.04 -20.71 --write s.toml --write-batch b.toml
     python make_stars.py --list                                  # every built star
 
@@ -43,24 +44,30 @@ def _toml_table(name, d):
     return "\n".join([f"[{name}]"] + [f"{_key(k)} = {_value(v)}" for k, v in d.items()]) + "\n"
 
 
-def load(path):
-    """[(table, Generator, definition)] of a star file, validated."""
+def load(*paths):
+    """[(table, Generator, definition)] of one or more star files, validated. The same name may appear in several
+    files only with the same definition (e.g. a field's star set in both its own file and its variables' file)."""
     from mesa_argus import sources as S
 
-    doc = tomllib.loads(Path(path).read_text())
-    bad = sorted(set(doc) - {"star", "set"})
-    if bad:
-        raise SystemExit(f"{path}: unknown tables {bad}; a star file has [[star]] and [[set]] entries only")
-    out, names = [], set()
-    for table in ("set", "star"):
-        for e in doc.get(table, []):
-            g, p = S.validate(e, table)
-            if p["name"] in names:
-                raise SystemExit(f"{path}: two entries named {p['name']!r}")
-            names.add(p["name"])
-            out.append((table, g, p))
-    if not out:
-        raise SystemExit(f"{path}: no [[star]] or [[set]] entries")
+    out, seen = [], {}
+    for path in paths:
+        doc = tomllib.loads(Path(path).read_text())
+        bad = sorted(set(doc) - {"star", "set"})
+        if bad:
+            raise SystemExit(f"{path}: unknown tables {bad}; a star file has [[star]] and [[set]] entries only")
+        n = 0
+        for table in ("set", "star"):
+            for e in doc.get(table, []):
+                g, p = S.validate(e, table)
+                n += 1
+                if p["name"] in seen:
+                    if seen[p["name"]] != (table, p):
+                        raise SystemExit(f"{path}: {p['name']!r} is defined differently elsewhere")
+                    continue
+                seen[p["name"]] = (table, p)
+                out.append((table, g, p))
+        if not n:
+            raise SystemExit(f"{path}: no [[star]] or [[set]] entries")
     return out
 
 
@@ -114,11 +121,11 @@ def save(table, g, p, meta, folder):
     tmp.rename(folder)
 
 
-def build(path, only=(), rebuild=()):
+def build(paths, only=(), rebuild=()):
     from mesa_argus import config as C
     from mesa_argus import sources as S
 
-    entries = [e for e in load(path) if not only or e[2]["name"] in only]
+    entries = [e for e in load(*paths) if not only or e[2]["name"] in only]
     todo = []
     for table, g, p in entries:
         st = state(table, g, p, set(rebuild))
@@ -155,7 +162,7 @@ def build(path, only=(), rebuild=()):
         raise SystemExit(f"not built: {failed}")
 
 
-def gaia_list(pointings, block, write, write_batch=None):
+def gaia_list(pointings, block, write, write_batch=None, write_observation=None):
     """The catalogued variables around each pointing, and a star file for them: each pointing's Gaia field set and
     every variable that can be modelled. write_batch: also an observation batch observing each pointing (its set at
     the real positions, its variables, the night they change most), for tools/stage_batch.py."""
@@ -163,7 +170,8 @@ def gaia_list(pointings, block, write, write_batch=None):
     from mesa_argus.runconfig import _value
     from mesa_argus.sources.gaia import CACHE
 
-    text = ["# Gaia fields: each one's stars as a set, and each catalogued variable that can be modelled.",
+    text = ["# Gaia fields: each one's stars as a set, and each catalogued variable that can be modelled",
+            "# (Gaia variables: MESA RSP ~0.5-2 h each, PHOEBE minutes).",
             f"#   python make_stars.py {write or 'this_file.toml'}", ""]
     fields = []
     for ra, dec in pointings:
@@ -186,6 +194,18 @@ def gaia_list(pointings, block, write, write_batch=None):
         print(f"\nwrote {write}")
     else:
         print("\n" + "\n".join(text))
+    if write_observation:  # one observation file per field: its set at the real positions, every variable placed
+        wo = Path(write_observation)
+        for i, (ra, dec, bg, vs) in enumerate(fields):
+            path = wo if len(fields) == 1 else wo.with_name(f"{wo.stem}_{bg[:-6]}{wo.suffix}")
+            path.write_text("\n".join(
+                [f"# Observe the Gaia field at RA {ra}, Dec {dec} on the night its variables change most.",
+                 f"#   python make_stars.py {write or '<the star file>'}   # once",
+                 f"#   python observe.py {path}", "", "[field]", f"ra = {ra}", f"dec = {dec}", f"block = {block}", "",
+                 "[night]", 'date = "auto"', "", "[stars]", f"background = {_value(bg)}", 'layout = "real"',
+                 'missing = "skip"     # a variable whose model failed stays a constant star', ""]
+                + sum((["[[place]]", f"star = {_value(v)}", ""] for v in vs), [])))
+            print(f"wrote {path}")
     if write_batch:
         wb = Path(write_batch)
         base = wb.with_name(wb.stem + "_base.toml")
@@ -212,20 +232,21 @@ def list_built():
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("stars", nargs="?", type=Path, help="star file (TOML)")
+    p.add_argument("stars", nargs="*", type=Path, help="star file(s) (TOML)")
     p.add_argument("--only", nargs="+", default=[], help="build only these names")
     p.add_argument("--rebuild", nargs="+", default=[], help="rebuild these names even though they are built")
     p.add_argument("--gaia-list", nargs=2, type=float, action="append", metavar=("RA", "DEC"),
                    help="list a Gaia field's variables (repeatable: several fields)")
     p.add_argument("--block", type=int, default=9, help="--gaia-list: minipixes across the block searched (odd, <= 9)")
     p.add_argument("--write", help="--gaia-list: write the star file here")
+    p.add_argument("--write-observation", help="--gaia-list: also write an observation file (one per field) here")
     p.add_argument("--write-batch", help="--gaia-list: also write an observation batch for the fields here")
     p.add_argument("--list", action="store_true", help="list the built stars")
     a = p.parse_args(argv)
     if a.list:
         return list_built()
     if a.gaia_list:
-        return gaia_list(a.gaia_list, a.block, a.write, a.write_batch)
+        return gaia_list(a.gaia_list, a.block, a.write, a.write_batch, a.write_observation)
     if not a.stars:
         p.error("give a star file (or --gaia-list / --list)")
     build(a.stars, a.only, a.rebuild)

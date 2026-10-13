@@ -1,0 +1,9 @@
+# The constant stars around RA 294.78, Dec -11.62 (every Gaia DR3 source within 0.12 deg): the background for the
+# example observations. Seconds to build (the Gaia query is cached in data/gaia/).
+#   python make_stars.py examples/stars/f294_field.toml
+
+[[set]]
+name = "f294_784m11_623_field"
+generator = "Gaia field"
+ra = 294.7844
+dec = -11.6235

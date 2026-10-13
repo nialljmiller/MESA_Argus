@@ -1,6 +1,6 @@
 # A synthetic field (f294's stars scattered at random) on 2026-07-19 with a microlensing event peaking 3.6 h into
 # the night and a dwarf nova rising through it.
-#   python make_stars.py examples/stars/f294.toml examples/stars/transients.toml   # once (one file per command)
+#   python make_stars.py examples/stars/f294_field.toml examples/stars/transients.toml   # once (seconds)
 #   python observe.py examples/observations/synthetic_transients.toml
 
 [field]

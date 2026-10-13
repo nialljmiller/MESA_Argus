@@ -1,5 +1,5 @@
 # A synthetic field (f294's stars scattered at random) on 2026-07-19 with three hand-made periodic variables.
-#   python make_stars.py examples/stars/f294.toml && python make_stars.py examples/stars/variables.toml   # once
+#   python make_stars.py examples/stars/f294_field.toml examples/stars/variables.toml   # once (PHOEBE: minutes; RSP: ~1 h)
 #   python observe.py examples/observations/synthetic_variables.toml
 
 [field]

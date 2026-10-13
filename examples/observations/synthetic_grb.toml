@@ -1,5 +1,5 @@
 # A synthetic field with one bright GRB afterglow at the centre, bursting 1.5 h into the night of 2026-07-19.
-#   python make_stars.py examples/stars/f294.toml && python make_stars.py examples/stars/transients.toml   # once
+#   python make_stars.py examples/stars/f294_field.toml examples/stars/transients.toml   # once (seconds)
 #   python observe.py examples/observations/synthetic_grb.toml
 
 [field]

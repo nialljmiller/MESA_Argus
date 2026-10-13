@@ -26,32 +26,51 @@ On macOS, wrap long runs in `caffeinate -dims` so sleep does not suspend MESA.
 
 ## 1. Night movies: stars, then observations
 
-Two steps, two kinds of file:
+Two scripts, two kinds of file you write:
+
+| Step | Command | Reads | Writes |
+|---|---|---|---|
+| simulate stars | `python make_stars.py <star file> [...]` | a **star file**: `[[star]]` and `[[set]]` entries | `stars/<name>/`, one folder per star |
+| observe them | `python observe.py <observation file>` | an **observation file**: pointing, night, stars placed, measurement, output | `outputs/<name>/`: movie, photometry, FITS |
+
+A star knows nothing about observing: no dust, no position in an image, no night, no instrument. An observation never
+simulates a star: it names stars that are already built and adds everything about observing.
+
+### Quick start
 
 ```bash
-python make_stars.py examples/stars/variables.toml                 # simulate stars   -> stars/<name>/
-python observe.py examples/observations/synthetic_variables.toml   # observe them     -> outputs/<name>/
+python make_stars.py examples/stars/f294_field.toml examples/stars/transients.toml   # build stars (seconds)
+python observe.py examples/observations/synthetic_grb.toml --set output.stride=30     # quick look: every 30th exposure
+python observe.py examples/observations/synthetic_grb.toml                            # the whole night (~30 min per band)
 ```
 
-**`make_stars.py <star file>`** simulates stars and nothing else: no dust, no position in an image, no night, no
-instrument. Each `[[star]]` (one star) or `[[set]]` (many constant stars) is built once into its own folder:
+The first command builds a background (every Gaia star around RA 294.78, Dec −11.62, as constant stars) and four
+transients. The second observes a synthetic field (those stars scattered at random) with a GRB going off 1.5 h into
+the night of 2026-07-19, and writes `outputs/synthetic_grb/synthetic_grb_night_rho.mp4` and its photometry.
 
-```
-stars/<name>/
-  star.toml     the definition it was built from (every key)
-  meta.json     what was built: kind, engine, model parameters; real stars also position, ephemeris, sightline E(B-V)
-  sed.h5        the model: SEDs against time (transients, before any dust) or one cycle at 10 pc (periodic)
-  catalogue/    (sets) the catalogue files
-  summary.md    the same, to read
-```
+The examples:
 
-Running a star file again skips stars already built; a changed definition under an existing name is refused unless
-named with `--rebuild NAME`. `python make_stars.py --list` lists the built stars.
+| Star file (`examples/stars/`) | Builds | Time |
+|---|---|---|
+| `f294_field.toml` | the background set for every example observation | seconds |
+| `transients.toml` | a microlensing event, a dwarf nova, a GRB afterglow, a SN Ia | seconds |
+| `variables.toml` | a W UMa and a detached eclipsing binary (PHOEBE), an RRab (MESA RSP) | minutes; ~1 h for the RRab |
+| `f294.toml` | the real f294 field's set and its two Gaia variables (MESA RSP) | ~1–4 h |
+
+| Observation file (`examples/observations/`) | Needs | What it shows |
+|---|---|---|
+| `synthetic_grb.toml` | f294_field, transients | a bright GRB afterglow rising past saturation and fading |
+| `synthetic_transients.toml` | f294_field, transients | a short microlensing event and a dwarf nova rising |
+| `synthetic_variables.toml` | f294_field, variables | the three hand-made periodic variables |
+| `f294.toml` | f294 | the real field with its RRab and HADS on their real ephemerides |
+| `template.toml` | — | every key, with its default and meaning |
+
+### Star files
 
 ```toml
 [[star]]
-name = "wuma_035"
-generator = "W UMa"          # python -m mesa_argus.sources: every generator and its keys
+name = "wuma_035"            # its folder: stars/wuma_035/
+generator = "W UMa"          # python -m mesa_argus.sources lists every generator and its keys
 period = 0.35
 q = 0.4
 incl = 80
@@ -67,49 +86,69 @@ ra = 294.7844
 dec = -11.6235
 ```
 
-**`observe.py <observation file>`** observes built stars. It adds everything about observing: the pointing and
-night, the Milky Way dust (SFD at the pointing), where each star sits and when its cycle or event happens, ArgusSim's
-sky, seeing, PSF and noise, the measurement, and what to produce:
+Each star is built once, into:
+
+```
+stars/<name>/
+  star.toml     the definition it was built from (every key)
+  meta.json     what the build produced: kind, engine, model parameters; real stars also position, ephemeris,
+                sightline E(B-V)
+  sed.h5        the model: SEDs against time (transients, before any dust) or one cycle at 10 pc (periodic)
+  catalogue/    (sets) the catalogue files
+  summary.md    the same, to read
+```
+
+Running a star file again skips stars already built. A changed definition under an existing name is refused unless
+named with `--rebuild NAME`; `--only NAME` builds just those; `python make_stars.py --list` lists every built star.
+`stars/` is not in git: each machine builds its own from the star files.
+
+### Observation files
 
 ```toml
 [field]
 ra = 294.7844
 dec = -11.6235
-block = 9
+block = 9                    # minipixes across the block shown (9 = 253")
 
 [night]
 date = "2026-07-19"          # or "auto": the night the placed real stars change most
 
 [stars]
-background = "f294_784m11_623_field"
-layout = "random"            # "real": the set's own positions; "random": scattered (a synthetic field)
+background = "f294_784m11_623_field"   # a built star set
+layout = "random"            # "real": its own positions; "random": scattered around the pointing (a synthetic field)
 
-[[place]]
+[[place]]                    # any number
 star = "wuma_035"
-x = 30                       # percent of the image (default 50, 50; -1 random)
+x = 30                       # percent of the image from its lower left (default 50, 50; -1: random)
 y = 30
-epoch = "start+0.05"         # periodic: a primary eclipse / maximum; transients: t0
+epoch = "start+0.05"         # periodic: a primary eclipse / maximum; transients: t0 = ...
+                             # ISO UTC, "start+D" days from the start of the night (or the UT window), or BJD_TDB
 
-[measure]                    # SExtractor settings (defaults: SExtractor's)
-[output]                     # movie, bands, fits, page; stride, noise seed, PSF and kernel options
+[measure]                    # how the exposures are measured (defaults: SExtractor's)
+[output]                     # movie, bands, fits, page; stride, noise seed, exposure time, PSF and kernel options
 ```
 
-[`examples/observations/template.toml`](examples/observations/template.toml) lists every key with its default; any
-key can be overridden with `--set section.key=value` (and `--place '{...}'`, `--date`, `--ra`, ...). Outputs, in
-`outputs/<name>/`:
+[`examples/observations/template.toml`](examples/observations/template.toml) lists every key with its default and
+meaning. Anything can be overridden on the command line: `--set section.key=value`, `--place '{star = "...", ...}'`
+(replaces the file's placements), `--date`, `--start`, `--end`, `--ra`, `--dec`, `--name`, `--bands`. Everything is
+checked before any work starts. Outputs, in `outputs/<name>/` (`<name>`: `[field] name`, else the file's name):
 
 - `<name>_night_<band>.mp4`: the movie (CMD, β/ρ colour exposure, difference image, light curves, SEDs).
-- `<name>_night_<band>.photometry.csv`: every measurement with the true model magnitude beside it.
+- `<name>_night_<band>.photometry.csv`: every measurement, with the true model magnitude beside it.
 - `fits/` (`output.fits = true`): every measured exposure in both bands, with what made it in the header.
-- `observation.toml`: the observation as made (every key, the night as used): running it makes the same data.
+- `observation.toml`: the observation as made (every key, the night as used); running it makes the same data.
 - `summary.md`; `scene/`: exactly what the engine (`night_movie.py`) read.
+
+The dust is added here: SFD E(B−V) at the pointing for every placed star (a real Gaia star keeps its own sightline's).
+Network: Gaia queries the first time a pointing is used (then cached in `data/gaia/`), and the SFD dust map (IRSA)
+for each observation.
 
 ### Real fields
 
 ```bash
-python make_stars.py --gaia-list 294.7844 -11.6235 --write examples/stars/f294.toml   # what is there; a star file
-python make_stars.py examples/stars/f294.toml        # the field's stars as a set + each modellable variable
-python observe.py examples/observations/f294.toml    # layout "real"; each variable placed by name only
+python make_stars.py --gaia-list 294.7844 -11.6235 --write my_field.toml --write-observation my_obs.toml
+python make_stars.py my_field.toml        # the field's stars as a set + each variable that can be modelled
+python observe.py my_obs.toml             # layout "real"; each real variable placed by name only; date "auto"
 ```
 
 A real star (generator `Gaia variable`) is modelled from Gaia DR3: its period and ephemeris, distance, the E(B−V)
@@ -178,8 +217,12 @@ place = [
 ```bash
 python tools/stage_batch.py batches/example_sweep.toml --check       # expand and validate: 4 observations
 python tools/stage_batch.py batches/example_sweep.toml               # run them; --status for progress
-python tools/stage_batch.py batches/example_star_grid.toml --check   # 9 W UMa stars
+python tools/stage_batch.py batches/example_star_grid.toml --check   # 9 W UMa stars (without --check: builds them)
 ```
+
+An observation batch only names stars, so build them first (`example_sweep.toml` needs `f294_field.toml` and
+`transients.toml`). Each observation is written to `outputs/batch_<batch>/runs/<name>.toml` before it runs, and can be
+rerun on its own with `observe.py`; a rerun of the batch skips observations already done.
 
 `make_stars.py --gaia-list RA DEC [--gaia-list RA DEC ...] --write stars.toml --write-batch batch.toml` writes the
 star file and the observation batch for any number of real fields: `batches/overnight.toml` is the 16-field newton

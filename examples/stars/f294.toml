@@ -1,4 +1,5 @@
-# Gaia field at RA 294.7844, Dec -11.6235: its stars as a set, and each catalogued variable that can be modelled.
+# The real f294 field: its stars as a set, and its two catalogued variables that can be modelled (an RRab and a
+# HADS: MESA RSP, ~0.5-2 h each). Written by: python make_stars.py --gaia-list 294.7844 -11.6235 --write <file>
 #   python make_stars.py examples/stars/f294.toml
 
 [[set]]
