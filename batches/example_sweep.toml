@@ -1,6 +1,6 @@
 # Example observation batch: one synthetic field observed with two different sets of transients, at two pointings
 # (f294's stars scattered around each) = four observations.
-#   python make_stars.py examples/stars/f294.toml && python make_stars.py examples/stars/transients.toml   # once
+#   python make_stars.py examples/stars/f294_field.toml examples/stars/transients.toml   # once (seconds)
 #   python tools/stage_batch.py batches/example_sweep.toml --check     # the four observations, run nothing
 
 base = "../examples/observations/synthetic_grb.toml"
