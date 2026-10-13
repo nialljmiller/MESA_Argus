@@ -5,7 +5,7 @@ SEDs) and the photometry CSV. argus_field.py prepares a field and calls this; it
     python night_movie.py --field f294_784m11_623 --band rho              # -> outputs/<field>/<field>_night_rho.mp4
     python night_movie.py --field f294_784m11_623 --stride 10 -o outputs/f294_784m11_623/test.mp4   # quick look
 
-A field is a folder data/<field>/ (written by argus_field.py: field.json, the stars, followed.json, transients.json),
+A field is a folder data/<field>/ (written by argus_field.py: field.json, the stars, followed.json, sources.json),
 or one of the hand-made fields in FIELDS below (M3, M15, two RR Lyrae fields).
 
 Sources: every star is an SED seen through ArgusSim. Constant stars are the MESA SED (runs/*_sed) whose Gaia BP-RP
@@ -159,25 +159,39 @@ def star_catalogue():
     return DATA / ("synthetic_stars.ecsv" if FIELDS[FIELD].get("synthetic") else "gaia_dr3_core.ecsv")
 
 
-def load_transients():
-    """The field's transients (argus_field.py --transient): [dict(label, file, ra, dec, ...)], in order."""
-    path = DATA / "transients.json"
+def load_placed():
+    """The sources placed in the field (argus_field.py [[source]], mesa_argus.sources): [dict(label, source, timing,
+    file, dx, dy, kind, engine, ...)], in order. Transients carry t0_bjd; periodic sources period, epoch_bjd and the
+    catalogue G and BP-RP of their intensity mean."""
+    path = DATA / "sources.json"
     return json.loads(path.read_text()) if path.exists() else []
+
+
+def engine_of(v):
+    """What computed a followed source's light (pulsators dict entry)."""
+    if "transient" in v:
+        return v["transient"].get("engine", v["transient"].get("generator", "sncosmo"))
+    if "placed" in v:
+        return v["placed"]["engine"]
+    return "PHOEBE" if v["kind"] == "EB" else "MESA RSP"
 
 
 def load_scene():
     g = Table.read(star_catalogue())
-    transients = load_transients()
-    if transients:  # appended as sources -1, -2, ..., placed by their offsets in the block (no magnitude: their light
-        from astropy.table import vstack  # comes from their models)
+    placed = load_placed()
+    if placed:  # appended as sources -1, -2, ..., at their offsets in the block; a periodic source has the catalogue
+        from astropy.table import vstack  # magnitude and colour of its intensity mean, a transient none
 
-        t = Table({"Source": [-(i + 1) for i in range(len(transients))], "RA_ICRS": [np.nan] * len(transients),
-                   "DE_ICRS": [np.nan] * len(transients)})
+        t = Table({"Source": [v["source"] for v in placed], "RA_ICRS": [np.nan] * len(placed),
+                   "DE_ICRS": [np.nan] * len(placed)})
+        if any(v["timing"] == "periodic" for v in placed):
+            t["Gmag"] = [v.get("G", np.nan) for v in placed]
+            t["BP-RP"] = [v.get("bp_rp", np.nan) for v in placed]
         g = vstack([g[["Source", "RA_ICRS", "DE_ICRS", "Gmag", "BP-RP"]], t])
     dx, dy = block_offsets(column(g, "RA_ICRS"), column(g, "DE_ICRS"))
-    if transients:
-        dx[-len(transients):] = [v["dx"] for v in transients]
-        dy[-len(transients):] = [v["dy"] for v in transients]
+    if placed:
+        dx[-len(placed):] = [v["dx"] for v in placed]
+        dy[-len(placed):] = [v["dy"] for v in placed]
     keep = ((np.abs(dx) <= AREA_HALF + MARGIN) & (np.abs(dy) <= AREA_HALF + MARGIN)
             & (np.isfinite(column(g, "Gmag")) | (np.asarray(g["Source"]).astype(np.int64) < 0)))
     g = g[keep]
@@ -228,15 +242,19 @@ def load_pulsators():
         for source, v in json.loads((DATA / "extra_pulsators.json").read_text()).items():
             out[int(source)] = dict(period=v["period"], epoch=v["epoch_bjd"], kind=v["kind"], amp={"G": v["amp"]},
                                     mean={"G": v["G"]})
-    # transients (argus_field.py --transient): sources -1, -2, ...; no period, epoch = the model's t0
-    for i, v in enumerate(load_transients()):
-        out[-(i + 1)] = dict(period=np.nan, epoch=v["t0_bjd"], kind=v["kind"], amp={"G": np.nan}, mean={}, transient=v)
+    # sources placed by argus_field.py ([[source]]): -1, -2, ...; a transient has no period and its epoch is its t0
+    for v in load_placed():
+        if v["timing"] == "transient":
+            out[v["source"]] = dict(period=np.nan, epoch=v["t0_bjd"], kind=v["kind"], amp={"G": np.nan}, mean={}, transient=v)
+        else:
+            out[v["source"]] = dict(period=v["period"], epoch=v["epoch_bjd"], kind=v["kind"], amp={"G": v["amp_G"]},
+                                    mean={"G": v["G"]}, placed=v)
     return out
 
 
 def pulsator_title(follow, pulsators, src):
     """'6 RR Lyrae: MESA RSP', or e.g. '1 BL Her: MESA RSP · 1 eclipsing binary: PHOEBE'."""
-    kinds = [pulsators[int(src[k])]["kind"] for k in follow if "transient" not in pulsators[int(src[k])]]
+    kinds = [pulsators[int(src[k])]["kind"] for k in follow if not {"transient", "placed"} & set(pulsators[int(src[k])])]
     n_eb = sum(k == "EB" for k in kinds)
     puls = [k for k in kinds if k != "EB"]
     parts = []
@@ -245,10 +263,16 @@ def pulsator_title(follow, pulsators, src):
                      f"{len(puls)} pulsator{'s' if len(puls) != 1 else ''} ({', '.join(dict.fromkeys(puls))}): MESA RSP")
     if n_eb:
         parts.append(f"{n_eb} eclipsing binar{'ies' if n_eb != 1 else 'y'}: PHOEBE")
+    placed = [pulsators[int(src[k])] for k in follow if "placed" in pulsators[int(src[k])]]
+    if placed:
+        groups = {}
+        for v in placed:
+            groups[(v["kind"], engine_of(v))] = groups.get((v["kind"], engine_of(v)), 0) + 1
+        parts.append(", ".join(f"{n} {kind}: {engine}" for (kind, engine), n in groups.items()))
     trans = [pulsators[int(src[k])] for k in follow if "transient" in pulsators[int(src[k])]]
     if trans:
         parts.append(f"{len(trans)} transient{'s' if len(trans) != 1 else ''}: " + ", ".join(dict.fromkeys(
-            f"{v['kind']} ({v['transient'].get('generator', 'sncosmo')})" for v in trans)))
+            f"{v['kind']} ({engine_of(v)})" for v in trans)))
     return " · ".join(parts) or "no modelled variables"
 
 
@@ -263,8 +287,8 @@ def choose_followed(stars, pulsators, n):
     if FIELDS[FIELD].get("followed_only"):  # an argus_field.py field: exactly the stars the user selected
         chosen = {v["source"] for v in json.loads((DATA / "followed.json").read_text()).values()}
         follow = [k for k in range(len(stars)) if int(src[k]) in chosen]
-        transients = sorted((k for k in range(len(stars)) if int(src[k]) < 0), key=lambda k: -int(src[k]))  # T1, T2, ...
-        return sorted(follow, key=lambda k: -pulsators[int(src[k])]["amp"]["G"]) + transients
+        placed = sorted((k for k in range(len(stars)) if int(src[k]) < 0), key=lambda k: -int(src[k]))  # in run order
+        return sorted(follow, key=lambda k: -pulsators[int(src[k])]["amp"]["G"]) + placed
     exclude = FIELDS[FIELD].get("exclude", set())
     candidates = [k for k in range(len(stars)) if in_block[k] and int(src[k]) in pulsators and int(src[k]) not in exclude]
     by_amp = sorted(candidates, key=lambda k: -pulsators[int(src[k])]["amp"]["G"])
@@ -528,7 +552,12 @@ def difference_image(image, image_sat, reference, reference_sat, readnoise, half
 
 
 # ---------------------------------------------------------------- main
-def main(argv=None):
+# the options a run file's [movie] section may set (argus_field.py passes them on); the rest come from the run itself
+MOVIE_OPTIONS = ("max_airmass", "exptime", "seeing", "field_angle", "stride", "fps", "dpi", "seed", "kernel_half",
+                 "kernel_clip", "kernel_stamps", "area")
+
+
+def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--field", required=True, choices=list(FIELDS), metavar="FIELD",
                    help="a data/<field>/ folder from argus_field.py, or a hand-made field: " + "m3, m15, rr308108, rr416445")
@@ -561,7 +590,11 @@ def main(argv=None):
     p.add_argument("--block", type=int, default=None,
                    help="minipixes across the block shown (odd; default the field's, else 3)")
     p.add_argument("--band", choices=list(BANDS), default="rho", help="band shown in the images, light curves and CMD")
-    args = p.parse_args(argv)
+    return p
+
+
+def main(argv=None):
+    args = parser().parse_args(argv)
     import os
 
     if args.output is None:
@@ -588,7 +621,8 @@ def main(argv=None):
     G = column(stars, "Gmag")
     gaia_var = np.array([int(s) in pulsators for s in src])  # Gaia-classified pulsators: constant unless followed
     follow = choose_followed(stars, pulsators, args.highlight)
-    labels = {k: f"T{-int(src[k])}" if src[k] < 0 else f"V{i + 1}" for i, k in enumerate(follow)}
+    placed_label = {v["source"]: v["label"] for v in load_placed()}
+    labels = {k: placed_label[int(src[k])] if src[k] < 0 else f"V{i + 1}" for i, k in enumerate(follow)}
     n_tr = int(np.sum(src < 0))
     print(f"{len(stars) - n_tr} {'synthetic stars' if FIELDS[args.field].get('synthetic') else 'Gaia sources'} "
           f"({int(in_block.sum()) - n_tr} in the block)" + (f"; {n_tr} transients" if n_tr else "")
@@ -648,7 +682,9 @@ def main(argv=None):
     import json
     from mesa_argus import rsp
 
-    rsp_dir = {v["source"]: f"rsp_{rsp.PREFIX}{name}" for name, v in json.loads((DATA / "followed.json").read_text()).items()}
+    rsp_file = {v["source"]: _REPO / "runs" / f"rsp_{rsp.PREFIX}{name}" / "pulsation.h5"
+                for name, v in json.loads((DATA / "followed.json").read_text()).items()}
+    rsp_file.update({v["source"]: _REPO / v["file"] for v in load_placed() if v["timing"] == "periodic"})
     rsp_stars, rsp_rate, rsp_mag, rsp_sed, rsp_cycle = {}, {}, {}, {}, {}
     transient = {k for k in follow if "transient" in pulsators[int(src[k])]}
     for k in follow:
@@ -664,12 +700,12 @@ def main(argv=None):
                           for b, band in BANDS.items()}
             rsp_cycle[k] = {b: np.where(np.isfinite(rsp_mag[k][b]), rsp_mag[k][b], np.nan) for b in BANDS}
             lit = np.isfinite(rsp_cycle[k]["rho"])
-            print(f"  {labels[k]}: {v['kind']} {v.get('generator', 'sncosmo')} {v['model']}, z {v['z']:g}, t0 BJD {v['t0_bjd']:.4f} "
+            print(f"  {labels[k]}: {v['kind']} {v.get('engine', v.get('generator', 'sncosmo'))} {v['model']}, z {v['z']:g}, t0 BJD {v['t0_bjd']:.4f} "
                   f"(night starts {bjd[0] - v['t0_bjd']:+.3f} d after t0); "
                   + (f"rho {np.nanmin(rsp_cycle[k]['rho']):.2f}-{np.nanmax(rsp_cycle[k]['rho']):.2f} over the night"
                      if lit.any() else "no light during the night"))
             continue
-        model = RSPStar(_REPO / "runs" / rsp_dir[int(src[k])] / "pulsation.h5", ab)
+        model = RSPStar(rsp_file[int(src[k])], ab)
         rsp_stars[k] = model
         seds = np.array([model.sed(ph) for ph in phases_at(pulsators[int(src[k])], bjd)])
         rsp_sed[k] = seds
@@ -680,7 +716,8 @@ def main(argv=None):
         rsp_cycle[k] = {b: np.array([float(ab.mag_from_sed(band, model.wave, model.sed(ph) * FLAM)) for ph in grid])
                         for b, band in BANDS.items()}
         v = pulsators[int(src[k])]
-        print(f"  {labels[k]}: {v['kind']} MESA RSP, period {model.period:.5f} d (Gaia {v['period']:.5f}); "
+        print(f"  {labels[k]}: {v['kind']} {engine_of(v)}, period {model.period:.5f} d "
+              f"({'given' if 'placed' in v else 'Gaia'} {v['period']:.5f}); "
               f"rho {rsp_cycle[k]['rho'].min():.2f}-{rsp_cycle[k]['rho'].max():.2f} (amplitude "
               f"{np.ptp(rsp_cycle[k]['rho']):.2f}); Gaia mean G {G[k]:.2f}")
 
@@ -955,10 +992,9 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
                     if k in rsp["curve"]
                     else f"{labels[k]} {v['kind']} {v['period']:.3f} d")
         cont_ax.plot(t, np.array(h["m"]) - np.array(h["true"]), color=colour_of[k], lw=0.8)
-    kinds_ = {pulsators[int(src[k])]["kind"] for k in follow if k not in rsp["curve"]}
-    model_name = " / ".join(([("MESA RSP")] if kinds_ - {"EB"} else []) + (["PHOEBE"] if "EB" in kinds_ else [])
-                            + list(dict.fromkeys(pulsators[int(src[k])]["transient"].get("generator", "sncosmo")
-                                                 for k in follow if k in rsp["curve"])))
+    engines = [engine_of(pulsators[int(src[k])]) for k in follow]
+    model_name = " / ".join([e for e in ("MESA RSP", "PHOEBE") if e in engines]
+                            + list(dict.fromkeys(e for e in engines if e not in ("MESA RSP", "PHOEBE"))))
     lc.plot([], [], color="0.5", lw=1.0, alpha=0.5, label=f"{model_name} model")
     for ax in (lc, cont_ax):
         ax.axvline(ut[j], color="#455868", lw=0.8, alpha=0.35)
@@ -1056,10 +1092,11 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
     sed_ax.legend(loc="upper right", fontsize=8, frameon=False)
     sed_ax.grid(alpha=0.12)
 
+    what = pulsator_title(follow, pulsators, src)  # long lists of sources: smaller, then on a second line
     fig.suptitle(
-        f"ARGUS — {lim['centre']} ({FIELDS[args.field]['name']}) — {block_label()} — {args.date} — 60 s exposures — "
-        + pulsator_title(follow, pulsators, src),
-        fontsize=13.5 if len(pulsator_title(follow, pulsators, src)) <= 60 else 11.5,
+        f"ARGUS — {lim['centre']} ({FIELDS[args.field]['name']}) — {block_label()} — {args.date} — 60 s exposures"
+        + ("\n" if len(what) > 70 else " — ") + what,
+        fontsize=13.5 if len(what) <= 45 else 11.5,
     )
 
 

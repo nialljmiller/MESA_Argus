@@ -76,6 +76,12 @@ CCM89 (`mesa_argus/dust.py`) with the field's E(B−V) (SFD at the centre for `a
 - **Eclipsing binaries** (`mesa_argus/binary.py`): PHOEBE 2 with MESA-atmosphere SEDs, timed and shaped by Gaia's
   eclipsing-binary model (and its NSS orbit when it has one); masses from a main-sequence relation; scaled to Gaia's
   out-of-eclipse G.
+- **Placed sources** (`[[source]]` in a run file; `mesa_argus/sources/`, `python -m mesa_argus.sources`): defined
+  entirely by the run file's keys, with no Gaia input, in either mode.
+  - Periodic: MESA RSP pulsators (RR Lyrae, Cepheids, Type II Cepheids, HADS) tuned to the given period, with L from the
+    given G and distance; PHOEBE binaries (W UMa from period, q, inclination, Teffs and fillout factor; detached from
+    radii and Teffs), masses from the main-sequence Teff–mass relation unless given. They enter the catalogue (and the
+    difference reference) at their intensity-mean G and BP−RP, as a catalogued variable would.
 - **Transients** (`mesa_argus/transients.py`): SEDs against time since t0.
   - sncosmo models (supernova templates built from observed spectra; no physics run), placed at a redshift and peak
     absolute magnitude with sncosmo's default cosmology.

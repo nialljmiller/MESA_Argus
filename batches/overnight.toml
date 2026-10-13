@@ -1,0 +1,26 @@
+# Overnight batch on newton, 2026-10-09: varied fields observable from the Argus site, longest (Cepheid) fields first,
+# globular clusters (crowded cores) last. Every catalogued variable that can be modelled, on its best night.
+#   python tools/stage_batch.py batches/overnight.toml
+
+base = "../examples/gaia_f294.toml"    # gaia mode, block 9, select all, date auto
+jobs = 3
+
+[vary]
+"field.ra,field.dec" = [
+  [273.0414, -20.7099],    # 13.6 d classical Cepheid, HADS, 2 EB
+  [359.5393, 61.2137],     # NGC 7790: 3 classical Cepheids, EB
+  [23.8818, 69.1654],      # W Vir, RRc
+  [244.21914, -22.95444],  # W Vir, 2 RRab, 2 RRc
+  [247.5684, 16.9185],     # RRab, HADS (sparse)
+  [325.1604, 21.0526],     # RRab, HADS
+  [294.7844, -11.6235],    # RRab, HADS
+  [272.7962, 5.4138],      # RRc, HADS
+  [299.9106, -8.1040],     # HADS, EB
+  [324.9591, 28.2514],     # HADS, EB
+  [314.6943, 1.7487],      # 2 HADS
+  [101.1036, 39.6335],     # HADS
+  [71.7295, 23.6525],      # HADS
+  [250.3996, 36.4635],     # M13: BL Her, W Vir, RR Lyrae (crowded)
+  [279.0947, -23.9026],    # M22: 2 BL Her, RR Lyrae, EB (crowded)
+  [276.1255, -24.8602],    # M28: W Vir, RR Lyrae, EB (crowded)
+]

@@ -1,0 +1,55 @@
+# A synthetic field with three periodic variables placed by hand, no Gaia input for any of them:
+# a contact binary (PHOEBE), a detached eclipsing binary (PHOEBE) and an RRab (MESA RSP, ~0.5-2 h to build).
+#   python argus_field.py examples/synthetic_variables.toml
+
+[field]
+ra = 294.7844
+dec = -11.6235
+block = 9
+mode = "synthetic"
+seed = 1
+name = "f294_784m11_623_vars"
+
+[night]
+date = "2026-07-19"
+
+[movie]
+bands = ["rho"]
+
+[[source]]
+generator = "W UMa"
+epoch = "start+0.05"     # a primary eclipse
+x = 30
+y = 30
+period = 0.35
+q = 0.4
+incl = 80
+teff1 = 5800
+teff2 = 5600
+fillout = 0.2
+G = 13.5
+
+[[source]]
+generator = "detached EB"
+epoch = "start+0.12"
+x = 70
+y = 70
+period = 1.2
+incl = 88
+teff1 = 6500
+teff2 = 5200
+r1 = 1.3
+r2 = 0.9
+G = 14.0
+
+[[source]]
+generator = "RR Lyrae"
+epoch = "start+0.1"      # a maximum
+x = 30
+y = 70
+mode = "RRab"
+period = 0.55
+G = 15.6               # M_G ~ +0.6 at 8 kpc through E(B-V) 0.19
+distance = 8000
+z = 0.001
+mass = 0.68

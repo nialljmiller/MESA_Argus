@@ -1,8 +1,15 @@
-"""One night of Argus on any pointing: Gaia field -> chosen variables modelled (MESA RSP / PHOEBE) -> movies.
+"""One night of Argus on any pointing: the field -> its sources modelled -> movies.
 
-    python argus_field.py --ra 8.8411 --dec 52.9981 --list                 # what is there, what can be modelled
-    python argus_field.py --ra 8.8411 --dec 52.9981 --select 1 --date auto # model star 1, best night, both bands
-    python argus_field.py --ra 278.2136 --dec -16.9417 --block 9 --select all --date auto
+    python argus_field.py examples/synthetic_transients.toml          # a run file (examples/run_template.toml: every key)
+    python argus_field.py examples/gaia_f294.toml --list              # gaia mode: what is there, what can be modelled
+    python argus_field.py examples/gaia_f294.toml --set movie.stride=10 --date 2026-07-19   # override any key
+    python argus_field.py --ra 8.8411 --dec 52.9981 --select 1 --date auto   # flags alone also work
+
+A run (mesa_argus/runconfig.py) is [field], [night], [[source]] and [movie]; values come from the command line, then
+the run file, then the defaults, and are all checked before any work starts. The run as made is written to
+outputs/<field>/run.toml. [[source]] entries place variables and transients from the generators in
+mesa_argus/sources (python -m mesa_argus.sources), in either mode: see place_sources(). The steps below are gaia mode;
+synthetic mode (synthetic()) replaces 1-4 with the real field's stars at random positions, all constant.
 
 Runs from any directory (data/, runs/, outputs/ are in the repo). Needs the network (VizieR, IRSA; PHOEBE passbands
 on first use), MESA built at mesa_work/build/bin/star, and config.toml (MESA colors data; [run] workers = MESA runs
@@ -35,7 +42,7 @@ at once).
    --start/--end (UT) restrict that. Weather is not modelled (median seeing, photometric sky).
 6. Movies (night_movie.py), one per band: ArgusSim scene and noise; SExtractor photometry on every exposure
    (defaults, neighbour masking, per-exposure zero point with a colour term). outputs/<field>/<field>_night_<band>.mp4
-   with its .photometry.csv (true and measured magnitudes per exposure). --models-only skips them.
+   with its .photometry.csv (true and measured magnitudes per exposure). [movie] models_only skips them.
 """
 from __future__ import annotations
 
@@ -54,6 +61,7 @@ Z_SUN = 0.0169
 MIN_PLX_SNR = 3.0  # parallax S/N for a parallax distance; below it, a period-luminosity distance (pulsators) or dropped (binaries)
 # period-Wesenheit relations, Milky Way, W = G - 1.90 (BP - RP) (Ripepi et al. 2019, A&A 625, A14, eq. 2 and Table 3)
 PW_RELATIONS = {"DCEP F": (-2.701, -3.320), "DCEP 1O": (-2.976, -4.095), "T2CEP": (-1.194, -2.381)}
+MAX_AIRMASS = 2.0  # [night] max_airmass
 TRY_RRD = False  # --try-rrd: attempt the double-mode search anyway (mesa_argus.rsp.accept_double_mode)
 
 
@@ -235,6 +243,8 @@ def show(rows, block_n=3):
 def choose(rows, select):
     ok = [i for i, r in enumerate(rows, 1) if r["model"]]
     if select is None:
+        if not sys.stdin.isatty():
+            raise SystemExit("[field] select is not set: give select = \"all\", \"none\" or [1, 3] (numbers from --list)")
         select = input(f"\nSimulate which? numbers from {ok} separated by commas, 'all', or blank for none: ").strip()
     if select in ("", "none"):
         return []
@@ -353,8 +363,9 @@ def physical(row, stars, ra, dec):
                            opacities="alpha-enhanced (a09)" if mh < -1.0 else "solar-scaled (gs98)", **notes_extra)), ""
 
 
-def night_times(ra, dec, date, site, start, end, max_airmass=2.0):
+def night_times(ra, dec, date, site, start, end, max_airmass=None):
     """BJD-like JD (UTC + light time ignored, < 10 min) of the 5-minute steps the field is observable on a night."""
+    max_airmass = MAX_AIRMASS if max_airmass is None else max_airmass
     import astropy.units as u
     from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_sun
     from astropy.time import Time
@@ -445,8 +456,9 @@ def nearest_night(ra, dec, date, site, start, end, min_minutes=180):
     raise SystemExit("never observable for 3 h from this site (dark, airmass <= 2)")
 
 
-def observable(ra, dec, date, site, start, end, max_airmass=2.0):
+def observable(ra, dec, date, site, start, end, max_airmass=None):
     """Minutes the field is dark (Sun < -18) at airmass <= max_airmass on the night of `date` (within the window)."""
+    max_airmass = MAX_AIRMASS if max_airmass is None else max_airmass
     import astropy.units as u
     from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_sun
     from astropy.time import Time
@@ -479,12 +491,178 @@ def bjd_tdb(t, ra, dec, site):
     return (t.tdb + t.light_travel_time(SkyCoord(ra * u.deg, dec * u.deg), location=loc)).jd
 
 
-# the parametric transients written in mesa_argus/transients.py (not sncosmo): what each is, and what its t0 means
-OWN_MODELS = {"afterglow": ("power law in time and frequency with a t^2 onset, observed frame, no redshift", "the burst"),
-              "microlensing": ("point lens, point or uniform-disc source, MESA template source SED; the source is not in "
-                               "the catalogue or the difference reference, as every transient", "closest approach"),
-              "dwarf_nova": ("steady accretion disc of time-varying Mdot plus the white-dwarf blackbody; no donor, bright "
-                             "spot or lines; the quiescent disc is only approximate", "the start of the rise")}
+def resolve_time(value, start, ra, dec, site):
+    """BJD_TDB of a run-file time: a number (BJD_TDB), "start+D" / "start-D" (days from the night's first observable
+    step), or an ISO UTC time."""
+    from astropy.time import Time
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    v = str(value).strip()
+    if v.startswith("start"):
+        return float(bjd_tdb(start, ra, dec, site)) + (float(v[5:]) if v[5:] else 0.0)
+    return float(bjd_tdb(Time(v, scale="utc"), ra, dec, site))
+
+
+def _catalogue_entry(path):
+    """Intensity-mean Gaia G, BP-RP and the G amplitude of a periodic model (pulsation.h5) as seen in the field: what
+    a catalogue would list for it (the movie calibrates against these, as against a Gaia star's)."""
+    import h5py
+
+    from mesa_argus import binary as B
+    from mesa_argus.dust import redden
+
+    with h5py.File(path) as f:
+        w, flux10, t, dm, ebv = f["wavelength"][:], f["flux"][:], f["time_days"][:], float(f.attrs["distance_modulus"]), \
+            float(f.attrs["ebv"])
+    obs = redden(w, flux10 * 10 ** (-0.4 * dm), ebv)
+    wt = np.gradient(t)  # time weights: the samples need not be evenly spaced
+    mags = {b: np.array([B.vega_mag(w, f_, b) for f_ in obs]) for b in ("G", "Gbp", "Grp")}
+    mean = {b: float(-2.5 * np.log10(np.sum(wt * 10 ** (-0.4 * m)) / np.sum(wt))) for b, m in mags.items()}
+    return mean["G"], mean["Gbp"] - mean["Grp"], float(np.ptp(mags["G"]))
+
+
+def place_sources(args, name, data, site, ebv, rng):
+    """Build every [[source]] of the run (mesa_argus.sources) and write data/<name>/sources.json, which the movie
+    reads. Labels: T1, T2, ... for transients, P1, P2, ... for periodic sources, in the order given; positions from x, y
+    (percent of the image; -1 random from `rng`). Transients are rebuilt every run (seconds); a periodic model (MESA
+    RSP, PHOEBE: minutes to hours) is cached in runs/rsp_<name>_<label> with the keys it was made from, and a run
+    asking for different keys under the same field and label is refused rather than given the old model."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from astropy.time import Time
+
+    import night_movie as movie
+    from mesa_argus import sources as S
+
+    night = night_times(args.ra, args.dec, args.date, site, args.start, args.end)
+    start = Time(night[0], format="jd", scale="utc")
+    start_bjd = float(bjd_tdb(start, args.ra, args.dec, site))
+    end_bjd = float(bjd_tdb(Time(night[-1], format="jd", scale="utc"), args.ra, args.dec, site)) + 10 / 1440
+    jobs, n = [], {"transient": 0, "periodic": 0}
+    for i, entry in enumerate(args.sources, 1):
+        g, p = S.validate(entry)
+        t_key = "t0" if g.timing == "transient" else "epoch"
+        p[f"{t_key}_bjd"] = resolve_time(p.pop(t_key), start, args.ra, args.dec, site)
+        x_pc, y_pc = (rng.uniform(0, 100) if v_ == -1 else v_ for v_ in (p.pop("x"), p.pop("y")))
+        p.pop("generator")
+        n[g.timing] += 1
+        label = f"{'T' if g.timing == 'transient' else 'P'}{n[g.timing]}"
+        out = Path("runs") / (f"transient_{name}_{label}" if g.timing == "transient" else f"rsp_{name}_{label}")
+        jobs.append(dict(i=i, g=g, p=p, label=label, out=out, x=x_pc, y=y_pc,
+                         field=S.Field(name, ebv, label, dict(source=-i)), entry=dict(entry)))
+
+    def build(j):
+        g, out = j["g"], j["out"]
+        spec = out / "spec.json"
+        key_ = json.dumps(dict(entry={k: v for k, v in j["entry"].items() if k not in ("x", "y")}, ebv=ebv,
+                               time=j["p"].get("epoch_bjd")), sort_keys=True, default=str)
+        if g.timing == "periodic" and (out / "pulsation.h5").exists():
+            if spec.exists() and json.loads(spec.read_text())["key"] == key_:
+                return json.loads(spec.read_text())["meta"]
+            raise SystemExit(f"{out} holds a model made from other keys than {j['label']}'s now: give the run another "
+                             f"name, or delete {out} to rebuild it")
+        out.mkdir(parents=True, exist_ok=True)
+        print(f"  {j['label']}: {g.name} ({g.engine}) …", flush=True)
+        meta = g.make(out, j["p"], j["field"])
+        if meta is not None and g.timing == "periodic":
+            spec.write_text(json.dumps(dict(key=key_, meta=meta), indent=1, default=float))
+        return meta
+
+    for j in jobs:  # one at a time: transients (fast) and generators that cannot share a process (PHOEBE)
+        if j["g"].timing == "transient" or not j["g"].parallel:
+            j["meta"] = build(j)
+    rest = [j for j in jobs if "meta" not in j]
+    if rest:  # e.g. MESA RSP models, side by side (mesa_argus.rsp shares the cores)
+        with ThreadPoolExecutor(int(__import__("mesa_argus.config", fromlist=["x"]).config()["run"]["workers"])) as ex:
+            for j, meta in zip(rest, ex.map(build, rest)):
+                j["meta"] = meta
+
+    rows = []
+    for j in jobs:
+        g, p, meta, label = j["g"], j["p"], j["meta"], j["label"]
+        if meta is None:
+            print(f"  {label}: {g.name}: no model ({j['out']} says why); left out of the field", flush=True)
+            continue
+        dx, dy = (j["x"] / 100 - 0.5) * 2 * movie.HALF, (j["y"] / 100 - 0.5) * 2 * movie.HALF  # block offsets (arcsec)
+        row = dict(label=label, source=-j["i"], generator=g.name, engine=meta.get("generator", g.engine), timing=g.timing,
+                   kind=meta["kind"], model=meta.get("model", g.name), params=meta["params"],
+                   reference=meta.get("reference", g.reference), x_percent=j["x"], y_percent=j["y"], dx=float(dx),
+                   dy=float(dy), ebv=ebv, keys={k: v for k, v in p.items() if not k.endswith("_bjd")})
+        if g.timing == "transient":
+            path = j["out"] / "transient.h5"
+            with __import__("h5py").File(path) as f:
+                first, last = float(f["time_days"][0]), float(f["time_days"][-1])
+            t0 = p["t0_bjd"]
+            if end_bjd - t0 > last:
+                raise SystemExit(f"{label} ({g.name}): the night ends {end_bjd - t0:.1f} d after t0, past the model's last "
+                                 f"step ({last:.1f} d)")
+            if first < 0 and start_bjd - t0 < first:  # a source that shines before t0 must not appear from nothing
+                raise SystemExit(f"{label} ({g.name}): the night starts {t0 - start_bjd:.2f} d before t0, before the "
+                                 f"model's first step ({first:.2f} d)")
+            row.update(file=str(path), t0_bjd=t0, z=float(meta.get("z", np.nan)), peak_days=float(meta.get("peak_days", np.nan)))
+            when = f"t0 BJD {t0:.4f} (night starts {start_bjd - t0:+.3f} d after t0)"
+        else:
+            path = j["out"] / "pulsation.h5"
+            G_, c_, amp = _catalogue_entry(path)
+            row.update(file=str(path), period=p["period"], epoch_bjd=p["epoch_bjd"], G=G_, bp_rp=c_, amp_G=amp)
+            when = f"P {p['period']:g} d, epoch BJD {p['epoch_bjd']:.4f}; catalogue G {G_:.2f}, BP-RP {c_:.2f}, amplitude {amp:.2f}"
+        rows.append(row)
+        print(f"  {label}: {meta['kind']} ({g.name}: {row['engine']}), {meta['params']}; {when}; at {j['x']:.1f}%, "
+              f"{j['y']:.1f}% of the image ({dx:+.1f}\", {dy:+.1f}\")", flush=True)
+    (data / "sources.json").write_text(json.dumps(rows, indent=1, default=float))
+    return rows
+
+
+def source_summary(rows):
+    """field_summary.md lines for the placed sources."""
+    if not rows:
+        return []
+    lines = ["## Placed sources", ""]
+    for v in rows:
+        lines += [f"**{v['label']}**: {v['kind']}, generator `{v['generator']}` ({v['engine']}; {v['reference']})", "",
+                  f"- {v['params']}"]
+        if v["timing"] == "transient":
+            lines.append(f"- t0 BJD_TDB {v['t0_bjd']:.5f}")
+        else:
+            lines.append(f"- period {v['period']:g} d, epoch BJD_TDB {v['epoch_bjd']:.5f}; as a catalogue would list it: G "
+                         f"{v['G']:.2f}, BP-RP {v['bp_rp']:.2f}, amplitude {v['amp_G']:.2f} mag")
+        lines += [f"- position {v['x_percent']:g}%, {v['y_percent']:g}% of the image from its lower left "
+                  f"({v['dx']:+.2f}\", {v['dy']:+.2f}\" from the centre)", ""]
+    lines += ["Transients are left out of the catalogue and the difference-image reference (the field before the event); "
+              "periodic sources are in both, at their intensity mean.", ""]
+    return lines
+
+
+def write_run(args, name, out):
+    """outputs/<name>/run.toml: the resolved run (every key; the night as used), to make this dataset again."""
+    from mesa_argus import runconfig as R
+
+    run = json.loads(json.dumps(args.run))
+    run["field"]["name"] = name
+    run["night"]["date"] = args.date
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "run.toml").write_text(R.dumps(run, f"argus_field.py run {name}: resolved (python argus_field.py "
+                                                f"{out / 'run.toml'} makes it again)"))
+
+
+def render(args, name, out, extra=()):
+    """One night_movie.py run per band, with the run's [movie] options."""
+    import night_movie as movie
+
+    write_run(args, name, out)
+    opts = []
+    for k in movie.MOVIE_OPTIONS:
+        v = args.max_airmass if k == "max_airmass" else args.movie.get(k)
+        if v is not None:
+            opts += [f"--{k.replace('_', '-')}", str(v)]
+    for band in ([] if args.models_only else args.bands):
+        mp4 = out / f"{name}_night_{band}.mp4"
+        cmd = [sys.executable, "night_movie.py", "--field", name, "--band", band, "-o", str(mp4), *extra, *opts] \
+            + (["--start", args.start] if args.start else []) + (["--end", args.end] if args.end else [])
+        print(f"rendering {band} -> {mp4} (log {mp4.with_suffix('.log')})", flush=True)
+        with open(mp4.with_suffix(".log"), "w") as log:
+            subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, check=True)
 
 
 def synthetic(args):
@@ -492,39 +670,15 @@ def synthetic(args):
     BP and RP -- placed uniformly at random within the same circle (--seed), all constant; the night, site, sky and
     Milky Way reddening (SFD at the centre) are those of the real position. No Gaia variable varies.
 
-    Transients (--transient, repeatable): MODEL:key=value,... Every transient takes
-        t0       the model's phase 0 (mesa_argus.transients): ISO UTC time (2026-07-20T05:30), or start+D / start-D days
-                 from the night's first dark, observable 5-minute step (required)
-        x, y     position in the shown image, percent of its width from the left and of its height from the bottom;
-                 default 50, 50 (the centre); -1: random (--seed)
-    MODEL an sncosmo source (python -m mesa_argus.transients --list), with
-        z        redshift (required)
-        M        rest-frame peak absolute magnitude (required), in `band` (sncosmo bandpass, default bessellb), `magsys`
-                 (default ab)
-        host_ebv host-galaxy E(B-V) (CCM89, R_V 3.1, rest frame; default 0)
-        version  sncosmo model version (default: sncosmo's)
-        anything else: the model's own parameter (e.g. x1, c for SALT2/3)
-    MODEL afterglow, a GRB optical afterglow (mesa_argus.transients.make_afterglow; t0 = the burst), with
-        peak     observed AB magnitude at 6400 A at t_peak (required)
-        t_peak   seconds after the burst (default 60); alpha, beta: decay and spectral indices (default 1.0, 0.66)
-    MODEL microlensing (make_microlensing; t0 = closest approach), with
-        tE, u0   Einstein time (days) and impact parameter (Einstein radii) (required)
-        base     the source's unmagnified rho (AB, after dust) (required); bp_rp: its intrinsic BP-RP (template) (required)
-        rho      source radius (Einstein radii; default 0, a point source); fs: source fraction of the baseline (default 1)
-    MODEL dwarf_nova (make_dwarf_nova; t0 = the start of the rise), with (all required)
-        d (pc), mdot_q, mdot_peak (Msun/yr), t_rise, plateau, tau_decay (days), r_out (disc outer radius, Rsun),
-        t_wd (K); optional m_wd (Msun, default 0.8), incl (deg, default 60)
-    e.g. --transient salt3:z=0.03,M=-19.3,x1=0,c=0,t0=start+0.2   --transient afterglow:peak=9,t0=start+0.0625,x=-1,y=-1
+    Sources ([[source]] in the run file, or --source): variables and transients placed in the field; see
+    place_sources() and python -m mesa_argus.sources.
     """
     import astropy.units as u
     from astropy.coordinates import SkyCoord
     from astropy.table import Table
-    from astropy.time import Time
     from argus_sim import skymap_shim as sh
 
     import night_movie as movie
-    from mesa_argus import transients as T
-
     if args.date == "auto":
         raise SystemExit("--date auto chooses a night for Gaia variables; give --date with --synthetic")
     real = field_name(args.ra, args.dec)
@@ -564,70 +718,7 @@ def synthetic(args):
           f"{int(np.sum((np.abs(sx) <= movie.HALF) & (np.abs(sy) <= movie.HALF)))} in the {args.block} x {args.block} block; "
           f"E(B-V) {ebv:.3f} (SFD)")
 
-    # transients
-    night = night_times(args.ra, args.dec, args.date, site, args.start, args.end)
-    start = Time(night[0], format="jd", scale="utc")
-    end_bjd = float(bjd_tdb(Time(night[-1], format="jd", scale="utc"), args.ra, args.dec, site)) + 10 / 1440
-    rows = []
-    for i, spec in enumerate(args.transient, 1):
-        model, _, rest = spec.partition(":")
-        kv = dict(item.split("=", 1) for item in rest.split(",") if item)
-        required = {"afterglow": ("t0", "peak"), "microlensing": ("t0", "tE", "u0", "base", "bp_rp"),
-                    "dwarf_nova": ("t0", "d", "mdot_q", "mdot_peak", "t_rise", "plateau", "tau_decay", "r_out", "t_wd")
-                    }.get(model, ("t0", "z", "M"))
-        for key in required:
-            if key not in kv:
-                raise SystemExit(f"--transient {spec}: {key}= is required")
-        t0 = kv.pop("t0")
-        if t0.startswith("start"):
-            t0_bjd = float(bjd_tdb(start, args.ra, args.dec, site)) + float(t0[5:])
-        else:
-            t0_bjd = float(bjd_tdb(Time(t0, scale="utc"), args.ra, args.dec, site))
-        x_pc, y_pc = float(kv.pop("x", 50.0)), float(kv.pop("y", 50.0))
-        x_pc, y_pc = (rng.uniform(0, 100) if v_ == -1 else v_ for v_ in (x_pc, y_pc))
-        if not (0 <= x_pc <= 100 and 0 <= y_pc <= 100):
-            raise SystemExit(f"--transient {spec}: x and y are percentages of the image (0-100), or -1 for random")
-        dx, dy = (x_pc / 100 - 0.5) * 2 * movie.HALF, (y_pc / 100 - 0.5) * 2 * movie.HALF  # block offsets (arcsec)
-        label = f"T{i}"
-        path = Path("runs") / f"transient_{name}_{label}" / "transient.h5"
-        if model in OWN_MODELS:
-            z, M, band, magsys, host_ebv = float("nan"), float("nan"), "", "", 0.0
-            g_ = lambda key, default=None: float(kv.pop(key)) if default is None or key in kv else default  # noqa: E731
-            if model == "afterglow":
-                a = T.make_afterglow(path, t0_bjd, g_("peak"), ebv, g_("t_peak", 60.0), g_("alpha", 1.0), g_("beta", 0.66))
-            elif model == "microlensing":
-                a = T.make_microlensing(path, t0_bjd, g_("tE"), g_("u0"), g_("base"), g_("bp_rp"), ebv, g_("rho", 0.0),
-                                        g_("fs", 1.0))
-            else:
-                a = T.make_dwarf_nova(path, t0_bjd, g_("d"), g_("mdot_q"), g_("mdot_peak"), g_("t_rise"), g_("plateau"),
-                                      g_("tau_decay"), g_("r_out"), g_("t_wd"), ebv, g_("m_wd", 0.8), g_("incl", 60.0))
-            if kv:
-                raise SystemExit(f"--transient {spec}: unknown keys {sorted(kv)}")
-        else:
-            z, M = float(kv.pop("z")), float(kv.pop("M"))
-            band, magsys = kv.pop("band", "bessellb"), kv.pop("magsys", "ab")
-            host_ebv, version = float(kv.pop("host_ebv", 0.0)), kv.pop("version", None)
-            params = {k: float(v) for k, v in kv.items()}
-            a = T.make_sncosmo(path, model, z, t0_bjd, M, ebv, band, magsys, params, host_ebv, version)
-        with __import__("h5py").File(path) as f:
-            first, last = float(f["time_days"][0]), float(f["time_days"][-1])
-        start_bjd = float(bjd_tdb(start, args.ra, args.dec, site))
-        if first < 0 and start_bjd - t0_bjd < first:  # a source that shines before t0 must not appear from nothing
-            raise SystemExit(f"--transient {spec}: the night starts {t0_bjd - start_bjd:.2f} d before t0, before the model's "
-                             f"first step ({first:.2f} d)")
-        if end_bjd - t0_bjd > last:
-            raise SystemExit(f"--transient {spec}: the night ends {end_bjd - t0_bjd:.1f} d after t0, past the model's last "
-                             f"step ({last:.1f} d)")
-        rows.append(dict(label=label, file=str(path), x_percent=x_pc, y_percent=y_pc, dx=float(dx), dy=float(dy), kind=a["kind"], model=a["model"],
-                         model_version=a["model_version"], z=z, t0_bjd=t0_bjd, peak_absmag=M, peak_band=band, magsys=magsys,
-                         host_ebv=host_ebv, params=a["params"], peak_days=a["peak_days"], ebv=ebv, reference=a["reference"],
-                         generator=a["generator"]))
-        what = a["params"] if model in OWN_MODELS else f"z {z:g}, M {M:g} ({band}, {magsys}), {a['params']}"
-        print(f"  {label}: {a['kind']} ({a['model']} {a['model_version']}), {what}; t0 BJD {t0_bjd:.4f} (night starts "
-              f"{float(bjd_tdb(start, args.ra, args.dec, site)) - t0_bjd:+.3f} d after t0; "
-              f"{'peak' if model in OWN_MODELS else 'B maximum'} at t0 {a['peak_days']:+.4f} d); "
-              f"at {x_pc:.1f}%, {y_pc:.1f}% of the image ({dx:+.1f}\", {dy:+.1f}\")")
-    (data / "transients.json").write_text(json.dumps(rows, indent=1))
+    rows = place_sources(args, name, data, site, ebv, rng)
     (data / "followed.json").write_text("{}")
     (data / "field.json").write_text(json.dumps(dict(
         name=f"synthetic, seed {args.seed}", centre=[args.ra, args.dec], tile=tile, block=list(block), block_n=args.block,
@@ -639,60 +730,76 @@ def synthetic(args):
              f"UT window {args.start or 'dusk'}-{args.end or 'dawn'}", "",
              f"{n} stars: the G, BP and RP of every Gaia DR3 source within {RADIUS_DEG} deg of this position, at positions "
              f"drawn uniformly at random in the same circle (seed {args.seed}); every star constant (colour-matched MESA SED "
-             f"scaled to G). Milky Way E(B-V) {ebv:.3f} (SFD at the centre) for the transients.", "", "## Transients", ""]
-    for v in rows:
-        if v["model"] in OWN_MODELS:
-            what, t0_is = OWN_MODELS[v["model"]]
-            lines += [f"**{v['label']}**: {v['kind']}, {what} ({v['reference']}; mesa_argus/transients.py, a parametric "
-                      "model written for this repo, not from sncosmo)", "", f"- {v['params']}",
-                      f"- t0 ({t0_is}) BJD_TDB {v['t0_bjd']:.5f}"]
-        else:
-            lines += [f"**{v['label']}**: {v['kind']}, sncosmo `{v['model']}` {v['model_version']} ({v['reference']})", "",
-                      f"- z {v['z']}, peak absolute magnitude {v['peak_absmag']} ({v['peak_band']}, {v['magsys']}; sncosmo's "
-                      f"default cosmology, WMAP9); host E(B-V) {v['host_ebv']}; {v['params']}",
-                      f"- t0 (model phase 0) BJD_TDB {v['t0_bjd']:.5f}; rest-frame B maximum at t0 {v['peak_days']:+.2f} d (observer frame)"]
-        lines += [
-                  f"- position {v['x_percent']:g}%, {v['y_percent']:g}% of the image from its lower left "
-                  f"({v['dx']:+.2f}\", {v['dy']:+.2f}\" from the centre)", ""]
-    lines += ["The difference-image reference leaves the transients out (the field before the event). Argus instrument, "
-              "PSF, sky, noise and photometry are as in docs/ASSUMPTIONS.md.", "", "## Outputs", ""]
+             f"scaled to G). Milky Way E(B-V) {ebv:.3f} (SFD at the centre) for the placed sources.", ""]
+    lines += source_summary(rows)
+    lines += ["Argus instrument, PSF, sky, noise and photometry are as in docs/ASSUMPTIONS.md.", "", "## Outputs", ""]
     lines += [f"- {band}: `{out / f'{name}_night_{band}.mp4'}`" for band in args.bands]
     (out / "field_summary.md").write_text("\n".join(lines) + "\n")
     print(f"summary: {out / 'field_summary.md'}")
-    for band in ([] if args.models_only else args.bands):
-        mp4 = out / f"{name}_night_{band}.mp4"
-        cmd = [sys.executable, "night_movie.py", "--field", name, "--band", band, "-o", str(mp4)] \
-            + (["--start", args.start] if args.start else []) + (["--end", args.end] if args.end else [])
-        print(f"rendering {band} -> {mp4} (log {mp4.with_suffix('.log')})", flush=True)
-        with open(mp4.with_suffix(".log"), "w") as log:
-            subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, check=True)
+    render(args, name, out)
+
+
+def arguments(argv=None):
+    """The run: defaults <- run file <- command line (mesa_argus.runconfig), as an argparse-like namespace."""
+    from types import SimpleNamespace
+
+    from mesa_argus import runconfig as R
+
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("run", nargs="?", type=Path, help="run file (TOML; examples/run_template.toml lists every key)")
+    p.add_argument("--ra", type=float, help="[field] ra: deg (ICRS)")
+    p.add_argument("--dec", type=float, help="[field] dec: deg (ICRS)")
+    p.add_argument("--block", type=int, help="[field] block: minipixes across the block (odd, up to 9; 9 = 253\")")
+    p.add_argument("--synthetic", action="store_true", help="[field] mode = \"synthetic\"")
+    p.add_argument("--seed", type=int, help="[field] seed")
+    p.add_argument("--name", help="[field] name")
+    p.add_argument("--select", help="[field] select: numbers from --list (1,3), 'all' or 'none'")
+    p.add_argument("--try-rrd", action="store_true", help="[field] try_rrd")
+    p.add_argument("--date", help="[night] date: YYYY-MM-DD, or 'auto' (gaia mode)")
+    p.add_argument("--start", help="[night] start: UT HH:MM")
+    p.add_argument("--end", help="[night] end: UT HH:MM")
+    p.add_argument("--site", choices=list(SITES), help="[night] site")
+    p.add_argument("--bands", nargs="+", choices=["beta", "rho"], help="[movie] bands")
+    p.add_argument("--models-only", action="store_true", help="[movie] models_only")
+    p.add_argument("--source", action="append", default=[], metavar="'{generator = \"GRB\", peak = 9, t0 = \"start+0.06\"}'",
+                   help="a [[source]] as a TOML inline table (repeatable; replaces the run file's sources)")
+    p.add_argument("--set", action="append", default=[], metavar="SECTION.KEY=VALUE",
+                   help="any run-file key, e.g. --set movie.stride=10 (repeatable)")
+    p.add_argument("--list", action="store_true", help="gaia mode: only list the variables in the block")
+    a = p.parse_args(argv)
+    run = R.load(a.run) if a.run else {}
+    over = {}
+    for flag, dotted in (("ra", "field.ra"), ("dec", "field.dec"), ("block", "field.block"), ("seed", "field.seed"),
+                         ("name", "field.name"), ("select", "field.select"), ("date", "night.date"),
+                         ("start", "night.start"), ("end", "night.end"), ("site", "night.site"), ("bands", "movie.bands")):
+        if getattr(a, flag) is not None:
+            over[dotted] = getattr(a, flag)
+    for flag, dotted, value in (("synthetic", "field.mode", "synthetic"), ("try_rrd", "field.try_rrd", True),
+                                ("models_only", "movie.models_only", True)):
+        if getattr(a, flag):
+            over[dotted] = value
+    for item in a.set:
+        k, eq, v = item.partition("=")
+        if not eq:
+            raise SystemExit(f"--set {item}: give SECTION.KEY=VALUE")
+        over[k.strip()] = R.parse_value(v.strip())
+    if a.source:
+        over["source"] = [R.parse_value(t if t.strip().startswith("{") else "{" + t + "}") for t in a.source]
+    cfg = R.resolve(R.merge(run, over))
+    f, n, m = cfg["field"], cfg["night"], cfg["movie"]
+    select = f["select"]
+    select = ",".join(str(i) for i in select) if isinstance(select, list) else (select or None)
+    return SimpleNamespace(run=cfg, ra=f["ra"], dec=f["dec"], block=f["block"], synthetic=f["mode"] == "synthetic",
+                           seed=f["seed"], name=f["name"] or None, select=select, try_rrd=f["try_rrd"], list=a.list,
+                           date=n["date"] or None, start=n["start"] or None, end=n["end"] or None, site=n["site"],
+                           max_airmass=n["max_airmass"], bands=m["bands"], models_only=m["models_only"],
+                           movie=m, sources=cfg["source"])
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--ra", type=float, required=True, help="deg (ICRS)")
-    p.add_argument("--dec", type=float, required=True, help="deg (ICRS)")
-    p.add_argument("--date", default=None, help="local date the night starts (YYYY-MM-DD); default today. If the field "
-                                               "is not up that night, the nearest night it is up is used. 'auto': "
-                                               "the night (within half a year) on which the chosen variables change most")
-    p.add_argument("--start", default=None, help="UT HH:MM (default: dusk / when the field rises)")
-    p.add_argument("--end", default=None, help="UT HH:MM (default: dawn / when the field sets)")
-    p.add_argument("--site", choices=list(SITES), default="argus", help="argus = ArgusSim's site; sro = Sierra Remote Obs.")
-    p.add_argument("--bands", nargs="+", default=["beta", "rho"], choices=["beta", "rho"])
-    p.add_argument("--select", default=None, help="variables to model: numbers from the list, 'all', or 'none'")
-    p.add_argument("--name", default=None, help="field name (default from the coordinates)")
-    p.add_argument("--list", action="store_true", help="only list the variables in the block")
-    p.add_argument("--models-only", action="store_true", help="make the MESA models, do not render")
-    p.add_argument("--try-rrd", action="store_true", help="attempt double-mode RR Lyrae (no stable solution found so far)")
-    p.add_argument("--block", type=int, default=3, help="minipixes across the block (odd, up to 9; 9 = 253\")")
-    p.add_argument("--synthetic", action="store_true", help="a synthetic field: the real field's Gaia G and BP-RP at "
-                                                            "random positions, every star constant (see synthetic())")
-    p.add_argument("--seed", type=int, default=1, help="--synthetic: seed of the star positions and transient placement")
-    p.add_argument("--transient", action="append", default=[], metavar="MODEL:key=value,...",
-                   help="--synthetic: a transient from sncosmo (repeatable); see synthetic()")
-    args = p.parse_args(argv)
-    global TRY_RRD
-    TRY_RRD = args.try_rrd
+    args = arguments(argv)
+    global TRY_RRD, MAX_AIRMASS
+    TRY_RRD, MAX_AIRMASS = args.try_rrd, args.max_airmass
 
     import os
 
@@ -701,8 +808,6 @@ def main(argv=None):
         raise SystemExit("no runs/*_sed/seds.h5: run the SED tracks first (python -m mesa_argus run argus_sim_seds), or copy runs/*_sed/seds.h5 from a machine that has them")
     if args.synthetic:
         return synthetic(args)
-    if args.transient:
-        raise SystemExit("--transient needs --synthetic")
     name = args.name or field_name(args.ra, args.dec)
     data, out = Path("data") / name, Path("outputs") / name
     site = SITES[args.site]
@@ -846,20 +951,14 @@ def main(argv=None):
             if q.get(key):
                 lines.append(f"- {key.replace('_', ' ')}: {q[key]}")
         lines.append("")
+    placed = place_sources(args, name, data, site, reddening(args.ra, args.dec), np.random.default_rng(args.seed))
+    lines += source_summary(placed)
     lines += ["## Outputs", ""] + [f"- {band}: `{out / f'{name}_night_{band}.mp4'}`" for band in args.bands]
     lines += ["", "Every other star is constant (Gaia G and BP-RP -> colour-matched MESA SED). Argus instrument, PSF, sky, "
               "noise and photometry are as in docs/ASSUMPTIONS.md."]
     (out / "field_summary.md").write_text("\n".join(lines) + "\n")
     print(f"summary: {out / 'field_summary.md'}")
-
-    for band in ([] if args.models_only else args.bands):
-        mp4 = out / f"{name}_night_{band}.mp4"
-        cmd = [sys.executable, "night_movie.py", "--field", name, "--band", band, "--highlight", str(len(followed)),
-               "-o", str(mp4)] + (["--start", args.start] if args.start else []) + (["--end", args.end] if args.end else [])
-        print(f"rendering {band} -> {mp4} (log {mp4.with_suffix('.log')})", flush=True)
-        with open(mp4.with_suffix(".log"), "w") as log:
-            subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, check=True)
-
+    render(args, name, out, ["--highlight", str(len(followed))])
 
 if __name__ == "__main__":
     main()

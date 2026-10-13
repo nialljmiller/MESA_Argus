@@ -334,11 +334,66 @@ def nss_route(veb, nss, teff_gsp):
 
 
 # ---------------------------------------------------------------- the model
+def component_seds(p, contact, mh=0.0):
+    """Each component's SED at 10 pc (MESA colors' Kurucz surface flux at its Teff, log g, [M/H], x (R / 10 pc)^2),
+    masses from the main-sequence Teff-mass relation (the secondary q x the primary when p has q only for a contact
+    system). Returns wavelength, [f1, f2], R1, R2 (Rsun), M1, M2 (Msun)."""
+    r1, r2 = p["requiv1"], (p["requiv2"] if "requiv2" in p and not contact else p["requiv1"] * p["q"] ** 0.46)
+    if contact:  # PHOEBE's constrained secondary radius
+        b = make_bundle(p, [0.0], True, LOW_TRIANGLES)
+        r2 = b.get_value("requiv@secondary@component")
+    logg = lambda m, r: np.log10(G_CGS * m * MSUN / (r * RSUN) ** 2)  # noqa: E731
+    m1 = p.get("m1") or ms_mass(p["teff1"])
+    m2 = p.get("m2") or m1 * p["q"]
+    w, s1 = surface_sed(p["teff1"], logg(m1, r1), mh)
+    _, s2 = surface_sed(p["teff2"], logg(m2, r2), mh)
+    return w, [s * (r * RSUN / (10 * PC)) ** 2 for s, r in ((s1, r1), (s2, r2))], r1, r2, m1, m2
+
+
+def orbit_seds(p, contact, w, f10):
+    """One orbit of system SEDs from PHOEBE's visible flux of each component (module docstring). Returns phases
+    (0 = primary eclipse), SEDs, and the time of maximum light after the primary eclipse (days)."""
+    phases = np.linspace(0, 1, N_FINE + 1)
+    comp = component_fluxes(p, phases, contact)
+    lam_bp, lam_rp = pivot("Gbp"), pivot("Grp")
+    x = np.clip((w - lam_bp) / (lam_rp - lam_bp), 0, 1)
+    seds = np.zeros((len(phases), len(w)))
+    for c, f in zip(("primary", "secondary"), f10):
+        wb = comp[c]["BP"] / np.median(comp[c]["BP"])
+        wr = comp[c]["RP"] / np.median(comp[c]["RP"])
+        seds += (wb[:, None] * (1 - x)[None, :] + wr[:, None] * x[None, :]) * f[None, :]
+    light = comp["primary"]["RP"] + comp["secondary"]["RP"]
+    return phases, seds, phases[int(np.argmax(light))] * p["period"]
+
+
+def write_orbit(out_dir, w, seds, time_days, attrs):
+    """out_dir/pulsation.h5, the RSP pulsators' format: one cycle of SEDs (f_lambda at 10 pc) against time."""
+    import h5py
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with h5py.File(out_dir / "pulsation.h5", "w") as f:
+        f.attrs.update(**attrs, flux_units="erg s^-1 cm^-2 A^-1 (f_lambda at 10 pc)")
+        f.create_dataset("wavelength", data=w)
+        f.create_dataset("flux", data=seds, compression="gzip", compression_opts=4)
+        f.create_dataset("time_days", data=time_days)
+
+
+def contact_requiv(period, q, sma, fillout):
+    """The primary's equivalent radius (Rsun) of a contact system with PHOEBE's fillout factor (0: the inner critical
+    surface, 1: the outer)."""
+    b = _phoebe().default_binary(contact_binary=True)
+    for k, v in (("period@binary", period), ("q@binary", q), ("sma@binary", sma)):
+        b.set_value(k, v)
+    b.flip_constraint("pot@contact_envelope", solve_for="requiv@primary")
+    b.flip_constraint("fillout_factor", solve_for="pot")
+    b.set_value("fillout_factor@contact_envelope@component", fillout)
+    b.run_delayed_constraints()
+    return float(b.get_value("requiv@primary@component"))
+
+
 def model_binary(target, out_dir, field_dm, ebv, mh=0.0):
     """Model one eclipsing binary; write out_dir/pulsation.h5. target: dict with veb (row as dict), nss (row as dict
     or None), teff_gsp, logg_gsp, G (Gaia mean G). Returns (ok, notes)."""
-    import h5py
-
     from .dust import redden
 
     veb, nss = target["veb"], target.get("nss")
@@ -387,16 +442,7 @@ def model_binary(target, out_dir, field_dm, ebv, mh=0.0):
         return False, dict(reason=f"does not reproduce Gaia's eclipses: rms {rms:.4f} mag > {tol:.4f}", **notes)
 
     # component SEDs (surface flux x (R / 10 pc)^2) and the distance check at maximum light (spheres)
-    r1, r2 = p["requiv1"], (p["requiv2"] if "requiv2" in p and not contact else p["requiv1"] * p["q"] ** 0.46)
-    if contact:  # PHOEBE's constrained secondary radius
-        b = make_bundle(p, [0.0], True, LOW_TRIANGLES)
-        r2 = b.get_value("requiv@secondary@component")
-    logg = lambda m, r: np.log10(G_CGS * m * MSUN / (r * RSUN) ** 2)  # noqa: E731
-    m1 = ms_mass(p["teff1"])
-    m2 = m1 * p["q"]
-    w, s1 = surface_sed(p["teff1"], logg(m1, r1), mh)
-    _, s2 = surface_sed(p["teff2"], logg(m2, r2), mh)
-    f10 = [s * (r * RSUN / (10 * PC)) ** 2 for s, r in ((s1, r1), (s2, r2))]
+    w, f10, r1, r2, m1, m2 = component_seds(p, contact, mh)
     obs = redden(w, (f10[0] + f10[1]) * 10 ** (-0.4 * field_dm), ebv)
     g_model = vega_mag(w, obs, "G")
     notes["distance_check"] = (f"model G {g_model:.2f} at the parallax distance vs Gaia {target['G']:.2f} "
@@ -407,28 +453,13 @@ def model_binary(target, out_dir, field_dm, ebv, mh=0.0):
     f10 = [f * scale for f in f10]
 
     # one orbit of SEDs
-    phases = np.linspace(0, 1, N_FINE + 1)
-    comp = component_fluxes(p, phases, contact)
-    lam_bp, lam_rp = pivot("Gbp"), pivot("Grp")
-    x = np.clip((w - lam_bp) / (lam_rp - lam_bp), 0, 1)
-    seds = np.zeros((len(phases), len(w)))
-    for c, f in zip(("primary", "secondary"), f10):
-        wb = comp[c]["BP"] / np.median(comp[c]["BP"])
-        wr = comp[c]["RP"] / np.median(comp[c]["RP"])
-        seds += (wb[:, None] * (1 - x)[None, :] + wr[:, None] * x[None, :]) * f[None, :]
-    light = comp["primary"]["RP"] + comp["secondary"]["RP"]
-    t_max = phases[int(np.argmax(light))] * period
+    phases, seds, t_max = orbit_seds(p, contact, w, f10)
     t_ecl1 = float(veb["TimeRef"]) + 2455197.5 + float(veb["PhaseE1"]) * period  # BJD (TCB) of a primary eclipse
-    out_dir.mkdir(parents=True, exist_ok=True)
-    with h5py.File(out_dir / "pulsation.h5", "w") as f:
-        f.attrs.update(label=out_dir.name, kind="EB", gaia_source=int(target["source"]), gaia_period=period,
-                       gaia_epoch_bjd=t_ecl1 + t_max, nonlinear_period=period, distance_modulus=field_dm, ebv=ebv,
-                       mass=m1, mass2=m2, teff1=p["teff1"], teff2=p["teff2"], R1=r1, R2=r2, incl=p["incl"], q=p["q"],
-                       sma=p["sma"], ecc=p.get("ecc", 0.0), contact=bool(contact), route=notes["route"], brightness_scale=scale,
-                       flux_units="erg s^-1 cm^-2 A^-1 (f_lambda at 10 pc)")
-        f.create_dataset("wavelength", data=w)
-        f.create_dataset("flux", data=seds, compression="gzip", compression_opts=4)
-        f.create_dataset("time_days", data=phases * period)
+    write_orbit(out_dir, w, seds, phases * period, dict(
+        label=out_dir.name, kind="EB", gaia_source=int(target["source"]), gaia_period=period,
+        gaia_epoch_bjd=t_ecl1 + t_max, nonlinear_period=period, distance_modulus=field_dm, ebv=ebv,
+        mass=m1, mass2=m2, teff1=p["teff1"], teff2=p["teff2"], R1=r1, R2=r2, incl=p["incl"], q=p["q"],
+        sma=p["sma"], ecc=p.get("ecc", 0.0), contact=bool(contact), route=notes["route"], brightness_scale=scale))
     notes.update(params={k: (round(v, 5) if isinstance(v, float) else v) for k, v in p.items()}, M1=round(m1, 3),
                  M2=round(m2, 3), R1=round(r1, 3), R2=round(r2, 3), epoch_max_light_bjd=t_ecl1 + t_max,
                  masses="main-sequence Teff-mass relation (Pecaut & Mamajek 2013, table 2022.04.16)" +

@@ -1,0 +1,69 @@
+# Every key of a run file, with its default. Copy this, delete what you don't need (anything left out takes the
+# default shown), and run:   python argus_field.py my_run.toml
+# Any key can be overridden on the command line:   python argus_field.py my_run.toml --set movie.stride=10
+# The run as actually made (every key, the night as used) is written to outputs/<field>/run.toml.
+
+[field]
+ra = 294.7844             # deg, ICRS (required)
+dec = -11.6235            # deg, ICRS (required)
+block = 3                 # minipixes across the block shown: odd, 1-9 (3 = 84", 9 = 253")
+mode = "gaia"             # "gaia": the real field, its catalogued variables modelled as you select;
+                          # "synthetic": the real field's stars (Gaia G, BP, RP) at random positions, all constant
+seed = 1                  # synthetic: star positions; any source with x or y = -1: its random position
+name = ""                 # default: from the coordinates (f294_784m11_623), + _syn<seed> for synthetic fields
+select = ""               # gaia: the catalogued variables to model: "all", "none" or [1, 3] (numbers from --list);
+                          # unset: asked (interactive runs only)
+try_rrd = false           # gaia: attempt double-mode RR Lyrae (no stable solution found so far)
+
+[night]
+date = ""                 # local date the night starts, YYYY-MM-DD (default today; the nearest night the field is
+                          # up if it is not); gaia mode: "auto" = the night the modelled variables change most
+start = ""                # UT HH:MM (default: dusk / when the field rises)
+end = ""                  # UT HH:MM (default: dawn / when the field sets)
+site = "argus"            # "argus": ArgusSim's site; "sro": Sierra Remote Observatories
+max_airmass = 2.0
+
+[movie]
+bands = ["beta", "rho"]   # one movie per band (the exposure panel is always the beta/rho colour composite)
+models_only = false       # build the models, do not render
+stride = 1                # render every Nth exposure (photometry uses all)
+seed = 3                  # noise
+exptime = 60.0            # s
+# seeing = 1.0            # zenith FWHM (arcsec); default: ArgusSim's seasonal site median for the date
+field_angle = 1.44        # deg from the optical axis (sets the PSF)
+area = 8.0                # side (arcmin) of the simulated area (kernel fit and zero point)
+fps = 24.0
+dpi = 100
+kernel_half = 3           # difference-imaging kernel half-width (pixels)
+kernel_clip = 3.0         # kernel fit: reject pixels beyond this many sigma (0: none)
+kernel_stamps = 20.0      # kernel fit only on stamps around sources this many sigma above sky (0: all pixels)
+
+# Sources placed in the field: any number of [[source]] tables, in either mode. Every source takes a generator,
+# a position (x, y: percent of the image from its lower left; default 50, 50; -1 random) and a time: t0 for
+# transients, epoch for periodic sources (ISO UTC "2026-07-20T05:30", "start+0.1" days from the night's start, or a
+# BJD_TDB number). The rest are the generator's own keys:   python -m mesa_argus.sources   lists them all.
+#
+# Transients: supernova (sncosmo), GRB, microlensing, dwarf nova.
+# Periodic: RR Lyrae, Cepheid, Type II Cepheid, HADS (MESA RSP); W UMa, detached EB (PHOEBE).
+
+[[source]]
+generator = "supernova"
+t0 = "start+0.2"
+x = 50
+y = 50
+model = "salt3"
+z = 0.02
+M = -19.3
+params = {x1 = 0.0, c = 0.0}
+
+[[source]]
+generator = "RR Lyrae"
+epoch = "start+0.1"
+x = -1
+y = -1
+mode = "RRab"
+period = 0.55
+G = 15.6
+distance = 8000
+z = 0.001
+mass = 0.68
