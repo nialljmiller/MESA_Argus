@@ -1,38 +1,32 @@
 #!/usr/bin/env python3
-"""Movie: one night of Argus 60 s exposures on a 3x3 HDPS-minipix block of M3's core.
+"""One night of Argus 60 s exposures on a field: the movie (CMD, colour exposure, difference image, light curves,
+SEDs) and the photometry CSV. argus_field.py prepares a field and calls this; it can also be run on its own:
 
-    python m3_night_movie.py                          # -> outputs/m3/m3_night.mp4
-    python m3_night_movie.py --stride 4 -o test.mp4   # every 4th exposure, for a quick look
+    python night_movie.py --field f294_784m11_623 --band rho              # -> outputs/<field>/<field>_night_rho.mp4
+    python night_movie.py --field f294_784m11_623 --stride 10 -o outputs/f294_784m11_623/test.mp4   # quick look
 
-M3 (NGC 5272) has ~240 RR Lyrae, more than any other globular cluster; this 84" block of its core
-holds 42 of them among ~1,550 Gaia DR3 sources.
+A field is a folder data/<field>/ (written by argus_field.py: field.json, the stars, followed.json, transients.json),
+or one of the hand-made fields in FIELDS below (M3, M15, two RR Lyrae fields).
 
-Variability comes only from MESA. The followed pulsators -- four RRab and two RRc -- are MESA RSP
-(radial stellar pulsation) models (mesa_argus.rsp): M3 composition and mass, tuned so each pulsates
-in its own mode at its Gaia period; the SED of every RSP step (<= 25 s apart) comes from the MESA
-colors module. Each model is phased to its star's Gaia epoch of maximum and period, so the movie is
-a prediction for the chosen night; amplitudes, shapes, colours and spectra are the models'. Every
-other star -- including the other Gaia-classified variables and a 15 d Type II Cepheid that RSP
-could not model stably -- is constant at its Gaia mean, with the MESA SED (MESA_ARGUS runs/*_sed)
-whose Gaia BP-RP matches its colour, scaled to its G. In the crowded core Gaia misses faint stars
-and blends BP/RP colours: the unresolved glow is underestimated and blended colours fall back to
-the outer cluster's colour at the same G.
+Sources: every star is an SED seen through ArgusSim. Constant stars are the MESA SED (runs/*_sed) whose Gaia BP-RP
+matches their colour, scaled to their G. Followed pulsators are MESA RSP models and eclipsing binaries PHOEBE models
+(runs/rsp_<field>_<label>/pulsation.h5), phased to their Gaia period and epoch, so the movie is a prediction for the
+night. Transients (mesa_argus.transients) are SEDs against time since their t0.
 
-Observing (from ArgusSim unless noted): McDonald, the night of --date while M3 is above --max-airmass and the
-Sun below -18 deg; 60 s exposures in 15-min ratchets on UTC quarter hours, the last minute a reset. Sky per
-exposure from ArgusSim's Observatory model (airglow, zodiacal light, starlight, Moon, site light); seeing the
-site's seasonal median scaled to each exposure's airmass (X^0.6); real airmass in the source extinction.
-Assumed here: field angle 1.44 deg (area median of the field) all night, continuous coverage by one
-telescope, transparency 1. Each exposure is a synthetic image (every star's ArgusSim PSF at its sub-pixel
-position, sky, Poisson and read noise, full-well clipping); magnitudes are measured from it with SExtractor
-(mesa_argus.photometry). The difference panel is display only. Full list of assumptions: outputs/m3/ASSUMPTIONS.md.
+Observing (from ArgusSim unless noted): the night of --date while the field is above --max-airmass and the Sun below
+-18 deg; 60 s exposures in 15-min ratchets on UTC quarter hours, the last minute a reset. Sky per exposure from
+ArgusSim's Observatory model (airglow, zodiacal light, starlight, Moon, site light); seeing the site's seasonal median
+scaled to each exposure's airmass (X^0.6); real airmass in the source extinction. Assumed here: field angle 1.44 deg
+(area median of the field) all night, continuous coverage by one telescope, transparency 1. Each exposure is a
+synthetic image (every star's ArgusSim PSF at its sub-pixel position, sky, Poisson and read noise, full-well
+clipping); magnitudes are measured from it with SExtractor (SEP, mesa_argus.photometry). The difference panel is
+display only. Full list of assumptions: docs/ASSUMPTIONS.md.
 """
 
 from __future__ import annotations
 
 import argparse
 import copy
-import glob
 import json
 from pathlib import Path
 import warnings
@@ -57,11 +51,13 @@ from argus_sim import ABPhot, SpectralSky, SystemThroughput, ZemaxPSF  # noqa: E
 from argus_sim import c as ARGUS_CONFIG  # noqa: E402
 from argus_sim import skymap_shim as sh  # noqa: E402
 
-from plot_sed_observation import BANDS, COLORS, FLAM, SYMBOLS, apply_style, system_response  # noqa: E402
+from mesa_argus.argus import BANDS, COLORS, FLAM, SYMBOLS, apply_style, system_response  # noqa: E402
+from mesa_argus.seds import Templates  # noqa: E402
 
 iers.conf.auto_download = False
-# per cluster: Gaia data folder, cluster centre, HDPS tile and 3x3 block centre, default night, site override
-CLUSTERS = {
+# hand-made fields: Gaia data folder, centre, HDPS tile and 3x3 block centre, default night, site override (fields made
+# by argus_field.py are added from their data/<field>/field.json below)
+FIELDS = {
     "m3": dict(name="M3", centre=(205.5484, 28.3773), tile=345967, block=(34, 32), date="2027-05-05", site=None),
     # M15 for a comparison with ADDEM at Sierra Remote Observatories (approximate SRO coordinates; Argus instrument)
     "m15": dict(name="M15", centre=(322.49304, 12.16700), tile=298720, block=(26, 36), date="2026-10-05",
@@ -82,25 +78,25 @@ CLUSTERS = {
 _REPO = Path(__file__).resolve().parent  # data/, runs/, outputs/ are resolved from the repo, not the working directory
 for _f in sorted((_REPO / "data").glob("*/field.json")):
     _c = json.loads(_f.read_text())
-    CLUSTERS[_f.parent.name] = dict(name=_c["name"], centre=tuple(_c["centre"]), tile=_c["tile"], block=tuple(_c["block"]),
+    FIELDS[_f.parent.name] = dict(name=_c["name"], centre=tuple(_c["centre"]), tile=_c["tile"], block=tuple(_c["block"]),
                                     date=_c["date"], site=_c.get("site"), followed_only=True, block_n=_c.get("block_n", 3),
                                     synthetic=_c.get("synthetic", False))
-CLUSTER = "m3"
+FIELD = "m3"
 DATA = Path("data/m3")
 CENTRE = SkyCoord(205.5484 * u.deg, 28.3773 * u.deg)
 TILE, BLOCK = 345967, (34, 32)
 
 
-def use_cluster(cluster):
-    """Point the module (and mesa_argus.rsp) at one cluster's data, block and models."""
-    global CLUSTER, DATA, CENTRE, TILE, BLOCK
+def use_field(field):
+    """Point the module (and mesa_argus.rsp) at one field's data, block and models."""
+    global FIELD, DATA, CENTRE, TILE, BLOCK
     from mesa_argus import rsp
 
-    c_ = CLUSTERS[cluster]
-    CLUSTER, DATA = cluster, _REPO / "data" / cluster
+    c_ = FIELDS[field]
+    FIELD, DATA = field, _REPO / "data" / field
     CENTRE = SkyCoord(c_["centre"][0] * u.deg, c_["centre"][1] * u.deg)
     TILE, BLOCK = c_["tile"], c_["block"]
-    rsp.use(cluster)
+    rsp.use(field)
 MINIPIX_PX, SKY_PX = 32, 900.0 / 1024.0
 BLOCK_N = 3  # the block shown: BLOCK_N x BLOCK_N HDPS minipixes centred on the block minipix (odd; --block)
 HALF = BLOCK_N / 2 * MINIPIX_PX * SKY_PX  # block half-width (arcsec)
@@ -160,7 +156,7 @@ def block_centre_label():
 def star_catalogue():
     """The field's star list: Gaia DR3, or a synthetic field's (argus_field.py --synthetic: Gaia magnitudes and
     colours of a real field at random positions)."""
-    return DATA / ("synthetic_stars.ecsv" if CLUSTERS[CLUSTER].get("synthetic") else "gaia_dr3_core.ecsv")
+    return DATA / ("synthetic_stars.ecsv" if FIELDS[FIELD].get("synthetic") else "gaia_dr3_core.ecsv")
 
 
 def load_transients():
@@ -187,7 +183,7 @@ def load_scene():
     g = g[keep]
     g["dx"], g["dy"] = dx[keep], dy[keep]
     g["in_block"] = (np.abs(g["dx"]) <= HALF) & (np.abs(g["dy"]) <= HALF)
-    if CLUSTERS[CLUSTER].get("synthetic"):
+    if FIELDS[FIELD].get("synthetic"):
         g["class"] = [""] * len(g)
         return g
     cls = Table.read(DATA / "gaia_classifier.ecsv")
@@ -264,12 +260,12 @@ def choose_followed(stars, pulsators, n):
     """
     src = np.asarray(stars["Source"]).astype(np.int64)
     in_block = np.asarray(stars["in_block"])
-    if CLUSTERS[CLUSTER].get("followed_only"):  # an argus_field.py field: exactly the stars the user selected
+    if FIELDS[FIELD].get("followed_only"):  # an argus_field.py field: exactly the stars the user selected
         chosen = {v["source"] for v in json.loads((DATA / "followed.json").read_text()).values()}
         follow = [k for k in range(len(stars)) if int(src[k]) in chosen]
         transients = sorted((k for k in range(len(stars)) if int(src[k]) < 0), key=lambda k: -int(src[k]))  # T1, T2, ...
         return sorted(follow, key=lambda k: -pulsators[int(src[k])]["amp"]["G"]) + transients
-    exclude = CLUSTERS[CLUSTER].get("exclude", set())
+    exclude = FIELDS[FIELD].get("exclude", set())
     candidates = [k for k in range(len(stars)) if in_block[k] and int(src[k]) in pulsators and int(src[k]) not in exclude]
     by_amp = sorted(candidates, key=lambda k: -pulsators[int(src[k])]["amp"]["G"])
     kind = {k: pulsators[int(src[k])]["kind"] for k in candidates}
@@ -292,43 +288,14 @@ def followed_targets(n=7):
     return out
 
 
-# ---------------------------------------------------------------- SED templates
-class Templates:
-    """MESA SEDs (f_lambda at 10 pc) indexed by Gaia BP-RP, metal-poor track preferred."""
-
-    def __init__(self, stride=1):
-        waves, fluxes, colours, g, feh = None, [], [], [], []
-        for path in sorted(glob.glob(str(_REPO / "runs" / "*_sed" / "seds.h5"))):
-            with h5py.File(path) as f:
-                w = f["wavelength"][:]
-                waves = w
-                sel = slice(None, None, stride)
-                fluxes.append(f["flux"][sel])
-                colours.append(f["mag/Gbp"][sel] - f["mag/Grp"][sel])
-                g.append(f["mag/G"][sel])
-                feh.append(np.full(len(g[-1]), float(f.attrs["feh"])))
-        self.wave = waves * u.AA
-        self.flux, self.colour, self.g, self.feh = (np.concatenate(x) for x in (fluxes, colours, g, feh))
-
-    def index(self, bp_rp):
-        """The template matching bp_rp."""
-        score = np.abs(self.colour - bp_rp) + 0.004 * np.abs(self.feh + 1.5)  # mild preference for metal-poor (M3 [Fe/H] ~ -1.5)
-        return int(np.argmin(score))
-
-    def sed(self, bp_rp, gmag):
-        """Observer-frame f_lambda (erg/s/cm2/A) of the template matching bp_rp, scaled to G = gmag."""
-        i = self.index(bp_rp)
-        return self.flux[i] * 10 ** (-0.4 * (gmag - self.g[i]))
-
-
 class RSPStar:
     """A MESA RSP limit cycle (runs/rsp_<label>/pulsation.h5), phased so phase 0 is maximum light in rho.
 
-    SEDs are f_lambda at 10 pc; the observer sees them at M3's distance with M3's reddening.
+    SEDs are f_lambda at 10 pc; the observer sees them at the field's distance modulus and reddening (in the file).
     """
 
     def __init__(self, path, ab, ebv=None):
-        from mesa_argus import m67
+        from mesa_argus import dust
 
         with h5py.File(path) as f:
             self.attrs = dict(f.attrs)
@@ -336,7 +303,7 @@ class RSPStar:
         self.wave = wave * u.AA
         # the distance and reddening the model was made for (recorded in the file); ebv: another field's reddening
         dm, ebv = float(self.attrs["distance_modulus"]), float(self.attrs["ebv"]) if ebv is None else ebv
-        observed = m67.redden(wave, flux10 * (10.0 / 10 ** (dm / 5 + 1)) ** 2, ebv)
+        observed = dust.redden(wave, flux10 * (10.0 / 10 ** (dm / 5 + 1)) ** 2, ebv)
         rho = np.array([float(ab.mag_from_sed("rho", self.wave, f * FLAM)) for f in observed])
         # one full cycle ending at the last maximum light: RSP's own measured period (RRab light curves have a
         # secondary bump, so local maxima alone would mislead), maximum = brightest point in the last period
@@ -385,13 +352,13 @@ class TransientSource:
     """
 
     def __init__(self, path):
-        from mesa_argus import m67
+        from mesa_argus import dust
 
         with h5py.File(path) as f:
             self.attrs = dict(f.attrs)
             wave, flux, self.t = f["wavelength"][:], f["flux"][:], f["time_days"][:]
         self.wave = wave * u.AA
-        self.flux = m67.redden(wave, flux, float(self.attrs["ebv"]))
+        self.flux = dust.redden(wave, flux, float(self.attrs["ebv"]))
         self.t0 = float(self.attrs["t0_bjd"])
 
     def sed_at(self, bjd):
@@ -413,15 +380,15 @@ class TransientSource:
 
 # ---------------------------------------------------------------- the night
 def night_schedule(date, max_airmass, cfg):
-    """UTC start times of every 60 s exposure on the night of `date` with M3 up and astronomical dark."""
+    """UTC start times of every 60 s exposure on the night of `date` with the field up and astronomical dark."""
     site = EarthLocation(lat=cfg.observatory.latitude * u.deg, lon=cfg.observatory.longitude * u.deg,
                          height=cfg.observatory.altitude * u.m)
     start = Time(f"{date} 23:00:00")  # local early evening (UTC-5/6) -> scan 14 h
     grid = start + TimeDelta(np.arange(0, 14 * 60, 1) * 60, format="sec")
     frame = AltAz(obstime=grid, location=site)
     sun = get_sun(grid).transform_to(frame).alt.deg
-    m3 = CENTRE.transform_to(frame)
-    airmass = np.where(m3.alt.deg > 5, 1 / np.cos(np.radians(90 - m3.alt.deg)), np.inf)
+    here = CENTRE.transform_to(frame)
+    airmass = np.where(here.alt.deg > 5, 1 / np.cos(np.radians(90 - here.alt.deg)), np.inf)
     ok = (sun < -18) & (airmass <= max_airmass)
     ratchet, reset = cfg.survey.ratchet_len, cfg.survey.reset_min
     minute_of_ratchet = (grid.datetime64.astype("datetime64[m]").astype(int)) % int(ratchet)
@@ -429,7 +396,7 @@ def night_schedule(date, max_airmass, cfg):
     times = grid[ok]
     ltt = times.light_travel_time(CENTRE, location=site)
     bjd = (times.tdb + ltt).jd + 30.0 / 86400  # mid-exposure
-    return times, bjd, airmass[ok], m3.alt.deg[ok], m3.az.deg[ok]
+    return times, bjd, airmass[ok], here.alt.deg[ok], here.az.deg[ok]
 
 
 def phases_at(var, bjd):
@@ -563,11 +530,12 @@ def difference_image(image, image_sat, reference, reference_sat, readnoise, half
 # ---------------------------------------------------------------- main
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("-o", "--output", type=Path, default=Path("outputs/m3/m3_night.mp4"))
-    p.add_argument("--cluster", choices=list(CLUSTERS), default="m3")
+    p.add_argument("--field", required=True, choices=list(FIELDS), metavar="FIELD",
+                   help="a data/<field>/ folder from argus_field.py, or a hand-made field: " + "m3, m15, rr308108, rr416445")
+    p.add_argument("-o", "--output", type=Path, default=None, help="default outputs/<field>/<field>_night_<band>.mp4")
     p.add_argument("--date", default=None,
                    help="local date the night starts; 2027-05-05: new Moon (ArgusSim sky V ~22.0), every followed star "
-                        "predicted to peak while M3 is up")
+                        "predicted to peak while M3 is up (default: the field's own date)")
     p.add_argument("--max-airmass", type=float, default=2.0)
     p.add_argument("--start", default=None, help="UT (HH:MM) to start; default: when the field is first observable")
     p.add_argument("--end", default=None, help="UT (HH:MM) to stop; default: when the field is last observable")
@@ -587,7 +555,7 @@ def main(argv=None):
     p.add_argument("--kernel-stamps", type=float, default=20.0,
                    help="fit the kernel only on stamps around reference sources this many sigma above the sky "
                         "(HOTPANTS/ISIS style); 0 = all pixels")
-    p.add_argument("--field", type=float, default=8.0,
+    p.add_argument("--area", type=float, default=8.0,
                    help="side (arcmin) of the simulated area used for the kernel and zero point; "
                         "the movie shows the block at its centre")
     p.add_argument("--block", type=int, default=None,
@@ -596,18 +564,20 @@ def main(argv=None):
     args = p.parse_args(argv)
     import os
 
+    if args.output is None:
+        args.output = _REPO / "outputs" / args.field / f"{args.field}_night_{args.band}.mp4"
     if not args.output.is_absolute():  # relative output paths are relative to where the command was run
         args.output = Path.cwd() / args.output
     os.chdir(_REPO)
-    use_cluster(args.cluster)
-    set_block(args.block or CLUSTERS[args.cluster].get("block_n", 3))
+    use_field(args.field)
+    set_block(args.block or FIELDS[args.field].get("block_n", 3))
     global AREA_HALF
-    AREA_HALF = max(30.0 * args.field, HALF + MARGIN)
-    args.date = args.date or CLUSTERS[args.cluster]["date"]
+    AREA_HALF = max(30.0 * args.area, HALF + MARGIN)
+    args.date = args.date or FIELDS[args.field]["date"]
 
     cfg = copy.deepcopy(ARGUS_CONFIG)
-    if CLUSTERS[args.cluster]["site"]:  # the instrument stays Argus; only where it sits changes
-        for key, value in CLUSTERS[args.cluster]["site"].items():
+    if FIELDS[args.field]["site"]:  # the instrument stays Argus; only where it sits changes
+        for key, value in FIELDS[args.field]["site"].items():
             setattr(cfg.observatory, key, value)
     tp = SystemThroughput(filters={"g": True, "rho": True}, throughput_loss=cfg.telescope.throughput_loss)
     ab = ABPhot(throughput=tp, collecting_area=cfg.telescope.collecting_area)
@@ -620,7 +590,7 @@ def main(argv=None):
     follow = choose_followed(stars, pulsators, args.highlight)
     labels = {k: f"T{-int(src[k])}" if src[k] < 0 else f"V{i + 1}" for i, k in enumerate(follow)}
     n_tr = int(np.sum(src < 0))
-    print(f"{len(stars) - n_tr} {'synthetic stars' if CLUSTERS[args.cluster].get('synthetic') else 'Gaia sources'} "
+    print(f"{len(stars) - n_tr} {'synthetic stars' if FIELDS[args.field].get('synthetic') else 'Gaia sources'} "
           f"({int(in_block.sum()) - n_tr} in the block)" + (f"; {n_tr} transients" if n_tr else "")
           + f"; following {len(follow) - n_tr} pulsators with "
           f"MESA RSP models; the other {int((gaia_var & in_block).sum()) - len(follow)} Gaia-classified variables in "
@@ -640,7 +610,7 @@ def main(argv=None):
     # --- every star: a constant template SED at its Gaia mean G and colour
     templates = Templates()
     colour = column(stars, "BP-RP")
-    # crowded-core sources often have no (or blended) BP/RP: give them the median colour of M3
+    # crowded-core sources often have no (or blended) BP/RP: give them the field's median colour
     # stars of the same G outside the core (> 2.5'), where Gaia colours are reliable
     outer = Table.read(star_catalogue())
     r_out = 60 * np.hypot((column(outer, "RA_ICRS") - CENTRE.ra.deg) * np.cos(CENTRE.dec.rad), column(outer, "DE_ICRS") - CENTRE.dec.deg)
@@ -753,7 +723,7 @@ def main(argv=None):
     print("building the detector scene …", flush=True)
     scene = Scene(stars, args, cfg, ab, seeing_grid)
     scene.set_seeing(np.abs(seeing[:, None] - seeing_grid[None, :]).argmin(axis=1))
-    # sky at M3 in every exposure from ArgusSim's model: airglow (solar activity, airmass), zodiacal light
+    # sky at the field in every exposure from ArgusSim's model: airglow (solar activity, airmass), zodiacal light
     # (ecliptic position), integrated starlight (Galactic latitude), Moon (Krisciunas & Schaefer 1991), site light
     from argus_sim.observatory import Observatory
 
@@ -1087,7 +1057,7 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
     sed_ax.grid(alpha=0.12)
 
     fig.suptitle(
-        f"ARGUS — {lim['centre']} ({CLUSTERS[args.cluster]['name']}) — {block_label()} — {args.date} — 60 s exposures — "
+        f"ARGUS — {lim['centre']} ({FIELDS[args.field]['name']}) — {block_label()} — {args.date} — 60 s exposures — "
         + pulsator_title(follow, pulsators, src),
         fontsize=13.5 if len(pulsator_title(follow, pulsators, src)) <= 60 else 11.5,
     )

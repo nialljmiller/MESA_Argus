@@ -5,7 +5,7 @@ modellable variables within the window are counted from Gaia DR3 (RR Lyrae RRab/
 eclipse parameters) and ASAS-SN (HADS). Ranked by the number of distinct types, then the number of modellable stars.
 Observability, parallaxes and crowding are checked afterwards on the winners (argus_field.py --list).
 
-    python grids/find_rich_field.py
+    python tools/find_rich_field.py      # from the repo root
 """
 import warnings
 

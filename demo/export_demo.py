@@ -3,7 +3,7 @@
 
     python demo/export_demo.py                       # f294 -> demo/build/f294_784m11_623.json
 
-Everything here is the movie's own physics (m3_night_movie.py, ArgusSim), evaluated once:
+Everything here is the movie's own physics (night_movie.py, ArgusSim), evaluated once:
 - every Gaia star: position, catalogue colour, template electron rates per band on AIRMASS_GRID (as the movie);
   the same for a BP-RP grid at G = 15, for stars added on the page;
 - the night: per exposure UT, BJD, airmass, seeing and ArgusSim's five sky components per band (e/s/pixel);
@@ -30,11 +30,11 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
-import m3_night_movie as M  # noqa: E402
+import night_movie as M  # noqa: E402
 from argus_sim import ABPhot, SpectralSky, SystemThroughput  # noqa: E402
 from argus_sim import c as ARGUS_CONFIG  # noqa: E402
 from argus_sim.observatory import Observatory, seasonal_seeing_params, seeing_at_airmass  # noqa: E402
-from plot_sed_observation import BANDS, FLAM, system_response  # noqa: E402
+from mesa_argus.argus import BANDS, FLAM, system_response  # noqa: E402
 
 FIELD = "f294_784m11_623"
 N_SED_PHASE = 100  # SED panel: this many of the model's steps per cycle
@@ -70,12 +70,12 @@ def model_tables(model, ab):
 
 
 def main():
-    M.use_cluster(FIELD)
-    M.set_block(M.CLUSTERS[FIELD].get("block_n", 3))
+    M.use_field(FIELD)
+    M.set_block(M.FIELDS[FIELD].get("block_n", 3))
     M.AREA_HALF = max(30.0 * 8.0, M.HALF + M.MARGIN)  # the movie's default --field 8
-    date = M.CLUSTERS[FIELD]["date"]
+    date = M.FIELDS[FIELD]["date"]
     cfg = copy.deepcopy(ARGUS_CONFIG)
-    for key, value in (M.CLUSTERS[FIELD]["site"] or {}).items():
+    for key, value in (M.FIELDS[FIELD]["site"] or {}).items():
         setattr(cfg.observatory, key, value)
     tp = SystemThroughput(filters={"g": True, "rho": True}, throughput_loss=cfg.telescope.throughput_loss)
     ab = ABPhot(throughput=tp, collecting_area=cfg.telescope.collecting_area)
@@ -85,7 +85,7 @@ def main():
     follow = M.choose_followed(stars, pulsators, 2)
     times, bjd, airmass, alt, az = M.night_schedule(date, 2.0, cfg)
 
-    # every star's colour and template rates: as m3_night_movie.main
+    # every star's colour and template rates: as night_movie.main
     from astropy.table import Table
 
     templates = M.Templates()
@@ -179,7 +179,7 @@ def main():
                 for b, band in BANDS.items()}
 
     out = dict(
-        field=FIELD, name=M.CLUSTERS[FIELD]["name"], date=date, centre_label=M.block_centre_label(),
+        field=FIELD, name=M.FIELDS[FIELD]["name"], date=date, centre_label=M.block_centre_label(),
         block_n=M.BLOCK_N, half_arcsec=M.HALF, minipix_arcsec=M.MINIPIX_PX * M.SKY_PX,
         plate=scene.plate, n=scene.n, centre=scene.centre, exptime=60.0, fullwell=scene.fullwell,
         readnoise=scene.readnoise, dark=scene.dark, psf_phases=M.PSF_PHASES, c0=list(c0),

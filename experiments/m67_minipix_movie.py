@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Movie: a 3x3 HDPS-minipix block of M67's core observed by Argus across 1 Myr of evolution.
 
-    python m67_minipix_movie.py                       # -> outputs/m67/m67_minipix.mp4
-    python m67_minipix_movie.py --frames 60 -o test.mp4
+    python experiments/m67_minipix_movie.py                       # -> outputs/m67/m67_minipix.mp4
+    python experiments/m67_minipix_movie.py --frames 60 -o test.mp4
+
+A finished early experiment, kept as it was; the night movies (night_movie.py) grew out of it.
 
 Needs the scene, fit and per-star runs from mesa_argus.m67 (scene -> fit -> run).
 
@@ -25,6 +27,7 @@ import argparse
 import copy
 import json
 from pathlib import Path
+import sys
 import warnings
 
 import astropy.units as u
@@ -38,6 +41,8 @@ from matplotlib.colors import AsinhNorm, Normalize  # noqa: E402
 from matplotlib.patches import Circle, Rectangle  # noqa: E402
 from matplotlib.ticker import StrMethodFormatter  # noqa: E402
 import numpy as np  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: mesa_argus, plot_sed_observation
 
 from argus_sim import ABPhot, SpectralSky, SystemThroughput, ZemaxPSF  # noqa: E402
 from argus_sim import c as ARGUS_CONFIG  # noqa: E402

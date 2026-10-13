@@ -63,13 +63,9 @@ import numpy as np  # noqa: E402
 from argus_sim import ABPhot, NoiseBudget, SpectralSky, SystemThroughput, ZemaxPSF  # noqa: E402
 from argus_sim import __version__ as ARGUS_VERSION, c as ARGUS_CONFIG  # noqa: E402
 
+from mesa_argus.argus import BANDS, COLORS, FLAM, MAG_FACTOR, SYMBOLS, apply_style, system_response  # noqa: E402,F401
 from mesa_argus.seds import read_sed_csv as read_mesa_sed  # noqa: E402
 
-FLAM = u.erg / (u.s * u.cm**2 * u.AA)
-BANDS = {"beta": "g", "rho": "rho"}
-COLORS = {"beta": "#2078b4", "rho": "#cc5940", "colour": "#7853a6"}
-SYMBOLS = {"beta": r"$\beta$", "rho": r"$\rho$"}
-MAG_FACTOR = 2.5 / np.log(10.0)
 
 
 MESA_HEADER = "wavelengths,fluxes,convolved_flux,filter_wavelengths,filter_trans"
@@ -152,12 +148,6 @@ def read_sed(path, wavelength_column=None, flux_column=None, wavelength_unit=Non
     wave, flux = wave[order], flux[order]
     metadata.update(path=str(path.resolve()), wavelength_unit=str(wu), flux_unit=str(fu))
     return wave, flux, metadata
-
-
-def system_response(tp, band, airmass):
-    """Filter x optics x QE x atmosphere^airmass, as in ABPhot.electrons_from_sed (for plotting)."""
-    response = np.asarray(tp.filt_wav[band] * tp.throughput_wav * tp.qe_wav, dtype=float)
-    return response * np.asarray(tp.filt_wav.atmosphere, dtype=float) ** airmass
 
 
 def prepare_sed(args, ab, path=None):
@@ -300,24 +290,6 @@ def simulate(args, wave, flux, ab, cfg, setup=None, seed=None):
             "exposure": chosen,
         }
     return {"bands": results, "time_min": times, "sky_s10": sky_s10}
-
-
-def apply_style():
-    plt.rcParams.update(
-        {
-            "font.size": 11,
-            "axes.titlesize": 13,
-            "axes.labelsize": 11,
-            "axes.spines.top": False,
-            "axes.spines.right": False,
-            "axes.edgecolor": "#86939e",
-            "axes.labelcolor": "#253746",
-            "xtick.color": "#435766",
-            "ytick.color": "#435766",
-            "font.family": "DejaVu Sans",
-            "savefig.facecolor": "white",
-        }
-    )
 
 
 def figure_axes(fig, margins=None):

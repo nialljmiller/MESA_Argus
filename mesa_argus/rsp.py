@@ -1,9 +1,11 @@
-"""MESA RSP (radial stellar pulsation) models of the M3 pulsators followed in m3_night_movie.
+"""MESA RSP (radial stellar pulsation) models of the followed pulsators of a field (night_movie.py).
 
-  python -m mesa_argus.rsp            tune, run to the limit cycle, write the high-resolution cycles
-  python -m mesa_argus.rsp V1 V3      only these
+  python -m mesa_argus.rsp                       M3: tune, run to the limit cycle, write the high-resolution cycles
+  python -m mesa_argus.rsp V1 V3                 only these
+  python -m mesa_argus.rsp --field <field> V1    a field made by argus_field.py (which normally runs this itself)
 
-For each followed star (data/m3/followed.json, written from m3_night_movie.followed_targets):
+Written for M3 and described for it below; argus_field.py fields use the same steps with their own composition, mass,
+distance and reddening (data/<field>/field.json). For each followed star (data/<field>/followed.json):
 
 1. Physical parameters. Composition and mass are M3's: X = 0.75, Z = 0.001 ([Fe/H] ~ -1.5,
    alpha-enhanced; a09 opacities), M = 0.68 Msun for RR Lyrae (M3 horizontal branch). L starts
@@ -239,7 +241,7 @@ _waiting = 0
 
 
 def cores():
-    """Cores this process's RSP runs may use: $ARGUS_CORES (set by stage_batch.py to share the machine between
+    """Cores this process's RSP runs may use: $ARGUS_CORES (set by tools/stage_batch.py to share the machine between
     fields run at once), else config.toml [run] max_star_procs, else all."""
     if os.environ.get("ARGUS_CORES"):
         return int(os.environ["ARGUS_CORES"])
@@ -682,7 +684,7 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     if args[:1] == ["--validate"]:
         sys.exit(0 if all(validate(n) for n in args[1:] or TEST_CASES) else 1)
-    if args[:1] == ["--cluster"]:
+    if args[:1] == ["--field"]:
         use(args[1])
         args = args[2:]
     main(args)

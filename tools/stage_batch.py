@@ -1,8 +1,8 @@
 """Run argus_field.py on a list of fields, several at once, sharing the machine's cores; resumable.
 
-    python stage_batch.py batches/overnight.txt                 # run (detach with nohup / setsid on a node)
-    python stage_batch.py batches/overnight.txt --status        # progress table
-    python stage_batch.py batches/overnight.txt --jobs 4 --after 12345   # 4 fields at once, after PID 12345 exits
+    python tools/stage_batch.py batches/overnight.txt                 # run (detach with nohup / setsid on a node)
+    python tools/stage_batch.py batches/overnight.txt --status        # progress table
+    python tools/stage_batch.py batches/overnight.txt --jobs 4 --after 12345   # 4 fields at once, after PID 12345 exits
 
 Batch file: one field per line, `ra dec` then optional argus_field.py options (default: --block 9 --select all
 --date auto); `#` starts a comment. Fields run in file order, --jobs at a time (default 3). Each field process gets
@@ -23,7 +23,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent
+REPO = Path(__file__).resolve().parent.parent
 DEFAULTS = {"--block": "9", "--select": "all", "--date": "auto"}
 
 

@@ -1,4 +1,4 @@
-// The interactive Argus page: the movie's panels (m3_night_movie.draw) with a control panel.
+// The interactive Argus page: the movie's panels (night_movie.draw) with a control panel.
 
 (async () => {
   const D = await Sim.unpackAll(JSON.parse(document.getElementById("field-data").textContent));

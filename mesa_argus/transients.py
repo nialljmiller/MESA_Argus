@@ -14,7 +14,7 @@ then sampled on a fixed observer-frame grid and written as
 
 t0 is the model's phase 0 (sncosmo's convention): B-band maximum for SALT2/3 and Hsiao, the explosion for the Nugent
 templates; each file records the observer-frame time of rest-frame B maximum (`peak_days`). Milky Way dust is the
-field's E(B-V) (SFD), applied when the movie reads the file (mesa_argus.m67.redden, CCM89, as for every other star).
+field's E(B-V) (SFD), applied when the movie reads the file (mesa_argus.dust.redden, CCM89, as for every other star).
 Before the model's first step the transient adds no light; a night after its last step is refused (no extrapolation).
 
 GRB optical afterglow (make_afterglow): the forward-shock synchrotron afterglow as a power law in time and frequency,
@@ -150,11 +150,11 @@ def _rho_mag(wave, flam, ebv):
     from argus_sim import ABPhot, SystemThroughput
     from argus_sim import c as cfg
 
-    from mesa_argus import m67
+    from mesa_argus import dust
 
     ab = ABPhot(throughput=SystemThroughput(filters={"g": True, "rho": True}, throughput_loss=cfg.telescope.throughput_loss),
                 collecting_area=cfg.telescope.collecting_area)
-    seen = m67.redden(wave, flam, ebv) * u.erg / (u.s * u.cm**2 * u.AA)
+    seen = dust.redden(wave, flam, ebv) * u.erg / (u.s * u.cm**2 * u.AA)
     return float(ab.mag_from_sed("rho", wave * u.AA, seen))
 
 
@@ -201,7 +201,7 @@ def make_microlensing(out, t0_bjd, t_e, u0, base_mag, bp_rp, ebv, rho=0.0, fs=1.
     the source (and its blend) is not otherwise in the field, so like every transient it is left out of the catalogue
     and the difference reference.
     """
-    from m3_night_movie import Templates
+    from mesa_argus.seds import Templates
 
     tpl = Templates()
     i = tpl.index(bp_rp)

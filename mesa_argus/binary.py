@@ -339,7 +339,7 @@ def model_binary(target, out_dir, field_dm, ebv, mh=0.0):
     or None), teff_gsp, logg_gsp, G (Gaia mean G). Returns (ok, notes)."""
     import h5py
 
-    from .m67 import redden
+    from .dust import redden
 
     veb, nss = target["veb"], target.get("nss")
     notes = {}

@@ -33,7 +33,7 @@ at once).
    or --date auto: the night within half a year on which the modelled stars vary most visibly (eclipses covered,
    pulsators through maximum). Exposures run while it is dark (Sun < -18 deg) and the field is at airmass <= 2;
    --start/--end (UT) restrict that. Weather is not modelled (median seeing, photometric sky).
-6. Movies (m3_night_movie.py), one per band: ArgusSim scene and noise; SExtractor photometry on every exposure
+6. Movies (night_movie.py), one per band: ArgusSim scene and noise; SExtractor photometry on every exposure
    (defaults, neighbour masking, per-exposure zero point with a colour term). outputs/<field>/<field>_night_<band>.mp4
    with its .photometry.csv (true and measured magnitudes per exposure). --models-only skips them.
 """
@@ -110,13 +110,13 @@ def inventory(data, ra, dec, block_n=3):
     from astropy.table import Table
     from argus_sim import skymap_shim as sh
 
-    import m3_night_movie as movie
+    import night_movie as movie
 
     movie.set_block(block_n)
     tid, loc = sh.radec_to_composite_id(np.array([ra]), np.array([dec]))
     tile, block = int(tid[0]), (int(loc[0]) % 64, int(loc[0]) // 64)
-    movie.CLUSTERS["_probe"] = dict(name="", centre=(ra, dec), tile=tile, block=block, date="", site=None)
-    movie.CLUSTER, movie.DATA = "_probe", data
+    movie.FIELDS["_probe"] = dict(name="", centre=(ra, dec), tile=tile, block=block, date="", site=None)
+    movie.FIELD, movie.DATA = "_probe", data
     from astropy.coordinates import SkyCoord
     import astropy.units as u
     movie.CENTRE, movie.TILE, movie.BLOCK = SkyCoord(ra * u.deg, dec * u.deg), tile, block
@@ -522,7 +522,7 @@ def synthetic(args):
     from astropy.time import Time
     from argus_sim import skymap_shim as sh
 
-    import m3_night_movie as movie
+    import night_movie as movie
     from mesa_argus import transients as T
 
     if args.date == "auto":
@@ -655,13 +655,13 @@ def synthetic(args):
                   f"- position {v['x_percent']:g}%, {v['y_percent']:g}% of the image from its lower left "
                   f"({v['dx']:+.2f}\", {v['dy']:+.2f}\" from the centre)", ""]
     lines += ["The difference-image reference leaves the transients out (the field before the event). Argus instrument, "
-              "PSF, sky, noise and photometry are as in outputs/m3/ASSUMPTIONS.md.", "", "## Outputs", ""]
+              "PSF, sky, noise and photometry are as in docs/ASSUMPTIONS.md.", "", "## Outputs", ""]
     lines += [f"- {band}: `{out / f'{name}_night_{band}.mp4'}`" for band in args.bands]
     (out / "field_summary.md").write_text("\n".join(lines) + "\n")
     print(f"summary: {out / 'field_summary.md'}")
     for band in ([] if args.models_only else args.bands):
         mp4 = out / f"{name}_night_{band}.mp4"
-        cmd = [sys.executable, "m3_night_movie.py", "--cluster", name, "--band", band, "-o", str(mp4)] \
+        cmd = [sys.executable, "night_movie.py", "--field", name, "--band", band, "-o", str(mp4)] \
             + (["--start", args.start] if args.start else []) + (["--end", args.end] if args.end else [])
         print(f"rendering {band} -> {mp4} (log {mp4.with_suffix('.log')})", flush=True)
         with open(mp4.with_suffix(".log"), "w") as log:
@@ -697,7 +697,7 @@ def main(argv=None):
     import os
 
     os.chdir(Path(__file__).resolve().parent)  # data/, runs/, outputs/ live in the repo, wherever this is run from
-    if not list(Path("runs").glob("*_sed/seds.h5")):  # the constant stars' SEDs (m3_night_movie.Templates)
+    if not list(Path("runs").glob("*_sed/seds.h5")):  # the constant stars' SEDs (mesa_argus.seds.Templates)
         raise SystemExit("no runs/*_sed/seds.h5: run the SED tracks first (python -m mesa_argus run argus_sim_seds), or copy runs/*_sed/seds.h5 from a machine that has them")
     if args.synthetic:
         return synthetic(args)
@@ -795,7 +795,7 @@ def main(argv=None):
               + (f" (typically 0.5-2 h each; up to config.toml [run] workers at once); log: {out / 'rsp.log'}" if todo_ else ""),
               flush=True)
         with open(out / "rsp.log", "w") as log:
-            subprocess.run([sys.executable, "-m", "mesa_argus.rsp", "--cluster", name, *pulsators_], stdout=log,
+            subprocess.run([sys.executable, "-m", "mesa_argus.rsp", "--field", name, *pulsators_], stdout=log,
                            stderr=subprocess.STDOUT, check=True)
     if followed:
         for label, v in list(followed.items()):
@@ -848,13 +848,13 @@ def main(argv=None):
         lines.append("")
     lines += ["## Outputs", ""] + [f"- {band}: `{out / f'{name}_night_{band}.mp4'}`" for band in args.bands]
     lines += ["", "Every other star is constant (Gaia G and BP-RP -> colour-matched MESA SED). Argus instrument, PSF, sky, "
-              "noise and photometry are as in outputs/m3/ASSUMPTIONS.md."]
+              "noise and photometry are as in docs/ASSUMPTIONS.md."]
     (out / "field_summary.md").write_text("\n".join(lines) + "\n")
     print(f"summary: {out / 'field_summary.md'}")
 
     for band in ([] if args.models_only else args.bands):
         mp4 = out / f"{name}_night_{band}.mp4"
-        cmd = [sys.executable, "m3_night_movie.py", "--cluster", name, "--band", band, "--highlight", str(len(followed)),
+        cmd = [sys.executable, "night_movie.py", "--field", name, "--band", band, "--highlight", str(len(followed)),
                "-o", str(mp4)] + (["--start", args.start] if args.start else []) + (["--end", args.end] if args.end else [])
         print(f"rendering {band} -> {mp4} (log {mp4.with_suffix('.log')})", flush=True)
         with open(mp4.with_suffix(".log"), "w") as log:

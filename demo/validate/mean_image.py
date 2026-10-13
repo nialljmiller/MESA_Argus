@@ -3,7 +3,7 @@
 
     python demo/validate/mean_image.py   # -> demo/build/validate_mean/<band>_<exposure>.f64
 
-Exposures 0, 165 and 330 of f294 in both bands: m3_night_movie's Scene (its seeing grid), the variables' rates from
+Exposures 0, 165 and 330 of f294 in both bands: night_movie's Scene (its seeing grid), the variables' rates from
 their SED at each exposure's exact airmass (as the movie; the page interpolates on AIRMASS_GRID), ArgusSim's sky.
 """
 
@@ -18,30 +18,30 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "demo"))
-import m3_night_movie as M  # noqa: E402
+import night_movie as M  # noqa: E402
 import export_demo as E  # noqa: E402
 from argus_sim import ABPhot, SpectralSky, SystemThroughput  # noqa: E402
 from argus_sim import c as ARGUS_CONFIG  # noqa: E402
 from argus_sim.observatory import Observatory, seasonal_seeing_params, seeing_at_airmass  # noqa: E402
-from plot_sed_observation import BANDS, FLAM  # noqa: E402
+from mesa_argus.argus import BANDS, FLAM  # noqa: E402
 
 EXPOSURES = (0, 165, 330)
 
 
 def main():
     F = E.FIELD
-    M.use_cluster(F)
-    M.set_block(M.CLUSTERS[F].get("block_n", 3))
+    M.use_field(F)
+    M.set_block(M.FIELDS[F].get("block_n", 3))
     M.AREA_HALF = max(240.0, M.HALF + M.MARGIN)
     cfg = copy.deepcopy(ARGUS_CONFIG)
-    for key, value in (M.CLUSTERS[F]["site"] or {}).items():
+    for key, value in (M.FIELDS[F]["site"] or {}).items():
         setattr(cfg.observatory, key, value)
     tp = SystemThroughput(filters={"g": True, "rho": True}, throughput_loss=cfg.telescope.throughput_loss)
     ab = ABPhot(throughput=tp, collecting_area=cfg.telescope.collecting_area)
     stars, pulsators = M.load_scene(), M.load_pulsators()
     src = np.asarray(stars["Source"]).astype(np.int64)
     follow = M.choose_followed(stars, pulsators, 2)
-    times, bjd, airmass, alt, az = M.night_schedule(M.CLUSTERS[F]["date"], 2.0, cfg)
+    times, bjd, airmass, alt, az = M.night_schedule(M.FIELDS[F]["date"], 2.0, cfg)
     d = json.loads((REPO / "demo" / "build" / f"{F}.json").read_text())
     static = {b: E_unpack(d["stars"]["rate"][b]) for b in BANDS}  # the export's template rates (same code as main)
 

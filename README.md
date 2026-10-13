@@ -1,196 +1,183 @@
 # MESA_ARGUS
 
-How much stellar physics can **Argus Array** photometry recover, compared with **Gaia** and **SDSS**?
+Stellar models from MESA, seen through the **Argus Array**. The repo does two things:
 
-This repo runs MESA stellar evolution tracks with the MESA `colors` module. Every track gets
-synthetic photometry in all three systems at every timestep, computed from the same model. The
-repo then provides two outputs:
+1. **Night movies of Argus fields.** One simulated night of Argus 60 s exposures on any pointing: every star an SED
+   (MESA pulsation models, PHOEBE eclipsing binaries, supernovae and other transients), turned into images with
+   ArgusSim's instrument, sky and noise, and measured with SExtractor. The output is a movie and a photometry CSV.
+2. **How much stellar physics Argus photometry can recover**, compared with Gaia and SDSS: MESA tracks with synthetic
+   photometry in all three systems, an interactive 3D CMD, and a Fisher-information analysis.
 
-1. **An interactive 3D CMD** (`outputs/<grid>_cmd3d.html`): a single self-contained HTML file,
-   so you can send it as is.
-2. **A Fisher-information analysis** (`outputs/fisher/`): the best achievable precision on
-   [M/H], mass and α_MLT for each system, as a function of evolutionary stage and the
-   (unknown) Argus photometric error.
+Both use the same MESA install and the same Argus throughputs, from ArgusSim.
 
-## Quick start
+## Setup
 
-Requirements: a working MESA install with `$MESA_DIR` set, the MESA colors data, and Python ≥ 3.11
-with `numpy` and `matplotlib` (`pip install -r requirements.txt`).
+Requirements: a working MESA install with `$MESA_DIR` set and its colors data, ArgusSim installed in the same
+Python (≥ 3.11), and `pip install -r requirements.txt`. The movies also need `ffmpeg`.
 
 ```bash
-# 1. machine config: usually only needed if your colors data is not at $MESA_DIR/data/colors_data
-$EDITOR config.toml
-
-# 2. build MESA and assemble the filter set (Gaia + Argus from your colors data, SDSS from data/)
-make -C mesa_work
-python -m mesa_argus setup
-
-# 3. run grids (resumable: re-running skips finished tracks and ones already running)
-python -m mesa_argus run population fisher_stencil
-python -m mesa_argus status population fisher_stencil
-
-# 4. outputs
-python -m mesa_argus cmd3d population          # -> outputs/population_cmd3d.html
-python -m mesa_argus cmd3d population --live   #    ...rebuilt every 5 min while runs progress
-python -m mesa_argus fisher                    # -> outputs/fisher/*.png, results.csv
-python -m mesa_argus fisher --live             #    ...re-run as each anchor stencil completes
+$EDITOR config.toml               # machine settings: colors-data path, parallelism (usually only the path)
+make -C mesa_work                 # build MESA's star executable
+python -m mesa_argus setup        # assemble the filter set (Gaia + Argus from your colors data, SDSS from data/)
+python -m mesa_argus run argus_sim_seds   # the stellar SEDs every movie uses for its constant stars (once)
 ```
 
 On macOS, wrap long runs in `caffeinate -dims` so sleep does not suspend MESA.
-A closed lid on battery still sleeps the machine.
 
-`data/solar_calibration.json` and `data/zp_offsets.json` are committed, so a new machine does not
-need to redo them. They are reproducible with `python -m mesa_argus calibrate` and `python -m mesa_argus zeropoints`.
+## 1. Night movies
+
+`argus_field.py` is the entry point. Give it a position and a night; it fetches the field, builds the models and
+renders one movie per band into `outputs/<field>/`.
+
+```bash
+# a real field: list the catalogued variables in the block, then model the ones you choose
+python argus_field.py --ra 294.7844 --dec -11.6235 --block 9 --list
+python argus_field.py --ra 294.7844 --dec -11.6235 --block 9 --select all --date auto
+
+# a synthetic field: the real field's stars at random positions, all constant, plus transients you place
+python argus_field.py --ra 294.7844 --dec -11.6235 --block 9 --date 2026-07-19 --synthetic --seed 1 \
+  --transient salt3:z=0.02,M=-19.3,x1=0,c=0,t0=start+0.2 \
+  --transient microlensing:tE=0.2,u0=0.02,base=19.5,bp_rp=1.0,t0=start+0.15,x=30,y=70
+```
+
+Outputs, per field:
+
+- `outputs/<field>/<field>_night_<band>.mp4`: the movie. Its panels are the CMD, the exposure (β/ρ colour
+  composite), the difference image, the light curves (measured and model) and the SEDs.
+- `outputs/<field>/<field>_night_<band>.photometry.csv`: every measurement, with the true model magnitude beside it.
+- `outputs/<field>/field_summary.md`: what was modelled in this field and how.
+
+To re-render a field that is already set up (for example a quick look at every 10th exposure):
+
+```bash
+python night_movie.py --field f294_784m11_623 --band rho --stride 10 -o outputs/f294_784m11_623/test.mp4
+```
+
+### How a movie is made
+
+```
+argus_field.py
+  ├─ the field      Gaia DR3 (and ASAS-SN) around the position → data/<field>/
+  │                 (--synthetic: the same stars' magnitudes and colours at random positions)
+  ├─ the sources    an SED for every star, in runs/:
+  │                   constant stars   MESA SED matched to Gaia BP−RP, scaled to G      (runs/*_sed)
+  │                   pulsators        MESA RSP limit cycles              mesa_argus/rsp.py
+  │                   eclipsing bins.  PHOEBE + MESA atmospheres          mesa_argus/binary.py
+  │                   transients       sncosmo, or our parametric models  mesa_argus/transients.py
+  └─ night_movie.py the night's exposures: ArgusSim PSF, sky, airmass and noise → images
+                    → SExtractor (SEP) photometry, calibrated per exposure → movie + CSV
+```
+
+Every assumption (what comes from ArgusSim, what is written here, what is assumed) is in
+[docs/ASSUMPTIONS.md](docs/ASSUMPTIONS.md).
+
+### Transients
+
+`--transient MODEL:key=value,...`, repeatable. Every transient takes `t0` (ISO UTC time, or `start+D` days from
+the night's start) and a position `x`, `y` in percent of the image from its lower left (default 50, 50, the centre;
+`-1` picks at random). `python argus_field.py --help` lists every key.
+
+| Model | What it is | Main keys |
+|---|---|---|
+| any sncosmo source (`python -m mesa_argus.transients --list`) | supernova spectral templates from observed spectra | `z`, `M` (peak absolute mag), model parameters |
+| `afterglow` | GRB optical afterglow: power law in time and frequency, t² onset | `peak` (AB at 6400 Å), `t_peak`, `alpha`, `beta` |
+| `microlensing` | point lens, point or uniform-disc source | `tE`, `u0`, `base` (source ρ), `bp_rp`, `rho`, `fs` |
+| `dwarf_nova` | steady accretion disc with a rising and decaying accretion rate, plus the white dwarf | `d`, `mdot_q`, `mdot_peak`, `t_rise`, `plateau`, `tau_decay`, `r_out`, `t_wd` |
+
+The last three are parametric models written in this repo, not sncosmo models; each file header gives the
+equations and references.
+
+### Many fields at once
+
+`tools/stage_batch.py batches/overnight.txt` runs a list of fields (one `ra dec [options]` per line), several at
+once, resumably. `tools/find_rich_field.py` searches Gaia for the windows with the most kinds of modellable variable.
+
+### Interactive page
+
+`demo/` builds a single offline HTML page of one field with a control panel, simulating and measuring the exposures
+in the browser:
+
+```bash
+python demo/export_demo.py && python demo/build_html.py      # -> demo/argus_demo.html
+```
+
+`demo/validate/` checks the page's simulator and SExtractor port against the Python ones.
+
+## 2. Argus vs Gaia vs SDSS: the 3D CMD and Fisher analysis
+
+MESA tracks with the colors module give synthetic photometry in all three systems at every timestep.
+
+```bash
+python -m mesa_argus run population fisher_stencil      # resumable: re-running skips finished and running tracks
+python -m mesa_argus status population fisher_stencil
+python -m mesa_argus cmd3d population                   # -> outputs/population_cmd3d.html (one self-contained file)
+python -m mesa_argus fisher                             # -> outputs/fisher/*.png, results.csv
+```
+
+Add `--live` to `cmd3d` or `fisher` to rebuild as runs finish.
+
+**The analysis.** Tracks are resampled onto equivalent evolutionary points (EEPs), so index *e* is the same stage on
+every track. At each EEP, central differences across the stencil tracks give ∂m_band/∂θ for θ = [M/H], ln M and
+α_MLT; age (along the track) and the distance modulus (with the prior in `analysis.toml`) are nuisance directions.
+The Cramér–Rao bound √(F⁻¹)_θθ, with F = Jᵀ Σ⁻¹ J, is the best precision any unbiased fit to that star's photometry
+can reach. Gaia and SDSS use fixed per-band errors (`analysis.toml`); Argus is evaluated at a range of trial errors
+(1 mmag to 0.5 mag). Two bands constrain at most two quantities per star (plus the distance prior), so separating
+[M/H] from α_MLT needs ≥ 3 bands.
+
+**Physics.** Kurucz2003 (ATLAS9) atmospheres; magnitudes absolute (Vega for Gaia and Argus, AB for SDSS, with AB − Vega
+offsets measured from the module). Scaled-solar GS98 composition, no diffusion; Y from the solar calibration
+(`data/solar_calibration.json`, α_MLT⊙ = 1.980). MIST-like overshoot (f = 0.016), Reimers/Blöcker winds. Stops at
+core He depletion or 13.5 Gyr (25 Gyr for the stencils).
+
+**Caveats.** Scaled-solar models (for α-enhanced halo stars read [M/H] ≈ [Fe/H] + 0.3); no extinction in the Fisher
+analysis; atmospheres outside the grid (Teff < 3500 K giants, hot low-g corners) are clamped by MESA and excluded.
+
+### Looking at one MESA model through Argus
+
+`plot_sed_observation.py` shows one SED (or a whole track as a movie) as an Argus CMD point, light curve, synthetic
+exposure and spectrum:
+
+```bash
+python plot_sed_observation.py runs/<track>/SED/beta_SED_00000010.csv --distance-pc 2000
+python plot_sed_observation.py runs/<track> --distance-pc 2000      # movie of the track
+```
+
+`grids/argus_sim_seds.py` tracks write the SED at every model; `python -m mesa_argus seds GRID` packs them into
+`runs/<track>/seds.h5` (wavelength, f_λ at 10 pc per model, model properties, magnitudes).
 
 ## Layout
 
 ```
-config.toml             machine settings: MESA / colors-data paths, parallelism
-analysis.toml           Fisher-analysis inputs: Gaia/SDSS errors, Argus trial errors, distance prior
-grids/                  grid definitions, one file per grid; every track says why it is there
-  population.py           realistic (M, [M/H], α_MLT) stars for display (35 tracks)
-  fisher_stencil.py       ±steps around 5 anchor stars for numerical derivatives (35 tracks)
-inlists/
-  physics.inlist          the single physics template (MIST-like), rendered per run
-  history_columns.list
-mesa_work/              MESA work directory (stock src/), `make -C mesa_work` -> build/bin/star
-mesa_argus/             Python package (python -m mesa_argus ...)
-  runner.py               run dirs, resumable parallel runs, machine-wide process cap
-  grids.py                loads grids/*.py into track specs (composition from [M/H])
-  history.py              history reading, pre-MS trim, phases, atmosphere-grid coverage
-  cmd3d.py                interactive 3D CMD (templates/cmd3d.html + vendor/plotly)
-  eep.py                  equivalent evolutionary points (matched stages across tracks)
-  fisher.py               derivatives, Fisher matrices, Cramér–Rao bounds, figures
-  calibrate.py            solar calibration of (α_MLT, Y)
-  zeropoints.py           AB − Vega offsets measured from the colors module
-data/                   committed inputs: calibration, zero points, SDSS curves
-runs/                   (generated) one directory per track, with its full rendered `inlist`
-outputs/                (generated) HTML, figures, CSV, logs
+argus_field.py          night movies: set up a field (Gaia or synthetic), build its models, render
+night_movie.py          night movies: simulate and measure the exposures of one field, draw the movie
+plot_sed_observation.py one SED or one MESA track through Argus
+mesa_argus/             the Python package (python -m mesa_argus ...)
+  argus.py                Argus bands, units and plot style shared by the movies
+  dust.py                 CCM89 extinction
+  photometry.py           SExtractor (SEP) photometry and per-exposure calibration
+  rsp.py                  MESA RSP pulsator models
+  binary.py               PHOEBE eclipsing-binary models
+  transients.py           sncosmo and parametric transients
+  seds.py                 MESA SED packing; the constant-star SED templates
+  runner.py, grids.py     resumable parallel MESA runs; grid definitions → track specs
+  history.py, eep.py      history reading, phases, equivalent evolutionary points
+  cmd3d.py, fisher.py     the 3D CMD page; Fisher matrices and figures
+  calibrate.py, zeropoints.py, filters.py, composition.py, config.py
+  m67.py                  the M67 experiment (below)
+grids/                  MESA grid definitions, one file per grid
+inlists/                the single MESA physics template
+mesa_work/              MESA work directory (make -C mesa_work)
+data/                   committed inputs: one folder per field (data/<field>/), calibrations, filter curves
+batches/                field lists for tools/stage_batch.py
+tools/                  batch runner, field finder
+demo/                   the interactive HTML page and its validation
+docs/ASSUMPTIONS.md     what the night movies model and assume
+experiments/            finished early experiments (the M67 1 Myr minipix movie)
+config.toml             machine settings          analysis.toml   Fisher-analysis inputs
+templates/, vendor/     the 3D CMD page's template and its bundled plotly
+runs/, outputs/         generated (not in git): MESA runs and models; movies, figures, CSVs
 ```
 
-To add a grid, drop a new `grids/<name>.py` defining `tracks(make)` (see the existing two).
-To add a photometric system, add its curves to `mesa_argus/filters.py` and its bands to
-`config.py` / `fisher.py`.
-
-## SEDs for the Argus simulator
-
-`grids/argus_sim_seds.py` re-runs five stars that span the CMD: 1.0 Msun and 0.8 Msun at
-[M/H] -2 (both to the RGB tip), and 3, 5 and 10 Msun (to core-He exhaustion). It sets
-`save_seds`, so MESA writes the interpolated atmosphere SED at every model, as the colors
-module's raw CSVs in `runs/<track>/SED/` (one per filter per model, `<filter>_SED_<model>.csv`;
-these are always kept). After each run a convenience copy is also packed into one file per track
-(`python -m mesa_argus seds GRID` re-packs by hand):
-
-```
-runs/<track>/seds.h5
-  wavelength      [n_wave]            Angstrom (atmosphere-grid sampling, 147 A - 160 um)
-  flux            [n_model, n_wave]   f_lambda at 10 pc, erg s^-1 cm^-2 A^-1
-  model/...       [n_model]           model_number, star_age, star_mass, Teff, log_g, log_L, log_R,
-                                      mh, phase (-1 pre-MS, 0 MS, 1 H-shell, 2 core He),
-                                      inside_atm_grid, Interp_rad, Mag_bol, Flux_bol, fbol_sed_over_L
-  mag/<band>      [n_model]           absolute magnitudes (Gaia/Argus Vega, SDSS AB)
-  attrs                               track parameters, units, provenance
-```
-
-`fbol_sed_over_L` = integrated SED / (L/4πd²) per model. It is ~1 (< 0.5% off) almost everywhere,
-but up to ~7% high for hot, low-g models (Hertzsprung gap / blue loop, Teff 8500-15000 K, log g < 3)
-near the ragged low-g edge of the Kurucz grid, where the interpolation is not flux-conserving.
-To scale to a distance d, multiply flux by (10 pc / d)².
-
-To see one model through Argus (CMD point, light/colour curve, synthetic exposure, spectrum), point
-`plot_sed_observation.py` straight at a raw SED CSV. All photometry goes through ArgusSim's
-`ABPhot.mag_from_sed` / `electrons_from_sed`. Add `--distance-pc` to move the star away from 10 pc,
-because most models saturate there in a 60 s exposure:
-
-```
-python plot_sed_observation.py runs/<track>/SED/beta_SED_00000010.csv --distance-pc 2000 -o model10.png
-```
-
-Point it at the run folder instead to get a movie of the whole track, one frame per model in
-model-number order, with light curves against star age from `LOGS/history.data` (`--max-frames`, default 600, subsamples long runs; `--model-range` picks a phase):
-
-```
-python plot_sed_observation.py runs/<track> --distance-pc 2000      # -> <track>_argus.mp4
-```
-
-## Night movies of Argus fields
-
-`argus_field.py` simulates one night of Argus 60 s exposures on any pointing and renders a movie per band
-(`outputs/<field>/<field>_night_<band>.mp4`, with its `.photometry.csv`). The movie shows a CMD, the exposure
-as a β/ρ colour composite, a difference image, the light curves (SExtractor MAG_AUTO) and the SEDs.
-Every source is an SED fed through ArgusSim, so the light it sends to the image depends on the band and the airmass:
-
-- **Constant stars:** the colour-matched MESA SED (`runs/*_sed/seds.h5`) scaled to the star's G.
-- **Pulsators:** MESA RSP limit cycles (`mesa_argus/rsp.py`).
-- **Eclipsing binaries:** PHOEBE with MESA atmosphere SEDs (`mesa_argus/binary.py`).
-  Pulsators and binaries both write `runs/rsp_<field>_<label>/pulsation.h5`.
-- **Transients:** sncosmo spectral time series, plus three parametric models written in this repo (GRB afterglow,
-  point-lens microlensing, dwarf-nova disc outburst; `mesa_argus/transients.py`, `runs/transient_<field>_<label>/transient.h5`).
-  `python -m mesa_argus.transients --list` lists the sncosmo models.
-
-There are two modes:
-
-```bash
-# Gaia: the real field, with the Gaia-classified variables you choose modelled
-python argus_field.py --ra 294.7844 --dec -11.6235 --block 9 --list
-python argus_field.py --ra 294.7844 --dec -11.6235 --block 9 --select all --date auto
-
-# synthetic: the real field's Gaia magnitudes and colours at random positions, all constant, plus transients
-python argus_field.py --ra 294.7844 --dec -11.6235 --block 9 --date 2026-07-19 --synthetic --seed 1 \
-  --transient salt3:z=0.02,M=-19.3,x1=0,c=0,t0=start+0.2
-```
-
-`python argus_field.py --help` describes each step, and `synthetic()` in `argus_field.py` lists the transient keys.
-Each field's choices and assumptions are written to `outputs/<field>/field_summary.md`.
-`stage_batch.py` runs several fields overnight.
-
-## Physics
-
-- **Atmospheres:** Kurucz2003 (ATLAS9). Magnitudes are absolute (10 pc): Vega for Gaia and
-  Argus, AB for SDSS. The AB − Vega offsets are measured from the module itself.
-- **Composition:** scaled-solar GS98, with no diffusion. Y = Y_p + (ΔY/ΔZ) Z, where
-  Y_p = 0.2485 and ΔY/ΔZ comes from the solar calibration.
-- **Mixing length:** α_MLT⊙ = 1.980 from the solar calibration.
-- **MIST-like physics:** exponential core overshoot f = 0.016; Reimers η = 0.1 / Blöcker η = 0.2
-  winds; Type-2 opacities during He burning.
-- **Stopping condition:** core He depletion, or 13.5 Gyr (25 Gyr for the stencils, where age is a
-  nuisance parameter rather than a realism cut).
-
-## The discernibility analysis
-
-The question is how well each system resolves changes in [M/H], mass and α_MLT once
-evolutionary state and distance are unknown.
-
-1. **Matched stages.** Tracks are resampled onto EEPs, so index *e* is the same evolutionary
-   stage on every track:
-   - **MS:** matched by central X.
-   - **Subgiant / RGB:** matched by fractional HRD path length.
-   - **Core He burning:** matched by central Y.
-2. **Derivatives.** At each EEP, central differences across the stencil tracks give
-   ∂m_band/∂θ for θ = [M/H], ln M and α_MLT.
-3. **Nuisances.** Two nuisance directions are added:
-   - **Along the track:** age.
-   - **Distance modulus:** shifts every band equally, with the prior σ(μ) from `analysis.toml`.
-4. **Bounds.** F = Jᵀ Σ⁻¹ J. The Cramér–Rao bound √(F⁻¹)_θθ is the best precision any unbiased
-   fit to that star's photometry can reach.
-
-Gaia and SDSS use the fixed per-band errors in `analysis.toml`. Argus is evaluated at each trial
-error (1, 3, 5 mmag and 0.1, 0.3, 0.5 mag), giving one figure each. The equal-noise figure gives
-every band the same error, which isolates the information carried by the bandpasses themselves.
-`summary_vs_argus_sigma.png` shows where Argus crosses Gaia and SDSS.
-
-Two bands constrain at most two quantities per star (plus the distance prior). So for a single
-star, Argus can measure one physics parameter together with its evolutionary state. Separating
-[M/H] from α_MLT jointly needs ≥ 3 bands, and the `feh|alpha` row shows that explicitly.
-
-## Caveats
-
-- **Scaled-solar models:** atmospheres and opacities are scaled-solar. For α-enhanced halo stars,
-  read [M/H] ≈ [Fe/H] + 0.3 (Salaris et al. 1993).
-- **Extinction:** no extinction yet. A_V would be another nuisance direction, and a real
-  degeneracy with [M/H].
-- **Clamped atmospheres:** points outside the atmosphere grid (Teff < 3500 K at giant-branch
-  tips, and hot low-g corners) are clamped by the colors module. They are hidden in the HTML and
-  excluded from the analysis.
-- **Argus throughputs:** Argus curves are read from your MESA colors data
-  (`filters/Argus/System`), not committed here.
+The hand-made fields `m3`, `m15`, `rr308108` and `rr416445` (`night_movie.py --field m3`) are the first movies,
+set up before `argus_field.py` existed. `data/sparse/` is the search that found the two RR Lyrae fields;
+`data/rich_fields*.ecsv` is the output of `tools/find_rich_field.py`.

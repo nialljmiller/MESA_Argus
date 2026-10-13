@@ -1,4 +1,4 @@
-// The page's night photometry, as m3_night_movie measures it: the catalogue a pipeline would calibrate against, the
+// The page's night photometry, as night_movie measures it: the catalogue a pipeline would calibrate against, the
 // FWHM it matches with, and each exposure through SEP.Photometry. The page runs it in a Web Worker (from the inlined
 // sim.js, sep.js and this file); demo/validate/sep.mjs uses the same catalogue and FWHM.
 

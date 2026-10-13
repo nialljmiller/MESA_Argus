@@ -1,4 +1,4 @@
-"""SExtractor photometry of the synthetic Argus exposures (m3_night_movie.py).
+"""SExtractor photometry of the synthetic Argus exposures (night_movie.py).
 
 SEP (Barbary 2016; SExtractor's algorithms, Bertin & Arnouts 1996) on every exposure, with SExtractor's defaults:
 - background: mesh 64 x 64 px, 3 x 3 median filter (BACK_SIZE 64, BACK_FILTERSIZE 3);

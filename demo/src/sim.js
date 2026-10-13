@@ -1,4 +1,4 @@
-// The Argus exposure simulator of the interactive page: a port of m3_night_movie.Scene.observe.
+// The Argus exposure simulator of the interactive page: a port of night_movie.Scene.observe.
 // Runs in the browser and in node (demo/validate/*.mjs). All physics tables come from demo/export_demo.py.
 
 const Sim = (() => {
@@ -80,7 +80,7 @@ const Sim = (() => {
   }
 
   // ---------------------------------------------------------------- the scene
-  // linear interpolation on the airmass grid, clipped to it (as m3_night_movie.main rates_at)
+  // linear interpolation on the airmass grid, clipped to it (as night_movie.main rates_at)
   function airmassWeights(grid, x) {
     x = Math.min(Math.max(x, grid[0]), grid[grid.length - 1]);
     let i1 = grid.findIndex((g) => g >= x);

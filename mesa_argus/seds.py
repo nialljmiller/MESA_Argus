@@ -17,6 +17,7 @@ phase: -1 pre-main sequence, 0 MS, 1 H-shell burning, 2 core He burning.
 The raw CSVs in SED/ are always kept: seds.h5 is a convenience copy, not a replacement.
 """
 
+import glob
 import re
 
 import numpy as np
@@ -191,3 +192,35 @@ def unpack(track, workers=8):
         n = sum(ex.map(_unpack_models, jobs))
     print(f"  {track['name']}: wrote {n} models x {len(filters)} filters to {out_dir}")
     return out_dir
+
+
+# ---------------------------------------------------------------- constant-star templates
+class Templates:
+    """MESA SEDs (f_lambda at 10 pc) indexed by Gaia BP-RP, metal-poor track preferred."""
+
+    def __init__(self, stride=1):
+        import astropy.units as u
+        import h5py
+
+        waves, fluxes, colours, g, feh = None, [], [], [], []
+        for path in sorted(glob.glob(str(C.RUNS / "*_sed" / "seds.h5"))):
+            with h5py.File(path) as f:
+                w = f["wavelength"][:]
+                waves = w
+                sel = slice(None, None, stride)
+                fluxes.append(f["flux"][sel])
+                colours.append(f["mag/Gbp"][sel] - f["mag/Grp"][sel])
+                g.append(f["mag/G"][sel])
+                feh.append(np.full(len(g[-1]), float(f.attrs["feh"])))
+        self.wave = waves * u.AA
+        self.flux, self.colour, self.g, self.feh = (np.concatenate(x) for x in (fluxes, colours, g, feh))
+
+    def index(self, bp_rp):
+        """The template matching bp_rp."""
+        score = np.abs(self.colour - bp_rp) + 0.004 * np.abs(self.feh + 1.5)  # mild preference for metal-poor (M3 [Fe/H] ~ -1.5)
+        return int(np.argmin(score))
+
+    def sed(self, bp_rp, gmag):
+        """Observer-frame f_lambda (erg/s/cm2/A) of the template matching bp_rp, scaled to G = gmag."""
+        i = self.index(bp_rp)
+        return self.flux[i] * 10 ** (-0.4 * (gmag - self.g[i]))
