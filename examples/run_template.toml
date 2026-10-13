@@ -26,7 +26,7 @@ max_airmass = 2.0
 [movie]
 bands = ["beta", "rho"]   # one movie per band (the exposure panel is always the beta/rho colour composite)
 models_only = false       # build the models, do not render
-stride = 1                # render every Nth exposure (photometry uses all)
+stride = 1                # render and measure every Nth exposure
 seed = 3                  # noise
 exptime = 60.0            # s
 # seeing = 1.0            # zenith FWHM (arcsec); default: ArgusSim's seasonal site median for the date

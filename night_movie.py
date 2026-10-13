@@ -573,7 +573,7 @@ def parser():
                    help="zenith seeing FWHM (arcsec); default: ArgusSim's seasonal site median for the date")
     p.add_argument("--field-angle", type=float, default=1.44,
                    help="deg from the optical axis; default 1.44 = the area-weighted median over the 2.03 deg field")
-    p.add_argument("--stride", type=int, default=1, help="render every Nth exposure (photometry uses all)")
+    p.add_argument("--stride", type=int, default=1, help="render and measure every Nth exposure (the photometry CSV has those exposures only)")
     p.add_argument("--fps", type=float, default=24)
     p.add_argument("--dpi", type=int, default=100)
     p.add_argument("--highlight", type=int, default=6, help="pulsators to follow (MESA RSP models) in the light-curve panel")
