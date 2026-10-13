@@ -24,104 +24,132 @@ python -m mesa_argus run argus_sim_seds   # the stellar SEDs every movie uses fo
 
 On macOS, wrap long runs in `caffeinate -dims` so sleep does not suspend MESA.
 
-## 1. Night movies
+## 1. Night movies: stars, then observations
 
-`argus_field.py` is the entry point. A **run file** (TOML) says everything about one dataset: the field, the night,
-the sources placed in it and the movie settings. `argus_field.py` fetches the field, builds the models and renders
-one movie per band into `outputs/<field>/`.
+Two steps, two kinds of file:
 
 ```bash
-python argus_field.py examples/synthetic_transients.toml           # a synthetic field with a microlensing event and a dwarf nova
-python argus_field.py examples/gaia_f294.toml --list               # a real field: what is there
-python argus_field.py examples/gaia_f294.toml                      # ... its catalogued variables modelled
-python argus_field.py examples/synthetic_grb.toml --set movie.stride=10 --set night.start='"05:00"'   # override any key
+python make_stars.py examples/stars/variables.toml                 # simulate stars   -> stars/<name>/
+python observe.py examples/observations/synthetic_variables.toml   # observe them     -> outputs/<name>/
 ```
 
-[`examples/run_template.toml`](examples/run_template.toml) lists every key with its default. A run file has four
-parts:
+**`make_stars.py <star file>`** simulates stars and nothing else: no dust, no position in an image, no night, no
+instrument. Each `[[star]]` (one star) or `[[set]]` (many constant stars) is built once into its own folder:
+
+```
+stars/<name>/
+  star.toml     the definition it was built from (every key)
+  meta.json     what was built: kind, engine, model parameters; real stars also position, ephemeris, sightline E(B-V)
+  sed.h5        the model: SEDs against time (transients, before any dust) or one cycle at 10 pc (periodic)
+  catalogue/    (sets) the catalogue files
+  summary.md    the same, to read
+```
+
+Running a star file again skips stars already built; a changed definition under an existing name is refused unless
+named with `--rebuild NAME`. `python make_stars.py --list` lists the built stars.
 
 ```toml
-[field]                    # where, which mode, how big
+[[star]]
+name = "wuma_035"
+generator = "W UMa"          # python -m mesa_argus.sources: every generator and its keys
+period = 0.35
+q = 0.4
+incl = 80
+teff1 = 5800
+teff2 = 5600
+fillout = 0.2
+distance = 620
+
+[[set]]
+name = "f294_784m11_623_field"
+generator = "Gaia field"     # every Gaia star around a pointing, as constant stars
+ra = 294.7844
+dec = -11.6235
+```
+
+**`observe.py <observation file>`** observes built stars. It adds everything about observing: the pointing and
+night, the Milky Way dust (SFD at the pointing), where each star sits and when its cycle or event happens, ArgusSim's
+sky, seeing, PSF and noise, the measurement, and what to produce:
+
+```toml
+[field]
 ra = 294.7844
 dec = -11.6235
 block = 9
-mode = "synthetic"         # "gaia": the real field and its catalogued variables; "synthetic": its stars at random positions
 
 [night]
-date = "2026-07-19"
+date = "2026-07-19"          # or "auto": the night the placed real stars change most
 
-[movie]
-bands = ["rho"]
+[stars]
+background = "f294_784m11_623_field"
+layout = "random"            # "real": the set's own positions; "random": scattered (a synthetic field)
 
-[[source]]                 # any number of sources, in either mode
-generator = "microlensing"
-t0 = "start+0.15"          # transients: t0; periodic sources: epoch (ISO UTC, start+D days, or BJD_TDB)
-x = 30                     # percent of the image from its lower left (default 50, 50; -1: random)
-y = 70
-tE = 0.2                   # ... the generator's own keys
-u0 = 0.02
-base = 19.5
-bp_rp = 1.0
+[[place]]
+star = "wuma_035"
+x = 30                       # percent of the image (default 50, 50; -1 random)
+y = 30
+epoch = "start+0.05"         # periodic: a primary eclipse / maximum; transients: t0
+
+[measure]                    # SExtractor settings (defaults: SExtractor's)
+[output]                     # movie, bands, fits, page; stride, noise seed, PSF and kernel options
 ```
 
-Values come from the command line first (`--set section.key=value`, `--source '{...}'`, and the common flags such as
-`--ra`, `--date`), then the run file, then the defaults. Everything is checked before any work starts. The run as
-made (every key, the night as used) is written to `outputs/<field>/run.toml`; running that file makes the dataset
-again. Machine settings (MESA paths, cores) stay in `config.toml`, so a run file means the same on every machine.
+[`examples/observations/template.toml`](examples/observations/template.toml) lists every key with its default; any
+key can be overridden with `--set section.key=value` (and `--place '{...}'`, `--date`, `--ra`, ...). Outputs, in
+`outputs/<name>/`:
 
-Outputs, per field:
+- `<name>_night_<band>.mp4`: the movie (CMD, β/ρ colour exposure, difference image, light curves, SEDs).
+- `<name>_night_<band>.photometry.csv`: every measurement with the true model magnitude beside it.
+- `fits/` (`output.fits = true`): every measured exposure in both bands, with what made it in the header.
+- `observation.toml`: the observation as made (every key, the night as used): running it makes the same data.
+- `summary.md`; `scene/`: exactly what the engine (`night_movie.py`) read.
 
-- `outputs/<field>/<field>_night_<band>.mp4`: the movie. Its panels are the CMD, the exposure (β/ρ colour
-  composite), the difference image, the light curves (measured and model) and the SEDs.
-- `outputs/<field>/<field>_night_<band>.photometry.csv`: every measurement, with the true model magnitude beside it.
-- `outputs/<field>/field_summary.md`: what was modelled in this field and how; `run.toml`: the run.
-
-To re-render a field that is already set up (for example a quick look at every 10th exposure):
+### Real fields
 
 ```bash
-python night_movie.py --field f294_784m11_623 --band rho --stride 10 -o outputs/f294_784m11_623/test.mp4
+python make_stars.py --gaia-list 294.7844 -11.6235 --write examples/stars/f294.toml   # what is there; a star file
+python make_stars.py examples/stars/f294.toml        # the field's stars as a set + each modellable variable
+python observe.py examples/observations/f294.toml    # layout "real"; each variable placed by name only
 ```
 
-### Sources: the generators
+A real star (generator `Gaia variable`) is modelled from Gaia DR3: its period and ephemeris, distance, the E(B−V)
+along its sightline (used only to infer its luminosity), composition and mass, then MESA RSP or PHOEBE fitted to
+Gaia's eclipses. Its SEDs are dust-free like every star's; an observation puts it at its real position and
+ephemeris, seen through its own sightline's dust. Gaia's catalogue magnitudes already include each star's dust, so a
+Gaia field set's constant stars are used as measured. Gaia queries are cached in `data/gaia/<pointing>/`.
 
-Every variable or transient comes from a **generator** in `mesa_argus/sources/`. `python -m mesa_argus.sources`
-lists them all with every key, its meaning and default; `python -m mesa_argus.sources "W UMa"` shows one. Names
-ignore case, spaces and punctuation (`"wuma"` works).
+### Generators
 
 | Generator | Timing | Engine | What it is |
 |---|---|---|---|
-| `RR Lyrae` (`mode` RRab, RRc) | periodic | MESA RSP | radial pulsator tuned to your period, L from `G` and `distance` |
+| `RR Lyrae` (`mode` RRab, RRc) | periodic | MESA RSP | radial pulsator tuned to your period, at `L` or absolute `M_G`, at `distance` |
 | `Cepheid` (F, 1O), `Type II Cepheid` (BL Her, W Vir), `HADS` | periodic | MESA RSP | as RR Lyrae |
-| `W UMa` | periodic | PHOEBE | contact binary from period, q, inclination, Teffs, fillout factor |
-| `detached EB` | periodic | PHOEBE | detached binary from period, inclination, Teffs, radii (masses optional) |
-| `supernova` | transient | sncosmo | any sncosmo model (`python -m mesa_argus.transients --list`) at a redshift and peak absolute magnitude |
+| `W UMa` | periodic | PHOEBE | contact binary from period, q, inclination, Teffs, fillout factor, distance |
+| `detached EB` | periodic | PHOEBE | detached binary from period, inclination, Teffs, radii (masses optional), distance |
+| `Gaia variable` | periodic | MESA RSP / PHOEBE | a real Gaia DR3 variable, modelled as itself |
+| `supernova` | transient | sncosmo | any sncosmo model at a redshift and peak absolute magnitude |
 | `GRB` | transient | power law | optical afterglow, f_ν ∝ t^−α ν^−β with a t² onset |
 | `microlensing` | transient | point lens | point or uniform-disc source, a MESA template SED |
 | `dwarf nova` | transient | steady disc | accretion disc with a rising and decaying accretion rate, plus the white dwarf |
+| `Gaia field` | set | Gaia DR3 | every Gaia star around a pointing, as constant stars |
 
 GRB, microlensing and dwarf nova are parametric models written in this repo (equations and references in
-`mesa_argus/transients.py`). Placed sources need no Gaia data: Gaia is used only in gaia mode, to model the real
-catalogued stars you `select`. MESA RSP models take ~0.5–2 h each and PHOEBE a few minutes; both are cached per field
-and label in `runs/`.
+`mesa_argus/transients.py`). MESA RSP models take ~0.5–2 h each and PHOEBE a few minutes.
 
-**Adding a generator:** a new module in `mesa_argus/sources/` with a list `GENERATORS` of `Generator(name, timing,
-engine, summary, params, make)`. `make(out_dir, p, field)` writes `transient.h5` (SEDs against time since t0) or
-`pulsation.h5` (one cycle of SEDs) and returns its metadata. It is found automatically: its keys are validated in run
-files, listed by `python -m mesa_argus.sources`, and it is drawn in the movie like every other source. The package
-docstring (`mesa_argus/sources/__init__.py`) gives the details.
+**Adding a generator:** a module in `mesa_argus/sources/` with a list `GENERATORS` of `Generator(name, timing,
+engine, summary, params, make)`. It is found automatically: its keys are validated in star files and listed by
+`python -m mesa_argus.sources`, and observations place it like every other star. The package docstring
+(`mesa_argus/sources/__init__.py`) gives the details.
 
-### How a movie is made
+### How it fits together
 
 ```
-argus_field.py run.toml
-  ├─ the field      Gaia DR3 (and ASAS-SN) around the position → data/<field>/
-  │                 (synthetic: the same stars' magnitudes and colours at random positions)
-  ├─ the sources    an SED for every star, in runs/:
-  │                   constant stars     MESA SED matched to Gaia BP−RP, scaled to G   (runs/*_sed)
-  │                   catalogued (gaia)  MESA RSP / PHOEBE fitted to the Gaia star   mesa_argus/rsp.py, binary.py
-  │                   placed sources     the generators                              mesa_argus/sources/
-  └─ night_movie.py the night's exposures: ArgusSim PSF, sky, airmass and noise → images
-                    → SExtractor (SEP) photometry, calibrated per exposure → movie + CSV
+make_stars.py star file          → stars/<name>/   (generators in mesa_argus/sources/: MESA RSP, PHOEBE, sncosmo,
+                                                     parametric transients, Gaia)
+observe.py observation file      → outputs/<name>/scene/  (field, background stars, placed stars with their file,
+                                                            position, timing and dust)
+  └─ night_movie.py --scene      → the night's exposures: ArgusSim PSF, sky, airmass and noise → images
+                                   → SExtractor (SEP) photometry, calibrated per exposure → movie, CSV, FITS
 ```
 
 Every assumption (what comes from ArgusSim, what is written here, what is assumed) is in
@@ -129,37 +157,43 @@ Every assumption (what comes from ArgusSim, what is written here, what is assume
 
 ### Batches
 
-A batch is one TOML file: a base run file and lists of values to iterate over. Each run is written out as its own
-run file and made with `argus_field.py`, several at once, sharing the cores; re-running resumes.
+`tools/stage_batch.py` takes a base file and lists to iterate over, as one TOML file:
+
+- **Observation batches** (base: an observation file): one observation per combination of the `[vary]` lists (`combine
+  = "product"` or `"zip"`; values inline or from a CSV), each written out as its own observation file and run with
+  `observe.py`, several at once.
+- **Star batches** (base: a star file): `[vary]` keys `star.<key>` make a grid of every star in the base, built by one
+  `make_stars.py` run.
 
 ```toml
-base = "../examples/synthetic_grb.toml"
-combine = "product"                 # every combination; "zip": the lists side by side
-
+base = "../examples/observations/synthetic_grb.toml"
 [vary]
-"field.ra,field.dec" = [[294.7844, -11.6235], [273.0414, -20.7099]]   # or a CSV file name
-source = [
-  [{generator = "GRB", peak = 9, t0 = "start+0.06"}],
-  [{generator = "microlensing", tE = 0.2, u0 = 0.02, base = 19.5, bp_rp = 1.0, t0 = "start+0.15"}],
+"field.ra,field.dec" = [[294.7844, -11.6235], [273.0414, -20.7099]]
+place = [
+  [{star = "grb_peak9", t0 = "start+0.06"}],
+  [{star = "microlensing_te02", t0 = "start+0.15", x = 30, y = 70}],
 ]
 ```
 
 ```bash
-python tools/stage_batch.py batches/example_sweep.toml --check    # expand and validate: 4 runs; run nothing
-python tools/stage_batch.py batches/example_sweep.toml            # run them
-python tools/stage_batch.py batches/example_sweep.toml --status
+python tools/stage_batch.py batches/example_sweep.toml --check       # expand and validate: 4 observations
+python tools/stage_batch.py batches/example_sweep.toml               # run them; --status for progress
+python tools/stage_batch.py batches/example_star_grid.toml --check   # 9 W UMa stars
 ```
 
-`batches/overnight.toml` is the 16-field Gaia batch run on newton. `tools/find_rich_field.py` searches Gaia for the
-windows with the most kinds of modellable variable.
+`make_stars.py --gaia-list RA DEC [--gaia-list RA DEC ...] --write stars.toml --write-batch batch.toml` writes the
+star file and the observation batch for any number of real fields: `batches/overnight.toml` is the 16-field newton
+batch made this way. `tools/find_rich_field.py` searches Gaia for the windows with the most kinds of modellable
+variable.
 
 ### Interactive page
 
-`demo/` builds a single offline HTML page of one field with a control panel, simulating and measuring the exposures
-in the browser:
+`demo/` builds a single offline HTML page of one observation (real Gaia stars, for now) with a control panel,
+simulating and measuring the exposures in the browser (`output.page = true`, or by hand):
 
 ```bash
-python demo/export_demo.py && python demo/build_html.py      # -> demo/argus_demo.html
+python observe.py examples/observations/f294.toml --scene-only
+python demo/export_demo.py --scene outputs/f294/scene && python demo/build_html.py f294   # -> demo/argus_demo.html
 ```
 
 `demo/validate/` checks the page's simulator and SExtractor port against the Python ones.
@@ -209,8 +243,9 @@ python plot_sed_observation.py runs/<track> --distance-pc 2000      # movie of t
 ## Layout
 
 ```
-argus_field.py          night movies: set up a field (Gaia or synthetic), build its models, render
-night_movie.py          night movies: simulate and measure the exposures of one field, draw the movie
+make_stars.py           simulate stars (star files) -> stars/<name>/
+observe.py              observe built stars (observation files) -> outputs/<name>/
+night_movie.py          the engine observe.py runs: simulate and measure the exposures, draw the movie
 plot_sed_observation.py one SED or one MESA track through Argus
 mesa_argus/             the Python package (python -m mesa_argus ...)
   argus.py                Argus bands, units and plot style shared by the movies
@@ -218,9 +253,11 @@ mesa_argus/             the Python package (python -m mesa_argus ...)
   photometry.py           SExtractor (SEP) photometry and per-exposure calibration
   rsp.py                  MESA RSP pulsator models
   binary.py               PHOEBE eclipsing-binary models
-  sources/                the source generators (one module per family; python -m mesa_argus.sources)
+  sources/                the star generators (one module per family; python -m mesa_argus.sources)
   transients.py           the transient physics: sncosmo, GRB, microlensing, dwarf nova
-  runconfig.py            run files: schema, defaults, validation, overrides
+  gaia.py                 Gaia DR3 queries, a field's variables, a variable's physical parameters
+  night.py                when a pointing is observable; BJD at the site
+  runconfig.py            observation files: schema, defaults, validation, overrides
   seds.py                 MESA SED packing; the constant-star SED templates
   runner.py, grids.py     resumable parallel MESA runs; grid definitions → track specs
   history.py, eep.py      history reading, phases, equivalent evolutionary points
@@ -230,18 +267,20 @@ mesa_argus/             the Python package (python -m mesa_argus ...)
 grids/                  MESA grid definitions, one file per grid
 inlists/                the single MESA physics template
 mesa_work/              MESA work directory (make -C mesa_work)
-data/                   committed inputs: one folder per field (data/<field>/), calibrations, filter curves
+data/                   committed inputs: Gaia query caches (data/gaia/<pointing>/), calibrations, filter curves
 batches/                batch files for tools/stage_batch.py
-examples/               run files: a template with every key, and worked examples
-tools/                  batch runner, field finder
+examples/               star files (examples/stars/) and observation files (examples/observations/, template.toml)
+tools/                  batch runner, field finder, one-off migrations
+studies/                characterisation studies (the photometric offset study)
 demo/                   the interactive HTML page and its validation
 docs/ASSUMPTIONS.md     what the night movies model and assume
 experiments/            finished early experiments (the M67 1 Myr minipix movie)
 config.toml             machine settings          analysis.toml   Fisher-analysis inputs
 templates/, vendor/     the 3D CMD page's template and its bundled plotly
-runs/, outputs/         generated (not in git): MESA runs and models; movies, figures, CSVs
+stars/                  built stars (not in git; rebuilt from the star files)
+runs/, outputs/         generated (not in git): MESA / PHOEBE working runs; observations, figures, CSVs
 ```
 
-The hand-made fields `m3`, `m15`, `rr308108` and `rr416445` (`night_movie.py --field m3`) are the first movies,
-set up before `argus_field.py` existed (run with `night_movie.py --field m3`). `data/sparse/` is the search that found the two RR Lyrae fields;
+The hand-made fields `m3`, `m15`, `rr308108` and `rr416445` are the first movies, from before the star /
+observation split (run with `night_movie.py --field m3`). `data/sparse/` is the search that found the two RR Lyrae fields;
 `data/rich_fields*.ecsv` is the output of `tools/find_rich_field.py`.

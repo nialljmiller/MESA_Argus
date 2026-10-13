@@ -23,6 +23,31 @@ import sep
 
 MATCH_FWHM = 0.5
 
+# every setting an observation can change ([measure] in observe.py's file); these defaults are SExtractor's own
+SETTINGS = dict(
+    back_size=64,          # BACK_SIZE: background mesh (pixels)
+    back_filtersize=3,     # BACK_FILTERSIZE: median filter of the mesh
+    detect_thresh=1.5,     # DETECT_THRESH (sigma above the background rms)
+    detect_minarea=5,      # DETECT_MINAREA (pixels)
+    deblend_nthresh=32,    # DEBLEND_NTHRESH
+    deblend_cont=0.005,    # DEBLEND_MINCONT
+    kron_fact=2.5,         # PHOT_AUTOPARAMS: aperture = max(kron_fact x Kron radius, min_radius) in units of (a, b)
+    min_radius=3.5,
+    match_fwhm=MATCH_FWHM,  # cross-match radius (FWHM) between catalogue stars and detections
+    n_calibrators=300,     # calibration stars per exposure (the least blended of the brightest 4x this many)
+    colour_term=True,      # zero point a + b (BP-RP); false: a only
+    clip_sigma=3.0,        # zero-point fit: reject calibrators beyond this many (MAD) sigma, refit
+)
+
+
+def settings(given=None):
+    """SETTINGS with `given` applied; unknown keys refused."""
+    given = dict(given or {})
+    bad = sorted(set(given) - set(SETTINGS))
+    if bad:
+        raise SystemExit(f"[measure]: unknown keys {bad}; it takes {sorted(SETTINGS)}")
+    return {**SETTINGS, **given}
+
 
 def calibration_stars(x, y, cat_flux, n, k=300, edge=16, radius=8.0):
     """The k bright stars least contaminated by neighbours, away from the edge.
@@ -40,17 +65,18 @@ def calibration_stars(x, y, cat_flux, n, k=300, edge=16, radius=8.0):
     return candidates[np.argsort(contamination)[:k]]
 
 
-def extract(image, fwhm):
-    """SExtractor's defaults with MAG_AUTO as SExtractor measures it (see the module docstring).
+def extract(image, fwhm, cfg=None):
+    """SExtractor's defaults with MAG_AUTO as SExtractor measures it (see the module docstring); cfg: settings().
 
     Returns x, y (windowed), flux, flux error and peak of every detection."""
+    c = cfg or SETTINGS
     data = np.ascontiguousarray(image, dtype=np.float64)
-    bkg = sep.Background(data, bw=64, bh=64, fw=3, fh=3)
+    bkg = sep.Background(data, bw=c["back_size"], bh=c["back_size"], fw=c["back_filtersize"], fh=c["back_filtersize"])
     sub = data - bkg.back()
     sep.set_extract_pixstack(10_000_000)
     sep.set_sub_object_limit(8192)
-    obj, seg = sep.extract(sub, 1.5, err=bkg.globalrms, minarea=5, deblend_nthresh=32, deblend_cont=0.005,
-                           segmentation_map=True)
+    obj, seg = sep.extract(sub, c["detect_thresh"], err=bkg.globalrms, minarea=c["detect_minarea"],
+                           deblend_nthresh=c["deblend_nthresh"], deblend_cont=c["deblend_cont"], segmentation_map=True)
     ids = np.arange(1, len(obj) + 1, dtype=np.int32)
     x, y = np.asarray(obj["x"], float), np.asarray(obj["y"], float)
     xw, yw, fl = sep.winpos(sub, x, y, fwhm / 2.3548)
@@ -59,7 +85,7 @@ def extract(image, fwhm):
     th = np.clip(th, -np.pi / 2, np.pi / 2)
     kr, kf = sep.kron_radius(sub, x, y, a, b, th, 6.0, seg_id=ids, segmap=seg)
     # PHOT_AUTOPARAMS 2.5, 3.5: the elliptical aperture is max(2.5 x Kron radius, 3.5) in units of (a, b)
-    r = np.maximum(2.5 * np.nan_to_num(kr, nan=0.0), 3.5)
+    r = np.maximum(c["kron_fact"] * np.nan_to_num(kr, nan=0.0), c["min_radius"])
     flux, ferr, ff = sep.sum_ellipse(sub, x, y, a, b, th, r, err=bkg.globalrms, subpix=1, seg_id=ids, segmap=seg)
     return np.where(good, xw, x), np.where(good, yw, y), np.asarray(flux, float), np.asarray(ferr, float), obj["peak"]
 
@@ -67,21 +93,22 @@ def extract(image, fwhm):
 class SExtractorPhotometry:
     """measure(image) -> the targets' flux, sigma, mag, mag_err (nan where not detected) and saturation flags."""
 
-    def __init__(self, x, y, cat_mag, cat_flux, n, fullwell, targets, colour, fwhm):
+    def __init__(self, x, y, cat_mag, cat_flux, n, fullwell, targets, colour, fwhm, cfg=None):
+        self.cfg = settings(cfg)
         self.x, self.y = np.asarray(x, float), np.asarray(y, float)
         self.cat_mag, self.colour = np.asarray(cat_mag, float), np.asarray(colour, float)
         self.fullwell, self.targets, self.fwhm = fullwell, list(targets), fwhm
-        picks = calibration_stars(self.x, self.y, np.asarray(cat_flux, float), n)
+        picks = calibration_stars(self.x, self.y, np.asarray(cat_flux, float), n, k=self.cfg["n_calibrators"])
         self.cal = np.setdiff1d(picks[np.isfinite(self.colour[picks])], self.targets)
 
     def measure(self, image):
-        x, y, flux, ferr, peak = extract(image, self.fwhm)
+        x, y, flux, ferr, peak = extract(image, self.fwhm, self.cfg)
         sat_level = 0.98 * self.fullwell
 
         def nearest(i):  # standard cross-match: the nearest detection within MATCH_FWHM x FWHM
             d = np.hypot(x - self.x[i], y - self.y[i])
             j = int(np.argmin(d))
-            return j if d[j] <= MATCH_FWHM * self.fwhm else -1
+            return j if d[j] <= self.cfg["match_fwhm"] * self.fwhm else -1
 
         # zero point with a colour term: mag + 2.5 log10(flux) = a + b (BP-RP), 3-sigma clipped
         cal_y, cal_c = [], []
@@ -96,9 +123,12 @@ class SExtractorPhotometry:
         for _ in range(10):
             if use.sum() < 5:
                 break
-            b, a = np.polyfit(cal_c[use], cal_y[use], 1)
+            if self.cfg["colour_term"]:
+                b, a = np.polyfit(cal_c[use], cal_y[use], 1)
+            else:
+                a = float(np.median(cal_y[use]))
             r = cal_y - (a + b * cal_c)
-            new = np.abs(r) <= 3.0 * 1.4826 * np.median(np.abs(r[use] - np.median(r[use])))
+            new = np.abs(r) <= self.cfg["clip_sigma"] * 1.4826 * np.median(np.abs(r[use] - np.median(r[use])))
             if np.array_equal(new, use):
                 break
             use = new

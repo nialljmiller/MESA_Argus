@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """One night of Argus 60 s exposures on a field: the movie (CMD, colour exposure, difference image, light curves,
-SEDs) and the photometry CSV. argus_field.py prepares a field and calls this; it can also be run on its own:
+SEDs) and the photometry CSV. observe.py writes a scene and calls this; it can also be run on its own:
 
-    python night_movie.py --field f294_784m11_623 --band rho              # -> outputs/<field>/<field>_night_rho.mp4
-    python night_movie.py --field f294_784m11_623 --stride 10 -o outputs/f294_784m11_623/test.mp4   # quick look
+    python observe.py examples/observations/f294.toml       # the usual way: observe.py writes the scene and runs this
+    python night_movie.py --scene outputs/f294/scene --band rho -o outputs/f294/test.mp4 --stride 10   # again, by hand
+    python night_movie.py --field m3                         # a hand-made field
 
-A field is a folder data/<field>/ (written by argus_field.py: field.json, the stars, followed.json, sources.json),
-or one of the hand-made fields in FIELDS below (M3, M15, two RR Lyrae fields).
+Its input is a scene folder, written by observe.py (field.json, the star catalogue, sources.json: every modelled star
+with its SED file in stars/, position, timing and dust), or one of the hand-made fields in FIELDS below (M3, M15, two
+RR Lyrae fields, data/<field>/).
 
 Sources: every star is an SED seen through ArgusSim. Constant stars are the MESA SED (runs/*_sed) whose Gaia BP-RP
 matches their colour, scaled to their G. Followed pulsators are MESA RSP models and eclipsing binaries PHOEBE models
@@ -56,7 +58,7 @@ from mesa_argus.seds import Templates  # noqa: E402
 
 iers.conf.auto_download = False
 # hand-made fields: Gaia data folder, centre, HDPS tile and 3x3 block centre, default night, site override (fields made
-# by argus_field.py are added from their data/<field>/field.json below)
+# by observe.py are scene folders: --scene)
 FIELDS = {
     "m3": dict(name="M3", centre=(205.5484, 28.3773), tile=345967, block=(34, 32), date="2027-05-05", site=None),
     # M15 for a comparison with ADDEM at Sierra Remote Observatories (approximate SRO coordinates; Argus instrument)
@@ -74,7 +76,7 @@ FIELDS = {
     "rr416445": dict(name="field RRab", centre=(8.841137, 52.998087), tile=417610, block=(12, 34), date="2026-10-06",
                      site=dict(latitude=37.07, longitude=-119.41, altitude=1400.0)),
 }
-# fields made by argus_field.py: data/<field>/field.json (the stars to model are the user's selection)
+# any other data/<field>/field.json (older fields made by argus_field.py)
 _REPO = Path(__file__).resolve().parent  # data/, runs/, outputs/ are resolved from the repo, not the working directory
 for _f in sorted((_REPO / "data").glob("*/field.json")):
     _c = json.loads(_f.read_text())
@@ -87,16 +89,24 @@ CENTRE = SkyCoord(205.5484 * u.deg, 28.3773 * u.deg)
 TILE, BLOCK = 345967, (34, 32)
 
 
-def use_field(field):
-    """Point the module (and mesa_argus.rsp) at one field's data, block and models."""
+def use_field(field, scene=None):
+    """Point the module (and mesa_argus.rsp) at one field's data, block and models: a scene folder (observe.py), or
+    a hand-made field's data/<field>/."""
     global FIELD, DATA, CENTRE, TILE, BLOCK
     from mesa_argus import rsp
 
+    if scene is not None:
+        scene = Path(scene).resolve()
+        c_ = json.loads((scene / "field.json").read_text())
+        FIELDS[field] = dict(name=c_["name"], centre=tuple(c_["centre"]), tile=c_["tile"], block=tuple(c_["block"]),
+                             date=c_["date"], site=c_.get("site"), followed_only=True, block_n=c_.get("block_n", 3),
+                             synthetic=c_.get("synthetic", False))
     c_ = FIELDS[field]
-    FIELD, DATA = field, _REPO / "data" / field
+    FIELD, DATA = field, (scene if scene is not None else _REPO / "data" / field)
     CENTRE = SkyCoord(c_["centre"][0] * u.deg, c_["centre"][1] * u.deg)
     TILE, BLOCK = c_["tile"], c_["block"]
-    rsp.use(field)
+    if scene is None:
+        rsp.use(field)
 MINIPIX_PX, SKY_PX = 32, 900.0 / 1024.0
 BLOCK_N = 3  # the block shown: BLOCK_N x BLOCK_N HDPS minipixes centred on the block minipix (odd; --block)
 HALF = BLOCK_N / 2 * MINIPIX_PX * SKY_PX  # block half-width (arcsec)
@@ -154,13 +164,19 @@ def block_centre_label():
 
 
 def star_catalogue():
-    """The field's star list: Gaia DR3, or a synthetic field's (argus_field.py --synthetic: Gaia magnitudes and
+    """The field's star list: Gaia DR3, or a synthetic field's (observe.py, layout "random": Gaia magnitudes and
     colours of a real field at random positions)."""
     return DATA / ("synthetic_stars.ecsv" if FIELDS[FIELD].get("synthetic") else "gaia_dr3_core.ecsv")
 
 
+def load_followed():
+    """A hand-made field's followed stars (data/<field>/followed.json), {} for a scene."""
+    path = DATA / "followed.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
 def load_placed():
-    """The sources placed in the field (argus_field.py [[source]], mesa_argus.sources): [dict(label, source, timing,
+    """The sources placed in the field (observe.py [[place]]; the stars from make_stars.py): [dict(label, source, timing,
     file, dx, dy, kind, engine, ...)], in order. Transients carry t0_bjd; periodic sources period, epoch_bjd and the
     catalogue G and BP-RP of their intensity mean."""
     path = DATA / "sources.json"
@@ -178,7 +194,7 @@ def engine_of(v):
 
 def load_scene():
     g = Table.read(star_catalogue())
-    placed = load_placed()
+    placed = [v for v in load_placed() if v["source"] < 0]  # real stars (Gaia ids) are in the catalogue already
     if placed:  # appended as sources -1, -2, ..., at their offsets in the block; a periodic source has the catalogue
         from astropy.table import vstack  # magnitude and colour of its intensity mean, a transient none
 
@@ -237,13 +253,15 @@ def load_pulsators():
             amp = {b: float(r[f"ptp{b}"]) for b in ("G", "BP", "RP")}
             mean = {b: float(r[f"{b}magavg"]) for b in ("G", "BP", "RP")} if "BPmagavg" in t.colnames else {"G": float(r["Gmagavg"])}
             out[int(r["Source"])] = dict(period=period, epoch=float(r["EpochG"]) + 2455197.5, kind=sub, amp=amp, mean=mean)
-    # ephemerides from other catalogues (argus_field.py: e.g. HADS from ASAS-SN), keyed by Gaia DR3 source
+    # ephemerides from other catalogues (observe.py, from the stars: e.g. HADS from ASAS-SN), keyed by Gaia DR3 source
     if (DATA / "extra_pulsators.json").exists():
         for source, v in json.loads((DATA / "extra_pulsators.json").read_text()).items():
             out[int(source)] = dict(period=v["period"], epoch=v["epoch_bjd"], kind=v["kind"], amp={"G": v["amp"]},
                                     mean={"G": v["G"]})
-    # sources placed by argus_field.py ([[source]]): -1, -2, ...; a transient has no period and its epoch is its t0
+    # stars placed by observe.py ([[place]]): -1, -2, ...; a transient has no period and its epoch is its t0
     for v in load_placed():
+        if v["source"] > 0:  # a real Gaia star: its ephemeris is in the Gaia tables / extra_pulsators.json above
+            continue
         if v["timing"] == "transient":
             out[v["source"]] = dict(period=np.nan, epoch=v["t0_bjd"], kind=v["kind"], amp={"G": np.nan}, mean={}, transient=v)
         else:
@@ -284,8 +302,8 @@ def choose_followed(stars, pulsators, n):
     """
     src = np.asarray(stars["Source"]).astype(np.int64)
     in_block = np.asarray(stars["in_block"])
-    if FIELDS[FIELD].get("followed_only"):  # an argus_field.py field: exactly the stars the user selected
-        chosen = {v["source"] for v in json.loads((DATA / "followed.json").read_text()).values()}
+    if FIELDS[FIELD].get("followed_only"):  # a scene: exactly the stars placed
+        chosen = {v["source"] for v in load_followed().values()} | {v["source"] for v in load_placed() if v["source"] > 0}
         follow = [k for k in range(len(stars)) if int(src[k]) in chosen]
         placed = sorted((k for k in range(len(stars)) if int(src[k]) < 0), key=lambda k: -int(src[k]))  # in run order
         return sorted(follow, key=lambda k: -pulsators[int(src[k])]["amp"]["G"]) + placed
@@ -375,15 +393,15 @@ class TransientSource:
     No light before the model's first step; a time after its last step is an error (no extrapolation).
     """
 
-    def __init__(self, path):
+    def __init__(self, path, t0=None, ebv=None):
         from mesa_argus import dust
 
         with h5py.File(path) as f:
             self.attrs = dict(f.attrs)
             wave, flux, self.t = f["wavelength"][:], f["flux"][:], f["time_days"][:]
-        self.wave = wave * u.AA
-        self.flux = dust.redden(wave, flux, float(self.attrs["ebv"]))
-        self.t0 = float(self.attrs["t0_bjd"])
+        self.wave = wave * u.AA  # t0 and dust are the observation's (sources.json); the file's own are fallbacks
+        self.flux = dust.redden(wave, flux, float(self.attrs["ebv"] if ebv is None else ebv))
+        self.t0 = float(self.attrs["t0_bjd"] if t0 is None else t0)
 
     def sed_at(self, bjd):
         """Observer-frame f_lambda at BJD bjd: linear between the bracketing stored steps."""
@@ -552,15 +570,19 @@ def difference_image(image, image_sat, reference, reference_sat, readnoise, half
 
 
 # ---------------------------------------------------------------- main
-# the options a run file's [movie] section may set (argus_field.py passes them on); the rest come from the run itself
+# the options an observation file's [output] section may set (observe.py passes them on); the rest come from the run itself
 MOVIE_OPTIONS = ("max_airmass", "exptime", "seeing", "field_angle", "stride", "fps", "dpi", "seed", "kernel_half",
                  "kernel_clip", "kernel_stamps", "area")
 
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--field", required=True, choices=list(FIELDS), metavar="FIELD",
-                   help="a data/<field>/ folder from argus_field.py, or a hand-made field: " + "m3, m15, rr308108, rr416445")
+    p.add_argument("--scene", type=Path, help="a scene folder written by observe.py")
+    p.add_argument("--field", metavar="FIELD", help="a hand-made field (m3, m15, rr308108, rr416445); with --scene, its "
+                                                    "name (default: the scene's parent folder)")
+    p.add_argument("--measure", default="{}", help="photometry settings as JSON (mesa_argus.photometry.SETTINGS)")
+    p.add_argument("--fits", type=Path, help="also write every measured exposure (both bands) as FITS images here")
+    p.add_argument("--no-render", action="store_true", help="measure (and write FITS) but draw no movie")
     p.add_argument("-o", "--output", type=Path, default=None, help="default outputs/<field>/<field>_night_<band>.mp4")
     p.add_argument("--date", default=None,
                    help="local date the night starts; 2027-05-05: new Moon (ArgusSim sky V ~22.0), every followed star "
@@ -597,12 +619,19 @@ def main(argv=None):
     args = parser().parse_args(argv)
     import os
 
+    if args.scene is not None:
+        args.scene = (Path.cwd() / args.scene) if not args.scene.is_absolute() else args.scene
+        args.field = args.field or args.scene.resolve().parent.name
+    elif args.field not in FIELDS:
+        raise SystemExit(f"--field {args.field}: give a scene folder (--scene) or one of {sorted(FIELDS)}")
+    if args.fits is not None and not args.fits.is_absolute():
+        args.fits = Path.cwd() / args.fits
     if args.output is None:
         args.output = _REPO / "outputs" / args.field / f"{args.field}_night_{args.band}.mp4"
     if not args.output.is_absolute():  # relative output paths are relative to where the command was run
         args.output = Path.cwd() / args.output
     os.chdir(_REPO)
-    use_field(args.field)
+    use_field(args.field, args.scene)
     set_block(args.block or FIELDS[args.field].get("block_n", 3))
     global AREA_HALF
     AREA_HALF = max(30.0 * args.area, HALF + MARGIN)
@@ -679,18 +708,17 @@ def main(argv=None):
             static_mag[b][on] = float(ab.mag_from_sed(band, templates.wave, s_)) - 2.5 * np.log10(scale[on])
 
     # --- the followed pulsators: their MESA RSP SED at every exposure (phase from the star's Gaia ephemeris)
-    import json
     from mesa_argus import rsp
 
-    rsp_file = {v["source"]: _REPO / "runs" / f"rsp_{rsp.PREFIX}{name}" / "pulsation.h5"
-                for name, v in json.loads((DATA / "followed.json").read_text()).items()}
+    rsp_file = {v["source"]: _REPO / "runs" / f"rsp_{rsp.PREFIX}{name}" / "pulsation.h5" for name, v in load_followed().items()}
     rsp_file.update({v["source"]: _REPO / v["file"] for v in load_placed() if v["timing"] == "periodic"})
+    rsp_ebv = {v["source"]: v["ebv"] for v in load_placed() if v["timing"] == "periodic"}  # the observation's dust
     rsp_stars, rsp_rate, rsp_mag, rsp_sed, rsp_cycle = {}, {}, {}, {}, {}
     transient = {k for k in follow if "transient" in pulsators[int(src[k])]}
     for k in follow:
         if k in transient:  # the model's SED at each exposure (mesa_argus.transients); its "cycle" is its track over the night
             v = pulsators[int(src[k])]["transient"]
-            model = TransientSource(_REPO / v["file"])
+            model = TransientSource(_REPO / v["file"], v.get("t0_bjd"), v.get("ebv"))
             rsp_stars[k] = model
             seds = np.array([model.sed_exposure(b_, args.exptime) for b_ in bjd])
             rsp_sed[k] = seds
@@ -705,7 +733,7 @@ def main(argv=None):
                   + (f"rho {np.nanmin(rsp_cycle[k]['rho']):.2f}-{np.nanmax(rsp_cycle[k]['rho']):.2f} over the night"
                      if lit.any() else "no light during the night"))
             continue
-        model = RSPStar(rsp_file[int(src[k])], ab)
+        model = RSPStar(rsp_file[int(src[k])], ab, rsp_ebv.get(int(src[k])))
         rsp_stars[k] = model
         seds = np.array([model.sed(ph) for ph in phases_at(pulsators[int(src[k])], bjd)])
         rsp_sed[k] = seds
@@ -864,7 +892,7 @@ def main(argv=None):
     cy_, cx_ = (p0 * yy_).sum(), (p0 * xx_).sum()
     ref_fwhm = 2.3548 * np.sqrt(0.5 * (p0 * ((yy_ - cy_) ** 2 + (xx_ - cx_) ** 2)).sum())
     phot = SExtractorPhotometry(scene.x, scene.y, cat_mag, cat_flux, scene.n, scene.fullwell, follow,
-                                colour=column(stars, "BP-RP"), fwhm=ref_fwhm)
+                                colour=column(stars, "BP-RP"), fwhm=ref_fwhm, cfg=json.loads(args.measure))
     rows = []
     print(f"observing and rendering {len(frames)} frames ({len(times)} exposures) -> {args.output}", flush=True)
     def exposure(j):  # both bands drawn from the exposure's own seed: identical in both passes
@@ -874,7 +902,20 @@ def main(argv=None):
     # pass 1: measure every frame (relative light curves need each star's mean over the night)
     measured_frames = []
     for n, j in enumerate(frames):
-        r = phot.measure(exposure(j)[B]["image"])
+        obs_j = exposure(j)
+        if args.fits is not None:  # the simulated exposures themselves (both bands), with what made them in the header
+            from astropy.io import fits
+
+            args.fits.mkdir(parents=True, exist_ok=True)
+            for b_, o_ in obs_j.items():
+                hdr = fits.Header()
+                hdr.update(dict(FIELD=FIELD, BAND=b_, EXPOSURE=int(j), EXPTIME=args.exptime, DATE_OBS=times[j].isot,
+                                BJD_TDB=float(bjd[j]), AIRMASS=float(airmass[j]), SEEING=float(seeing[j]),
+                                SKY_E=float(scene.background(b_, j)), FULLWELL=float(scene.fullwell),
+                                RDNOISE=float(scene.readnoise), PLATESCL=float(scene.plate), RA_CEN=CENTRE.ra.deg,
+                                DEC_CEN=CENTRE.dec.deg, BUNIT="electron", ORIGIN="MESA_ARGUS night_movie.py"))
+                fits.writeto(args.fits / f"{FIELD}_{b_}_{j:04d}.fits", o_["image"].astype(np.float32), hdr, overwrite=True)
+        r = phot.measure(obs_j[B]["image"])
         frame_m = {}
         for i, k in enumerate(follow):
             ok = np.isfinite(r["mag"][i]) and r["flux"][i] / r["sigma"][i] >= 5
@@ -905,27 +946,28 @@ def main(argv=None):
     sed_ylim = (float(np.percentile(sed_vals, 3)) / 1.5, float(sed_vals.max()) * 1.5)
 
     # pass 2: draw (the same exposures: the same seeds)
-    with writer.saving(fig, str(args.output), dpi=args.dpi):
-        for n, j in enumerate(frames):
-            obs = exposure(j)
-            obs[B]["difference"], _ = difference_image(obs[B]["image"], obs[B]["full"], ref_image, ref_sat, scene.readnoise,
-                                                       half=args.kernel_half, clip=args.kernel_clip, fit_pixels=stamp_pixels)
-            for k in follow:
-                h = history[k]
-                h["t"].append(ut[j])
-                h["true"].append(true_mag(B, k, j))
-                h["m"].append(measured_frames[n][k][0])
-                h["e"].append(measured_frames[n][k][1])
-            fig.clear()
-            draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels, colour_of, history,
-                 static_mag, pulsators, src, gaia_var, in_block, G, templates, bjd, true_mag,
-                 dict(cycle=rsp_cycle, sed=rsp_sed, stars=rsp_stars, curve=model_curve),
-                 dict(rgb=rgb, dlim=dlim, cmd_c=cmd_c, cmd_m=cmd_m, follow_m=follow_m, ut=(ut[0], ut[-1]),
-                      seeing=seeing, centre=block_centre_label(), n_ref=len(ref_frames),
-                      rel=rel, sed_ylim=sed_ylim), ab)
-            writer.grab_frame()
-            if (n + 1) % max(1, len(frames) // 20) == 0:
-                print(f"  {n + 1}/{len(frames)}", flush=True)
+    if not args.no_render:
+        with writer.saving(fig, str(args.output), dpi=args.dpi):
+            for n, j in enumerate(frames):
+                obs = exposure(j)
+                obs[B]["difference"], _ = difference_image(obs[B]["image"], obs[B]["full"], ref_image, ref_sat, scene.readnoise,
+                                                           half=args.kernel_half, clip=args.kernel_clip, fit_pixels=stamp_pixels)
+                for k in follow:
+                    h = history[k]
+                    h["t"].append(ut[j])
+                    h["true"].append(true_mag(B, k, j))
+                    h["m"].append(measured_frames[n][k][0])
+                    h["e"].append(measured_frames[n][k][1])
+                fig.clear()
+                draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels, colour_of, history,
+                     static_mag, pulsators, src, gaia_var, in_block, G, templates, bjd, true_mag,
+                     dict(cycle=rsp_cycle, sed=rsp_sed, stars=rsp_stars, curve=model_curve),
+                     dict(rgb=rgb, dlim=dlim, cmd_c=cmd_c, cmd_m=cmd_m, follow_m=follow_m, ut=(ut[0], ut[-1]),
+                          seeing=seeing, centre=block_centre_label(), n_ref=len(ref_frames),
+                          rel=rel, sed_ylim=sed_ylim), ab)
+                writer.grab_frame()
+                if (n + 1) % max(1, len(frames) // 20) == 0:
+                    print(f"  {n + 1}/{len(frames)}", flush=True)
     import csv
 
     with open(args.output.with_suffix(".photometry.csv"), "w", newline="") as handle:
@@ -933,7 +975,7 @@ def main(argv=None):
         w.writeheader()
         w.writerows(rows)
     plt.close(fig)
-    print(f"saved {args.output}")
+    print(f"saved {args.output.with_suffix('.photometry.csv') if args.no_render else args.output}")
 
 
 def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels, colour_of, history, static_mag,

@@ -1,0 +1,35 @@
+# Periodic variables made from parameters alone (no Gaia), dust-free: a contact binary, a detached eclipsing binary
+# and an RRab. Where they sit and when their cycle is are the observation's (observe.py).
+#   python make_stars.py examples/stars/variables.toml       # PHOEBE: minutes; MESA RSP: ~0.5-2 h
+
+[[star]]
+name = "wuma_035"
+generator = "W UMa"
+period = 0.35
+q = 0.4
+incl = 80
+teff1 = 5800
+teff2 = 5600
+fillout = 0.2
+distance = 620
+
+[[star]]
+name = "detached_eb_12"
+generator = "detached EB"
+period = 1.2
+incl = 88
+teff1 = 6500
+teff2 = 5200
+r1 = 1.3
+r2 = 0.9
+distance = 1050
+
+[[star]]
+name = "rrab_055"
+generator = "RR Lyrae"
+mode = "RRab"
+period = 0.55
+L = 46.34853100986705        # Lsun (or M_G = absolute G); this one: M_G ~ +0.58
+distance = 8000
+z = 0.001
+mass = 0.68

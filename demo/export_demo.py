@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Export one field's precomputed physics for the interactive Argus page (demo/argus_demo.html).
 
-    python demo/export_demo.py                       # f294 -> demo/build/f294_784m11_623.json
+    python observe.py examples/observations/f294.toml       # writes the scene (outputs/f294/scene/)
+    python demo/export_demo.py                               # -> demo/build/f294.json
+    python demo/export_demo.py --scene outputs/<name>/scene  # another observation's scene
 
 Everything here is the movie's own physics (night_movie.py, ArgusSim), evaluated once:
 - every Gaia star: position, catalogue colour, template electron rates per band on AIRMASS_GRID (as the movie);
@@ -36,17 +38,18 @@ from argus_sim import c as ARGUS_CONFIG  # noqa: E402
 from argus_sim.observatory import Observatory, seasonal_seeing_params, seeing_at_airmass  # noqa: E402
 from mesa_argus.argus import BANDS, FLAM, system_response  # noqa: E402
 
-FIELD = "f294_784m11_623"
+SCENE = REPO / "outputs" / "f294" / "scene"  # an observation's scene (observe.py); --scene sets another
+FIELD = SCENE.parent.name
 N_SED_PHASE = 100  # SED panel: this many of the model's steps per cycle
 SEEING_GRID = np.round(np.arange(0.60, 3.001, 0.05), 2)  # arcsec FWHM: the page snaps to it, as the movie does
-LIBRARY = {  # one model per type, from fields already modelled
-    "RRab": "rsp_f008_841p52_998_G416445908838640384",
-    "RRc": "rsp_f278_214m16_942_G4096776721732855040",
-    "HADS": "rsp_f255_305p11_269_G4444906841983925504",
-    "DCEP F": "rsp_f065_830p44_237_G229602496313775872",
-    "BL Her": "rsp_f260_012p03_816_G4389902192257874560",
-    "W Vir": "rsp_f286_702p23_009_G4521180822614788480",
-    "EB": "rsp_f098_580p58_321_G1001448801332222848",
+LIBRARY = {  # one model per type: Gaia variables already modelled (runs/rsp_gaia_G<source>)
+    "RRab": "rsp_gaia_G416445908838640384",
+    "RRc": "rsp_gaia_G4096776721732855040",
+    "HADS": "rsp_gaia_G4444906841983925504",
+    "DCEP F": "rsp_gaia_G229602496313775872",
+    "BL Her": "rsp_gaia_G4389902192257874560",
+    "W Vir": "rsp_gaia_G4521180822614788480",
+    "EB": "rsp_gaia_G1001448801332222848",
 }
 
 
@@ -70,7 +73,7 @@ def model_tables(model, ab):
 
 
 def main():
-    M.use_field(FIELD)
+    M.use_field(FIELD, SCENE)
     M.set_block(M.FIELDS[FIELD].get("block_n", 3))
     M.AREA_HALF = max(30.0 * 8.0, M.HALF + M.MARGIN)  # the movie's default --field 8
     date = M.FIELDS[FIELD]["date"]
@@ -132,13 +135,11 @@ def main():
     added["mag"] = {b: pack(v) for b, v in added["mag"].items()}
 
     # the field's own variables (as the movie) and the library (re-reddened to this field)
-    from mesa_argus import rsp
-
-    rsp_dir = {v["source"]: f"rsp_{rsp.PREFIX}{name}" for name, v in json.loads((M.DATA / "followed.json").read_text()).items()}
-    field_ebv = float(json.loads((M.DATA / "field.json").read_text())["rsp"]["ebv"])
+    real = {v["source"]: REPO / v["file"] for v in M.load_placed() if v["source"] > 0}  # the scene's real Gaia variables
+    field_ebv = float(json.loads((M.DATA / "field.json").read_text())["ebv"])
     models, native = [], []
     for k in follow:
-        model = M.RSPStar(REPO / "runs" / rsp_dir[int(src[k])] / "pulsation.h5", ab)
+        model = M.RSPStar(real[int(src[k])], ab)
         t = model_tables(model, ab)
         v = pulsators[int(src[k])]
         t.update(name=f"Gaia DR3 {src[k]}", origin=FIELD, gaia_period=v["period"], epoch_bjd=v["epoch"], gaia_kind=v["kind"])
@@ -203,6 +204,12 @@ def main():
 
 
 if __name__ == "__main__":
+    import argparse
+
+    a = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    a.add_argument("--scene", type=Path, default=SCENE, help="an observation's scene folder (observe.py)")
+    SCENE = a.parse_args().scene.resolve()
+    FIELD = SCENE.parent.name
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         main()

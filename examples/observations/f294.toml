@@ -1,0 +1,25 @@
+# The real field at RA 294.78, Dec -11.62 on 2026-07-19: its Gaia stars where they are, and its two catalogued
+# variables (an RRab and a HADS, MESA RSP models) with their own ephemerides.
+#   python make_stars.py examples/stars/f294.toml        # once
+#   python observe.py examples/observations/f294.toml
+
+[field]
+ra = 294.7844
+dec = -11.6235
+block = 9
+
+[night]
+date = "2026-07-19"
+
+[stars]
+background = "f294_784m11_623_field"
+layout = "real"
+
+[[place]]
+star = "gaia_4186921728614505856"   # RRab
+
+[[place]]
+star = "gaia_4186922244010590592"   # HADS
+
+[output]
+bands = ["rho"]

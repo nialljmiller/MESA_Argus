@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Build the single offline page: demo/argus_demo.html (template, scripts, colour maps and field data inlined).
 
-    python demo/export_demo.py && python demo/build_html.py
+    python demo/export_demo.py && python demo/build_html.py [observation name, default f294]
 """
 
 import json
+import sys
 from pathlib import Path
 
 import matplotlib
 
 DEMO = Path(__file__).resolve().parent
-FIELD = "f294_784m11_623"
+FIELD = sys.argv[1] if len(sys.argv) > 1 else "f294"  # the observation exported (demo/build/<name>.json)
 
 
 def lut(name):

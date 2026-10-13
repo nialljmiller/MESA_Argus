@@ -1,0 +1,35 @@
+# Transients: what each one is, with no dust, no position and no date (observe.py adds those).
+#   python make_stars.py examples/stars/transients.toml
+
+[[star]]
+name = "microlensing_te02"
+generator = "microlensing"
+tE = 0.2                     # Einstein time (days): a short event
+u0 = 0.02
+base = 19.06229637473923     # the source's apparent rho before dust (= 19.5 through E(B-V) 0.186, as at f294)
+bp_rp = 1.0
+
+[[star]]
+name = "dwarf_nova_400pc"
+generator = "dwarf nova"
+d = 400
+mdot_q = 1e-11
+mdot_peak = 3e-9
+t_rise = 0.5
+plateau = 2
+tau_decay = 2
+r_out = 0.3
+t_wd = 20000
+
+[[star]]
+name = "grb_peak9"
+generator = "GRB"
+peak = 9                     # AB at 6400 A at t_peak, before dust
+
+[[star]]
+name = "sn_ia_z002"
+generator = "supernova"
+model = "salt3"
+z = 0.02
+M = -19.3
+params = {x1 = 0.0, c = 0.0}

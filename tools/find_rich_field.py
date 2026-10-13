@@ -1,9 +1,9 @@
-"""Find the 9 x 9 minipix window (~4.2') holding the most distinct types of variable that argus_field.py can model.
+"""Find the 9 x 9 minipix window (~4.2') holding the most distinct types of variable that make_stars.py can model.
 
 Anchors are the rare types (Gaia DR3 classical / BL Her / W Vir Cepheids; ASAS-SN HADS). Around each anchor, all
 modellable variables within the window are counted from Gaia DR3 (RR Lyrae RRab/RRc, Cepheids, eclipsing binaries with
 eclipse parameters) and ASAS-SN (HADS). Ranked by the number of distinct types, then the number of modellable stars.
-Observability, parallaxes and crowding are checked afterwards on the winners (argus_field.py --list).
+Observability, parallaxes and crowding are checked afterwards on the winners (make_stars.py --gaia-list RA DEC).
 
     python tools/find_rich_field.py      # from the repo root
 """
@@ -127,7 +127,7 @@ def parallax_snr(sources):
 
 
 if __name__ == "__main__":
-    # only what argus_field.py can model: RR Lyrae with a Gaia [M/H]; Cepheids, HADS and eclipsing binaries with
+    # only what make_stars.py can model: RR Lyrae with a Gaia [M/H]; Cepheids, HADS and eclipsing binaries with
     # parallax S/N >= 5 (eclipsing binaries: circular or with eclipse parameters; GSP-Phot Teff checked afterwards)
     print("bulk downloads …", flush=True)
     rr = bulk("I/358/vrrlyr", ["Source", "PF", "P1O", "Gmagavg", "[M/H]", "_RAJ2000", "_DEJ2000"], Gmagavg=f"<{G_MAX}")

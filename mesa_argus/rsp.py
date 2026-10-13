@@ -2,9 +2,9 @@
 
   python -m mesa_argus.rsp                       M3: tune, run to the limit cycle, write the high-resolution cycles
   python -m mesa_argus.rsp V1 V3                 only these
-  python -m mesa_argus.rsp --field <field> V1    a field made by argus_field.py (which normally runs this itself)
+(make_stars.py runs it for Gaia variables and hand-made pulsators, in process)
 
-Written for M3 and described for it below; argus_field.py fields use the same steps with their own composition, mass,
+Written for M3 and described for it below; make_stars.py's pulsators use the same steps with their own composition, mass,
 distance and reddening (data/<field>/field.json). For each followed star (data/<field>/followed.json):
 
 1. Physical parameters. Composition and mass are M3's: X = 0.75, Z = 0.001 ([Fe/H] ~ -1.5,
@@ -78,13 +78,13 @@ EBV = CLUSTERS["m3"]["ebv"]
 PREFIX = ""
 A_G_PER_EBV = 2.74
 X, Z = 0.75, 0.001
-# classical Cepheids (DCEP) carry their own mass (argus_field.py: Bono et al. 2000b mass-luminosity relation);
+# classical Cepheids (DCEP) carry their own mass (mesa_argus/gaia.py: Bono et al. 2000b mass-luminosity relation);
 # BL Her and W Vir default to the 0.55 Msun of MESA's rsp_Type_II_Cepheid test model
 MASS = {"RRab": 0.68, "RRc": 0.68, "RRd": 0.68, "Type II Cepheid": 0.55, "BL Her": 0.55, "W Vir": 0.55}
 
 
 def use(cluster):
-    """Point every module-level parameter at one cluster (default m3), or at a field made by argus_field.py
+    """Point every module-level parameter at one cluster (default m3), or at an old argus_field.py field
     (data/<field>/field.json; its targets carry their own distance, reddening, Z, mass and opacities)."""
     global CLUSTER, TARGETS, DM, EBV, Z, PREFIX, KAP_MIX
     if cluster not in CLUSTERS:
@@ -146,7 +146,10 @@ def m_bol_to_lsun(m_bol):
 
 def luminosity(target):
     """L (Lsun) from Gaia mean G at M3's distance; RR Lyrae share the cluster's horizontal-branch level.
-    A field star with its own distance (target["dm"]) uses its own Gaia intensity-mean G."""
+    A field star with its own distance (target["dm"]) uses its own Gaia intensity-mean G; a star made from parameters
+    (make_stars.py) may give L itself."""
+    if "L" in target:
+        return float(target["L"])
     if "dm" in target:
         return m_bol_to_lsun(target["G_mean"] - target["dm"] - A_G_PER_EBV * target["ebv"])
     if target["kind"].startswith("RR"):
@@ -562,7 +565,7 @@ def period_lines(text):
 
 def model_star(label, target):
     """Model one star to runs/rsp_<label>/pulsation.h5. A star with no model gets a FAILED file instead, which is
-    final until the directory is removed (argus_field.py then holds it constant)."""
+    final until the directory is removed (make_stars.py then reports it not built)."""
     base = C.RUNS / f"rsp_{PREFIX}{label}"
     done = base / "pulsation.h5"
     if done.exists() or (base / "FAILED").exists():

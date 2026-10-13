@@ -1,6 +1,6 @@
 """Figures for the offset study (offset_study.py writes the CSVs this reads).
 
-    python studies/photometry_offset/plots.py f294_784m11_623_vars f294_784m11_623
+    python studies/photometry_offset/plots.py synthetic_variables f294
 """
 from __future__ import annotations
 
@@ -24,8 +24,11 @@ NAMES = {"aperture": "aperture loss", "sky": "sky estimate", "zp_cal": "zero poi
          "neighbours": "neighbours' light", "noise": "noise", "zp_colour": "zero point: colour model"}
 COL = {"aperture": "#cc5940", "sky": "#e0a030", "zp_cal": "#2078b4", "neighbours": "#7853a6", "noise": "#9aa5ad",
        "zp_colour": "#3b9a5a"}
-FIELD_NAME = {"f294_784m11_623_vars": "synthetic field, hand-placed variables", "f294_784m11_623": "real f294 field (Gaia)"}
+FIELD_NAME = {"synthetic_variables": "synthetic field, hand-placed variables", "f294": "real f294 field (Gaia)",
+              # the names of the first run of this study (2026-10-13), before observe.py
+              "f294_784m11_623_vars": "synthetic field, hand-placed variables", "f294_784m11_623": "real f294 field (Gaia)"}
 BINS = np.arange(11.0, 19.51, 0.5)
+ORDER = ["f294_784m11_623_vars", "f294_784m11_623"]  # the fields plotted (synthetic first), set by main()
 
 
 def load(fields):
@@ -84,7 +87,7 @@ def fig_aperture(t, f):
     """MAG_AUTO's aperture loss (and the sky term) against magnitude; what the zero point removes; the targets."""
     fig, axes = plt.subplots(1, 3, figsize=(16, 5.2), gridspec_kw=dict(width_ratios=[1.25, 1, 1]))
     ax = axes[0]
-    for name, mk in zip(FIELD_NAME, ("o", "s")):
+    for name, mk in zip(ORDER, ("o", "s")):
         g = f[f.field == name]
         c, m, lo, hi, _ = binned(g.true_mag.to_numpy(), (g.aperture + g.sky).to_numpy())
         ax.plot(c, m, mk + "-", color="#cc5940" if mk == "o" else "#2078b4", ms=4, lw=1.5,
@@ -103,7 +106,7 @@ def fig_aperture(t, f):
     ax.set_title("Light lost from the Kron aperture grows for fainter stars", loc="left", weight="bold", fontsize=11.5)
     ax.legend(loc="center left", fontsize=8.5, frameon=False)
     ax2 = ax.twinx()
-    cal = f[f.calibrator & (f.field == list(FIELD_NAME)[0])].drop_duplicates("star")
+    cal = f[f.calibrator & (f.field == ORDER[0])].drop_duplicates("star")
     ax2.hist(cal.true_mag, bins=BINS, color="#2b2b2b", alpha=0.10)
     ax2.set_ylabel("calibration stars (synthetic field)", color="#777", fontsize=9)
     ax2.tick_params(colors="#777", labelsize=8)
@@ -112,7 +115,7 @@ def fig_aperture(t, f):
 
     ax = axes[1]
     for term, ls in (("aperture", "-"), ("sky", "--")):
-        g = f[f.field == list(FIELD_NAME)[0]]
+        g = f[f.field == ORDER[0]]
         c, m, lo, hi, _ = binned(g.true_mag.to_numpy(), g[term].to_numpy())
         ax.plot(c, m, ls, color=COL[term], lw=1.8, label=NAMES[term])
         ax.fill_between(c, lo, hi, color=COL[term], alpha=0.12)
@@ -123,7 +126,7 @@ def fig_aperture(t, f):
             "(over-subtraction scales with aperture area)", transform=ax.transAxes, va="top", fontsize=8.5, color="#333")
 
     ax = axes[2]
-    g = f[f.field == list(FIELD_NAME)[0]]
+    g = f[f.field == ORDER[0]]
     ax.scatter(g.true_mag, g.ap_radius_px, s=3, color="#9aa5ad", alpha=0.4)
     c, m, lo, hi, _ = binned(g.true_mag.to_numpy(), g.ap_radius_px.to_numpy())
     ax.plot(c, m, "-", color="black", lw=1.6, label="median")
@@ -141,7 +144,7 @@ def fig_aperture(t, f):
 def fig_neighbours(t, f):
     fig, axes = plt.subplots(1, 2, figsize=(13.5, 5))
     ax = axes[0]
-    for name, colr in zip(FIELD_NAME, ("#cc5940", "#2078b4")):
+    for name, colr in zip(ORDER, ("#cc5940", "#2078b4")):
         g = f[f.field == name]
         ax.scatter(g.nb_frac * 100, g.neighbours, s=4, alpha=0.35, color=colr, label=f"field stars: {FIELD_NAME[name]}")
     for (fld, s), r in t.groupby(["field", "star"]):
@@ -156,7 +159,7 @@ def fig_neighbours(t, f):
     ax.set_title("Unmasked neighbour light makes stars too bright", loc="left", weight="bold", fontsize=11.5)
     ax.legend(fontsize=8.5, frameon=False, loc="lower left")
     ax = axes[1]
-    for name, colr in zip(FIELD_NAME, ("#cc5940", "#2078b4")):
+    for name, colr in zip(ORDER, ("#cc5940", "#2078b4")):
         g = f[f.field == name]
         c, m, lo, hi, _ = binned(g.true_mag.to_numpy(), g.neighbours.to_numpy())
         ax.plot(c, m, "-", color=colr, lw=1.6, label=FIELD_NAME[name])
@@ -228,7 +231,7 @@ def fig_whatif(t, f):
     iso = w[~w.target & (w.nb_frac < 0.005)]
     for col, ls, lab in (("offset", "-", "as now: a + b (BP−RP)"), ("offset_magterm", "--", "+ linear magnitude term"),
                          ("offset_local", ":", "local: calibrators within ±0.75 mag")):
-        for name, colr in zip(FIELD_NAME, ("#cc5940", "#2078b4")):
+        for name, colr in zip(ORDER, ("#cc5940", "#2078b4")):
             g = iso[iso.field == name]
             c, m, lo, hi, _ = binned(g.true_mag.to_numpy(), g[col].to_numpy())
             ax.plot(c, m, ls, color=colr, lw=1.8, label=f"{lab} ({FIELD_NAME[name].split(',')[0]})")
@@ -259,7 +262,7 @@ def fig_whatif(t, f):
 
 def fig_colour(f, t):
     fig, ax = plt.subplots(figsize=(8.5, 5.2))
-    for name, colr in zip(FIELD_NAME, ("#cc5940", "#2078b4")):
+    for name, colr in zip(ORDER, ("#cc5940", "#2078b4")):
         g = f[(f.field == name) & f.colour_known]
         ax.scatter(g.colour, g.zp_colour, s=3, alpha=0.3, color=colr, label=FIELD_NAME[name])
     for (fld, s), r in t.groupby(["field", "star"]):
@@ -277,7 +280,8 @@ def fig_colour(f, t):
 
 def main():
     apply_style()
-    fields = sys.argv[1:] or list(FIELD_NAME)
+    global ORDER
+    fields = ORDER = sys.argv[1:] or ORDER
     t, f = load(fields)
     fig_decomposition(t)
     fig_aperture(t, f)

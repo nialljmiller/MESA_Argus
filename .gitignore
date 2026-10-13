@@ -22,3 +22,6 @@ archive/
 
 demo/build/
 demo/argus_demo.html
+
+# built stars (make_stars.py): rebuilt from the star files
+/stars/

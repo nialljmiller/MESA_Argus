@@ -1,0 +1,18 @@
+# Gaia field at RA 294.7844, Dec -11.6235: its stars as a set, and each catalogued variable that can be modelled.
+#   python make_stars.py examples/stars/f294.toml
+
+[[set]]
+name = "f294_784m11_623_field"
+generator = "Gaia field"
+ra = 294.7844
+dec = -11.6235
+
+[[star]]   # RRab, G 15.76, P 0.52315 d (MESA RSP)
+name = "gaia_4186921728614505856"
+generator = "Gaia variable"
+source = 4186921728614505856
+
+[[star]]   # HADS, G 12.42, P 0.10631 d (MESA RSP)
+name = "gaia_4186922244010590592"
+generator = "Gaia variable"
+source = 4186922244010590592

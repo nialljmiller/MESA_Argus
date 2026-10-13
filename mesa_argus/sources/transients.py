@@ -1,26 +1,32 @@
-"""Transient generators: SEDs against time since t0 (mesa_argus.transients does the physics)."""
+"""Transient generators: observer-frame SEDs before any dust, against time since t0 (mesa_argus.transients does the
+physics). When t0 falls is the observation's choice (observe.py), not the star's."""
 
 from .. import transients as T
 from . import REQUIRED, Generator, Param
 
 
-def _supernova(out, p, field):
-    return T.make_sncosmo(out / "transient.h5", p["model"], p["z"], p["t0_bjd"], p["M"], field.ebv, p["band"], p["magsys"],
-                          {k: float(v) for k, v in p["params"].items()}, p["host_ebv"], p["version"] or None)
+def _product(meta, path):
+    return dict(meta, product=path)
 
 
-def _grb(out, p, field):
-    return T.make_afterglow(out / "transient.h5", p["t0_bjd"], p["peak"], field.ebv, p["t_peak"], p["alpha"], p["beta"])
+def _supernova(out, p, ctx):
+    return _product(T.make_sncosmo(out / "sed.h5", p["model"], p["z"], 0.0, p["M"], 0.0, p["band"], p["magsys"],
+                                   {k: float(v) for k, v in p["params"].items()}, p["host_ebv"], p["version"] or None),
+                    out / "sed.h5")
 
 
-def _microlensing(out, p, field):
-    return T.make_microlensing(out / "transient.h5", p["t0_bjd"], p["tE"], p["u0"], p["base"], p["bp_rp"], field.ebv,
-                               p["rho"], p["fs"])
+def _grb(out, p, ctx):
+    return _product(T.make_afterglow(out / "sed.h5", 0.0, p["peak"], 0.0, p["t_peak"], p["alpha"], p["beta"]), out / "sed.h5")
 
 
-def _dwarf_nova(out, p, field):
-    return T.make_dwarf_nova(out / "transient.h5", p["t0_bjd"], p["d"], p["mdot_q"], p["mdot_peak"], p["t_rise"],
-                             p["plateau"], p["tau_decay"], p["r_out"], p["t_wd"], field.ebv, p["m_wd"], p["incl"])
+def _microlensing(out, p, ctx):
+    return _product(T.make_microlensing(out / "sed.h5", 0.0, p["tE"], p["u0"], p["base"], p["bp_rp"], 0.0, p["rho"], p["fs"]),
+                    out / "sed.h5")
+
+
+def _dwarf_nova(out, p, ctx):
+    return _product(T.make_dwarf_nova(out / "sed.h5", 0.0, p["d"], p["mdot_q"], p["mdot_peak"], p["t_rise"], p["plateau"],
+                                      p["tau_decay"], p["r_out"], p["t_wd"], 0.0, p["m_wd"], p["incl"]), out / "sed.h5")
 
 
 GENERATORS = [
@@ -52,7 +58,7 @@ GENERATORS = [
         "(written in this repo, mesa_argus/transients.py)",
         dict(tE=Param(float, REQUIRED, "Einstein time (days)"),
              u0=Param(float, REQUIRED, "impact parameter (Einstein radii)"),
-             base=Param(float, REQUIRED, "the unmagnified source's rho (AB, after dust)"),
+             base=Param(float, REQUIRED, "the unmagnified source's apparent rho (AB, before any dust)"),
              bp_rp=Param(float, REQUIRED, "the source's intrinsic BP-RP (picks the MESA template)"),
              rho=Param(float, 0.0, "source radius (Einstein radii); 0: a point source"),
              fs=Param(float, 1.0, "the source's fraction of the baseline light (1: no blend)")),

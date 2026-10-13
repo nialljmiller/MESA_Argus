@@ -1,16 +1,18 @@
-# Example: two pointings x two sets of transients = four synthetic runs.
-#   python tools/stage_batch.py batches/example_sweep.toml --check     # see the four runs, run nothing
+# Example observation batch: one synthetic field observed with two different sets of transients, at two pointings
+# (f294's stars scattered around each) = four observations.
+#   python make_stars.py examples/stars/f294.toml && python make_stars.py examples/stars/transients.toml   # once
+#   python tools/stage_batch.py batches/example_sweep.toml --check     # the four observations, run nothing
 
-base = "../examples/synthetic_grb.toml"
+base = "../examples/observations/synthetic_grb.toml"
 combine = "product"
 
 [set]
-"movie.bands" = ["rho"]
+"output.bands" = ["rho"]
 
 [vary]
 "field.ra,field.dec" = [[294.7844, -11.6235], [273.0414, -20.7099]]
-source = [
-  [{generator = "GRB", peak = 9, t0 = "start+0.06"}],
-  [{generator = "supernova", model = "salt3", z = 0.02, M = -19.3, params = {x1 = 0, c = 0}, t0 = "start+0.2", x = -1, y = -1},
-   {generator = "microlensing", tE = 0.2, u0 = 0.02, base = 19.5, bp_rp = 1.0, t0 = "start+0.15", x = 30, y = 70}],
+place = [
+  [{star = "grb_peak9", t0 = "start+0.06"}],
+  [{star = "sn_ia_z002", t0 = "start+0.2", x = -1, y = -1},
+   {star = "microlensing_te02", t0 = "start+0.15", x = 30, y = 70}],
 ]

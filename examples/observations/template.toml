@@ -1,0 +1,69 @@
+# Every key of an observation file, with its default. Copy it, delete what you don't need (anything left out takes
+# the default shown), and run:   python observe.py my_observation.toml
+# Any key can be overridden on the command line:   python observe.py my_observation.toml --set output.stride=10
+# The observation as made (every key, the night as used) is written to outputs/<name>/observation.toml.
+# Stars are built first, by make_stars.py; an observation only names them.
+
+[field]
+ra = 294.7844             # deg, ICRS (required)
+dec = -11.6235            # deg, ICRS (required)
+block = 3                 # minipixes across the block shown: odd, 1-9 (3 = 84", 9 = 253")
+name = ""                 # outputs/<name>/; default: this file's name
+
+[night]
+date = ""                 # local date the night starts, YYYY-MM-DD (default today; the nearest night the field is up
+                          # if not); "auto": the night the placed real (Gaia) stars change most
+start = ""                # UT HH:MM (default: dusk / when the field rises); "start+D" times count from here
+end = ""                  # UT HH:MM (default: dawn / when the field sets)
+site = "argus"            # "argus": ArgusSim's site; "sro": Sierra Remote Observatories
+max_airmass = 2.0
+
+[stars]
+background = "f294_784m11_623_field"   # a built star set (required): the field's constant stars
+layout = "real"           # "real": the set's own positions; "random": scattered around the pointing (synthetic)
+seed = 1                  # random layout; and any placed star with x or y = -1
+missing = "stop"          # a placed star that is not built: "stop", or "skip" it
+
+# Built stars put in the field, any number. Real Gaia stars (generator "Gaia variable") sit where they are, with
+# their own ephemeris: give only star =. Others: x, y (percent of the image from its lower left; default 50, 50;
+# -1 random) and t0 (transients) or epoch (periodic: a maximum / primary eclipse): ISO UTC "2026-07-20T05:30",
+# "start+0.1" days from the night's (or the UT window's) start, or a BJD_TDB number.
+[[place]]
+star = "gaia_4186921728614505856"
+
+[[place]]
+star = "grb_peak9"
+t0 = "start+0.0625"
+x = 30
+y = 70
+
+[measure]                 # how the exposures are measured: SExtractor's defaults (mesa_argus/photometry.py)
+back_size = 64            # BACK_SIZE (pixels)
+back_filtersize = 3       # BACK_FILTERSIZE
+detect_thresh = 1.5       # DETECT_THRESH (sigma)
+detect_minarea = 5        # DETECT_MINAREA (pixels)
+deblend_nthresh = 32      # DEBLEND_NTHRESH
+deblend_cont = 0.005      # DEBLEND_MINCONT
+kron_fact = 2.5           # PHOT_AUTOPARAMS: aperture = max(kron_fact x Kron radius, min_radius)
+min_radius = 3.5
+match_fwhm = 0.5          # cross-match radius (FWHM)
+n_calibrators = 300       # calibration stars per exposure
+colour_term = true        # zero point a + b (BP-RP); false: a only
+clip_sigma = 3.0          # zero-point fit rejection
+
+[output]
+movie = true              # render the movie (false: photometry and any FITS only)
+bands = ["beta", "rho"]   # one movie and photometry CSV per band
+fits = false              # every measured exposure, both bands, as FITS (outputs/<name>/fits/)
+page = false              # the interactive page (real Gaia stars only, for now)
+stride = 1                # render and measure every Nth exposure
+seed = 3                  # noise
+exptime = 60.0            # s
+# seeing = 1.0            # zenith FWHM (arcsec); default: ArgusSim's seasonal site median for the date
+field_angle = 1.44        # deg from the optical axis (sets the PSF)
+area = 8.0                # side (arcmin) of the simulated area
+fps = 24.0
+dpi = 100
+kernel_half = 3           # difference-imaging kernel half-width (pixels)
+kernel_clip = 3.0
+kernel_stamps = 20.0

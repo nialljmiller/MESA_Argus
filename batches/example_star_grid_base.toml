@@ -1,0 +1,11 @@
+# The star the grid varies (batches/example_star_grid.toml).
+[[star]]
+name = "wuma_035"
+generator = "W UMa"
+period = 0.35
+q = 0.4
+incl = 80
+teff1 = 5800
+teff2 = 5600
+fillout = 0.2
+distance = 620

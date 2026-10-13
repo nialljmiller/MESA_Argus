@@ -1,0 +1,37 @@
+# A synthetic field (f294's stars scattered at random) on 2026-07-19 with three hand-made periodic variables.
+#   python make_stars.py examples/stars/f294.toml && python make_stars.py examples/stars/variables.toml   # once
+#   python observe.py examples/observations/synthetic_variables.toml
+
+[field]
+ra = 294.7844
+dec = -11.6235
+block = 9
+
+[night]
+date = "2026-07-19"
+
+[stars]
+background = "f294_784m11_623_field"
+layout = "random"
+seed = 1
+
+[[place]]
+star = "wuma_035"
+epoch = "start+0.05"          # a primary eclipse
+x = 30
+y = 30
+
+[[place]]
+star = "detached_eb_12"
+epoch = "start+0.12"
+x = 70
+y = 70
+
+[[place]]
+star = "rrab_055"
+epoch = "start+0.1"           # a maximum
+x = 30
+y = 70
+
+[output]
+bands = ["rho"]

@@ -1,8 +1,9 @@
 # Night movies: what is modelled, what is taken from ArgusSim, and what is assumed
 
-This applies to every movie made by `night_movie.py`, whether `argus_field.py` set up the field (Gaia or synthetic)
-or it is one of the hand-made fields (M3, M15, two RR Lyrae fields). Each field's own choices are listed in
-`outputs/<field>/field_summary.md`: which stars, which models, the night, distance and reddening.
+This applies to every observation made by `observe.py` (and the hand-made fields M3, M15 and two RR Lyrae fields).
+Stars are simulated by `make_stars.py` with no dust and nothing about observing; each built star's own choices are in
+`stars/<name>/summary.md`, and each observation's (the night, background, placements, dust) in
+`outputs/<name>/summary.md` and `observation.toml`.
 
 ## 1. Argus, taken directly from ArgusSim (not chosen here)
 
@@ -61,7 +62,8 @@ does not make images or measure them. The following is this repo's own code, bui
 ## 4. Astrophysics: modelled vs assumed
 
 Every source is an SED; ArgusSim turns it into electrons in each band at each exposure's airmass. Milky Way dust is
-CCM89 (`mesa_argus/dust.py`) with the field's E(B−V) (SFD at the centre for `argus_field.py` fields).
+CCM89 (`mesa_argus/dust.py`), added at observation: the SFD E(B−V) at the pointing for every placed star, and for a
+real Gaia variable the E(B−V) of its own sightline.
 
 - **Constant stars.** Brightness: Gaia DR3 G. SED: the MESA SED (the `argus_sim_seds` tracks: 0.8 M☉ [M/H] = −2;
   1, 3, 5 and 10 M☉ solar) whose Gaia BP−RP is closest, scaled to G. Only colour is matched (not gravity, metallicity
@@ -76,12 +78,13 @@ CCM89 (`mesa_argus/dust.py`) with the field's E(B−V) (SFD at the centre for `a
 - **Eclipsing binaries** (`mesa_argus/binary.py`): PHOEBE 2 with MESA-atmosphere SEDs, timed and shaped by Gaia's
   eclipsing-binary model (and its NSS orbit when it has one); masses from a main-sequence relation; scaled to Gaia's
   out-of-eclipse G.
-- **Placed sources** (`[[source]]` in a run file; `mesa_argus/sources/`, `python -m mesa_argus.sources`): defined
-  entirely by the run file's keys, with no Gaia input, in either mode.
-  - Periodic: MESA RSP pulsators (RR Lyrae, Cepheids, Type II Cepheids, HADS) tuned to the given period, with L from the
-    given G and distance; PHOEBE binaries (W UMa from period, q, inclination, Teffs and fillout factor; detached from
-    radii and Teffs), masses from the main-sequence Teff–mass relation unless given. They enter the catalogue (and the
-    difference reference) at their intensity-mean G and BP−RP, as a catalogued variable would.
+- **Stars made from parameters** (`make_stars.py`; `mesa_argus/sources/`, `python -m mesa_argus.sources`): defined
+  entirely by the star file's keys, with no Gaia input and no dust.
+  - Periodic: MESA RSP pulsators (RR Lyrae, Cepheids, Type II Cepheids, HADS) tuned to the given period, at the given L
+    (or dust-free absolute M_G) and distance; PHOEBE binaries (W UMa from period, q, inclination, Teffs and fillout
+    factor; detached from radii and Teffs) at the given distance, masses from the main-sequence Teff–mass relation
+    unless given. Placed by an observation (position, epoch), they enter the catalogue (and the difference reference)
+    at their intensity-mean G and BP−RP through the field's dust, as a catalogued variable would.
 - **Transients** (`mesa_argus/transients.py`): SEDs against time since t0.
   - sncosmo models (supernova templates built from observed spectra; no physics run), placed at a redshift and peak
     absolute magnitude with sncosmo's default cosmology.
@@ -92,9 +95,9 @@ CCM89 (`mesa_argus/dust.py`) with the field's E(B−V) (SFD at the centre for `a
     reference.
 - **Variables not modelled** (held constant at their Gaia mean): double-mode pulsators, non-radial pulsators,
   long-period, rotational, eruptive and stochastic variables, and any star whose model failed to reproduce its
-  catalogue period or eclipses. `argus_field.py --list` gives the reason per star.
-- **Synthetic fields** (`argus_field.py --synthetic`): the G, BP and RP of every Gaia DR3 source around the real
-  position, placed uniformly at random in the same circle; every star constant; the real position's night, sky and
+  catalogue period or eclipses. `make_stars.py --gaia-list RA DEC` gives the reason per star.
+- **Synthetic fields** (`[stars] layout = "random"`): the G, BP and RP of every star of a Gaia field set, placed
+  uniformly at random within 0.12 deg of the pointing; every star constant; the pointing's night, sky and
   reddening.
 - **Positions.** Gaia DR3 (fine for one night). Gaia misses faint stars in crowded fields, so unresolved light is
   underestimated there.

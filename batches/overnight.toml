@@ -1,26 +1,43 @@
-# Overnight batch on newton, 2026-10-09: varied fields observable from the Argus site, longest (Cepheid) fields first,
-# globular clusters (crowded cores) last. Every catalogued variable that can be modelled, on its best night.
-#   python tools/stage_batch.py batches/overnight.toml
+# Observe each Gaia field of examples/stars/overnight_fields.toml on the night its variables change most.
+#   python make_stars.py examples/stars/overnight_fields.toml && python tools/stage_batch.py batches/overnight.toml
 
-base = "../examples/gaia_f294.toml"    # gaia mode, block 9, select all, date auto
-jobs = 3
+base = "overnight_base.toml"
+combine = "zip"
 
 [vary]
-"field.ra,field.dec" = [
-  [273.0414, -20.7099],    # 13.6 d classical Cepheid, HADS, 2 EB
-  [359.5393, 61.2137],     # NGC 7790: 3 classical Cepheids, EB
-  [23.8818, 69.1654],      # W Vir, RRc
-  [244.21914, -22.95444],  # W Vir, 2 RRab, 2 RRc
-  [247.5684, 16.9185],     # RRab, HADS (sparse)
-  [325.1604, 21.0526],     # RRab, HADS
-  [294.7844, -11.6235],    # RRab, HADS
-  [272.7962, 5.4138],      # RRc, HADS
-  [299.9106, -8.1040],     # HADS, EB
-  [324.9591, 28.2514],     # HADS, EB
-  [314.6943, 1.7487],      # 2 HADS
-  [101.1036, 39.6335],     # HADS
-  [71.7295, 23.6525],      # HADS
-  [250.3996, 36.4635],     # M13: BL Her, W Vir, RR Lyrae (crowded)
-  [279.0947, -23.9026],    # M22: 2 BL Her, RR Lyrae, EB (crowded)
-  [276.1255, -24.8602],    # M28: W Vir, RR Lyrae, EB (crowded)
+"field.ra,field.dec,stars.background,field.name" = [
+  [273.0414, -20.7099, "f273_041m20_710_field", "f273_041m20_710"],
+  [359.5393, 61.2137, "f359_539p61_214_field", "f359_539p61_214"],
+  [23.8818, 69.1654, "f023_882p69_165_field", "f023_882p69_165"],
+  [244.21914, -22.95444, "f244_219m22_954_field", "f244_219m22_954"],
+  [247.5684, 16.9185, "f247_568p16_919_field", "f247_568p16_919"],
+  [325.1604, 21.0526, "f325_160p21_053_field", "f325_160p21_053"],
+  [294.7844, -11.6235, "f294_784m11_623_field", "f294_784m11_623"],
+  [272.7962, 5.4138, "f272_796p05_414_field", "f272_796p05_414"],
+  [299.9106, -8.104, "f299_911m08_104_field", "f299_911m08_104"],
+  [324.9591, 28.2514, "f324_959p28_251_field", "f324_959p28_251"],
+  [314.6943, 1.7487, "f314_694p01_749_field", "f314_694p01_749"],
+  [101.1036, 39.6335, "f101_104p39_633_field", "f101_104p39_633"],
+  [71.7295, 23.6525, "f071_730p23_652_field", "f071_730p23_652"],
+  [250.3996, 36.4635, "f250_400p36_464_field", "f250_400p36_464"],
+  [279.0947, -23.9026, "f279_095m23_903_field", "f279_095m23_903"],
+  [276.1255, -24.8602, "f276_125m24_860_field", "f276_125m24_860"],
+]
+place = [
+  [{star = "gaia_4094007532908816896"}, {star = "gaia_4094004955928427136"}, {star = "gaia_4094007494207428480"}, {star = "gaia_4094004951586793728"}],
+  [{star = "gaia_2011892320749270912"}, {star = "gaia_2011892325047232256"}, {star = "gaia_2011892703004353792"}, {star = "gaia_2011892187608675968"}],
+  [{star = "gaia_532154183216635520"}, {star = "gaia_532154114497164288"}],
+  [{star = "gaia_6050422860560346496"}, {star = "gaia_6050423169797108864"}, {star = "gaia_6050422860560309888"}, {star = "gaia_6050423131140706432"}, {star = "gaia_6050423096777893248"}],
+  [{star = "gaia_4466255853102378752"}, {star = "gaia_4466256127980292096"}],
+  [{star = "gaia_1793570547445272832"}, {star = "gaia_1793570203847886592"}],
+  [{star = "gaia_4186921728614505856"}, {star = "gaia_4186922244010590592"}],
+  [{star = "gaia_4471617518483574528"}, {star = "gaia_4471617346684870656"}],
+  [{star = "gaia_4192698493986597632"}, {star = "gaia_4192698798924680064"}],
+  [{star = "gaia_1800855086858691456"}, {star = "gaia_1800855121218437632"}],
+  [{star = "gaia_1729882500341502848"}, {star = "gaia_1729882500342048000"}],
+  [{star = "gaia_945304301644109056"}],
+  [{star = "gaia_146944579388019712"}],
+  [{star = "gaia_1328057184175359488"}, {star = "gaia_1328057867076964864"}, {star = "gaia_1328058077530125568"}, {star = "gaia_1328057871374186624"}, {star = "gaia_1328057179882276480"}, {star = "gaia_1328057184175404544"}, {star = "gaia_1328057424702341120"}, {star = "gaia_1328057905736994560"}, {star = "gaia_1328057768297931904"}],
+  [{star = "gaia_4077493727234716928"}, {star = "gaia_4077588525725997952"}, {star = "gaia_4077494478834899840"}, {star = "gaia_4077588452718318080"}, {star = "gaia_4077588418358577024"}, {star = "gaia_4077587598099748224"}, {star = "gaia_4077588830675524352"}, {star = "gaia_4077588560172542848"}, {star = "gaia_4077587559356597888"}, {star = "gaia_4077494547554369152"}, {star = "gaia_4077588491366194560"}, {star = "gaia_4077588491366616832"}],
+  [{star = "gaia_4077190567057422848"}, {star = "gaia_4077190880476061312"}, {star = "gaia_4077190536979466240"}, {star = "gaia_4077190566946727808"}, {star = "gaia_4077190536878913920"}, {star = "gaia_4077190532697266048"}, {star = "gaia_4077190571285436928"}, {star = "gaia_4077190536979469568"}, {star = "gaia_4077190571285440640"}, {star = "gaia_4077190502565927040"}, {star = "gaia_4077190536925874816"}, {star = "gaia_4077190945017582208"}],
 ]

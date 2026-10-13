@@ -1,0 +1,9 @@
+# Example star batch: a grid of contact binaries (every star of the base file, for each period x inclination) =
+# nine W UMa stars, wuma_035_1 ... wuma_035_9, built side by side.
+#   python tools/stage_batch.py batches/example_star_grid.toml --check
+
+base = "example_star_grid_base.toml"
+
+[vary]
+"star.period" = [0.3, 0.35, 0.4]
+"star.incl" = [70, 80, 88]

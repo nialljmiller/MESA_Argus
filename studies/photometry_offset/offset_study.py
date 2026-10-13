@@ -1,8 +1,10 @@
 """Where does measured - true come from? A decomposition of the movie's SExtractor photometry, star by star.
 
-    python studies/photometry_offset/offset_study.py f294_784m11_623_vars f294_784m11_623 --stride 3
+    python observe.py examples/observations/synthetic_variables.toml --scene-only   # the scenes (observe.py)
+    python observe.py examples/observations/f294.toml --scene-only
+    python studies/photometry_offset/offset_study.py synthetic_variables f294 --stride 3
 
-For each field, the movie (night_movie.main) is run unchanged, with its drawing switched off, and every measured
+For each observation (its scene, outputs/<name>/scene/), the movie (night_movie.main) is run unchanged, with its drawing switched off, and every measured
 exposure's pixels and per-star electron rates are captured. Each exposure is then measured again exactly as
 mesa_argus.photometry does (SEP background, detection, Kron aperture, MAG_AUTO, the per-exposure zero point with a
 colour term), and, because the scene is known, the measured flux of each star is split into what lies in its
@@ -72,7 +74,8 @@ def capture(field, stride, band="rho"):
     M.difference_image = lambda image, *a, **k: (np.zeros_like(image), 1.0)
     out = OUT / "work" / f"{field}.mp4"
     out.parent.mkdir(parents=True, exist_ok=True)
-    M.main(["--field", field, "--band", band, "--stride", str(stride), "-o", str(out)])
+    M.main(["--scene", str(REPO / "outputs" / field / "scene"), "--field", field, "--band", band, "--stride", str(stride),
+            "-o", str(out)])
     M.Scene.observe, P.SExtractorPhotometry.__init__ = observe, init
     import pandas as pd
 
@@ -210,7 +213,7 @@ def decompose(cap, exposures=None, field_stars=True):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("fields", nargs="+")
+    p.add_argument("fields", nargs="+", help="observation names (outputs/<name>/scene/ written by observe.py)")
     p.add_argument("--stride", type=int, default=3, help="measure every Nth exposure (the movie's --stride)")
     p.add_argument("--field-every", type=int, default=5, help="field stars: every Nth captured exposure")
     a = p.parse_args()

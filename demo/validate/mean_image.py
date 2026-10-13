@@ -30,7 +30,7 @@ EXPOSURES = (0, 165, 330)
 
 def main():
     F = E.FIELD
-    M.use_field(F)
+    M.use_field(F, E.SCENE)
     M.set_block(M.FIELDS[F].get("block_n", 3))
     M.AREA_HALF = max(240.0, M.HALF + M.MARGIN)
     cfg = copy.deepcopy(ARGUS_CONFIG)
@@ -45,10 +45,8 @@ def main():
     d = json.loads((REPO / "demo" / "build" / f"{F}.json").read_text())
     static = {b: E_unpack(d["stars"]["rate"][b]) for b in BANDS}  # the export's template rates (same code as main)
 
-    from mesa_argus import rsp
-
-    rsp_dir = {v["source"]: f"rsp_{rsp.PREFIX}{name}" for name, v in json.loads((M.DATA / "followed.json").read_text()).items()}
-    models = {k: M.RSPStar(REPO / "runs" / rsp_dir[int(src[k])] / "pulsation.h5", ab) for k in follow}
+    real = {v["source"]: REPO / v["file"] for v in M.load_placed() if v["source"] > 0}
+    models = {k: M.RSPStar(real[int(src[k])], ab) for k in follow}
     zenith = seasonal_seeing_params(times[0])[0]
     seeing = seeing_at_airmass(zenith, airmass)
     grid = np.round(np.arange(np.floor(seeing.min() * 20) / 20, seeing.max() + 0.05, 0.05), 2)
