@@ -6,5 +6,6 @@ astroquery>=0.4.7
 h5py>=3.9
 sep>=1.4
 phoebe>=2.5,<2.6
+sncosmo>=2.10
 # argus_sim (private): pip install "git+ssh://git@github.com/argus-hdps/ArgusSim.git@feat/arbitrary-sed-input"
 # movies also need ffmpeg on PATH

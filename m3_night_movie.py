@@ -50,7 +50,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.animation import FFMpegWriter  # noqa: E402
 from matplotlib.colors import AsinhNorm  # noqa: E402
 from matplotlib.patches import Circle, Rectangle  # noqa: E402
-from matplotlib.ticker import StrMethodFormatter  # noqa: E402
 import numpy as np  # noqa: E402
 from scipy import sparse  # noqa: E402
 
@@ -84,7 +83,8 @@ _REPO = Path(__file__).resolve().parent  # data/, runs/, outputs/ are resolved f
 for _f in sorted((_REPO / "data").glob("*/field.json")):
     _c = json.loads(_f.read_text())
     CLUSTERS[_f.parent.name] = dict(name=_c["name"], centre=tuple(_c["centre"]), tile=_c["tile"], block=tuple(_c["block"]),
-                                    date=_c["date"], site=_c.get("site"), followed_only=True, block_n=_c.get("block_n", 3))
+                                    date=_c["date"], site=_c.get("site"), followed_only=True, block_n=_c.get("block_n", 3),
+                                    synthetic=_c.get("synthetic", False))
 CLUSTER = "m3"
 DATA = Path("data/m3")
 CENTRE = SkyCoord(205.5484 * u.deg, 28.3773 * u.deg)
@@ -157,13 +157,39 @@ def block_centre_label():
     return f"{int(h):02d}ʰ{int(m_):02d}ᵐ{s_:04.1f}ˢ {'+' if sign > 0 else '−'}{int(d):02d}°{int(dm):02d}′{ds:02.0f}″"
 
 
+def star_catalogue():
+    """The field's star list: Gaia DR3, or a synthetic field's (argus_field.py --synthetic: Gaia magnitudes and
+    colours of a real field at random positions)."""
+    return DATA / ("synthetic_stars.ecsv" if CLUSTERS[CLUSTER].get("synthetic") else "gaia_dr3_core.ecsv")
+
+
+def load_transients():
+    """The field's transients (argus_field.py --transient): [dict(label, file, ra, dec, ...)], in order."""
+    path = DATA / "transients.json"
+    return json.loads(path.read_text()) if path.exists() else []
+
+
 def load_scene():
-    g = Table.read(DATA / "gaia_dr3_core.ecsv")
+    g = Table.read(star_catalogue())
+    transients = load_transients()
+    if transients:  # appended as sources -1, -2, ..., placed by their offsets in the block (no magnitude: their light
+        from astropy.table import vstack  # comes from their models)
+
+        t = Table({"Source": [-(i + 1) for i in range(len(transients))], "RA_ICRS": [np.nan] * len(transients),
+                   "DE_ICRS": [np.nan] * len(transients)})
+        g = vstack([g[["Source", "RA_ICRS", "DE_ICRS", "Gmag", "BP-RP"]], t])
     dx, dy = block_offsets(column(g, "RA_ICRS"), column(g, "DE_ICRS"))
-    keep = (np.abs(dx) <= AREA_HALF + MARGIN) & (np.abs(dy) <= AREA_HALF + MARGIN) & np.isfinite(column(g, "Gmag"))
+    if transients:
+        dx[-len(transients):] = [v["dx"] for v in transients]
+        dy[-len(transients):] = [v["dy"] for v in transients]
+    keep = ((np.abs(dx) <= AREA_HALF + MARGIN) & (np.abs(dy) <= AREA_HALF + MARGIN)
+            & (np.isfinite(column(g, "Gmag")) | (np.asarray(g["Source"]).astype(np.int64) < 0)))
     g = g[keep]
     g["dx"], g["dy"] = dx[keep], dy[keep]
     g["in_block"] = (np.abs(g["dx"]) <= HALF) & (np.abs(g["dy"]) <= HALF)
+    if CLUSTERS[CLUSTER].get("synthetic"):
+        g["class"] = [""] * len(g)
+        return g
     cls = Table.read(DATA / "gaia_classifier.ecsv")
     klass = dict(zip(np.asarray(cls["Source"]).astype(np.int64), np.asarray(cls["Class"])))
     g["class"] = [str(klass.get(int(s), "")) for s in np.asarray(g["Source"]).astype(np.int64)]
@@ -206,12 +232,15 @@ def load_pulsators():
         for source, v in json.loads((DATA / "extra_pulsators.json").read_text()).items():
             out[int(source)] = dict(period=v["period"], epoch=v["epoch_bjd"], kind=v["kind"], amp={"G": v["amp"]},
                                     mean={"G": v["G"]})
+    # transients (argus_field.py --transient): sources -1, -2, ...; no period, epoch = the model's t0
+    for i, v in enumerate(load_transients()):
+        out[-(i + 1)] = dict(period=np.nan, epoch=v["t0_bjd"], kind=v["kind"], amp={"G": np.nan}, mean={}, transient=v)
     return out
 
 
 def pulsator_title(follow, pulsators, src):
     """'6 RR Lyrae: MESA RSP', or e.g. '1 BL Her: MESA RSP · 1 eclipsing binary: PHOEBE'."""
-    kinds = [pulsators[int(src[k])]["kind"] for k in follow]
+    kinds = [pulsators[int(src[k])]["kind"] for k in follow if "transient" not in pulsators[int(src[k])]]
     n_eb = sum(k == "EB" for k in kinds)
     puls = [k for k in kinds if k != "EB"]
     parts = []
@@ -220,6 +249,9 @@ def pulsator_title(follow, pulsators, src):
                      f"{len(puls)} pulsator{'s' if len(puls) != 1 else ''} ({', '.join(dict.fromkeys(puls))}): MESA RSP")
     if n_eb:
         parts.append(f"{n_eb} eclipsing binar{'ies' if n_eb != 1 else 'y'}: PHOEBE")
+    trans = [pulsators[int(src[k])]["kind"] for k in follow if "transient" in pulsators[int(src[k])]]
+    if trans:
+        parts.append(f"{len(trans)} transient{'s' if len(trans) != 1 else ''} ({', '.join(dict.fromkeys(trans))}): sncosmo")
     return " · ".join(parts) or "no modelled variables"
 
 
@@ -234,7 +266,8 @@ def choose_followed(stars, pulsators, n):
     if CLUSTERS[CLUSTER].get("followed_only"):  # an argus_field.py field: exactly the stars the user selected
         chosen = {v["source"] for v in json.loads((DATA / "followed.json").read_text()).values()}
         follow = [k for k in range(len(stars)) if int(src[k]) in chosen]
-        return sorted(follow, key=lambda k: -pulsators[int(src[k])]["amp"]["G"])
+        transients = sorted((k for k in range(len(stars)) if int(src[k]) < 0), key=lambda k: -int(src[k]))  # T1, T2, ...
+        return sorted(follow, key=lambda k: -pulsators[int(src[k])]["amp"]["G"]) + transients
     exclude = CLUSTERS[CLUSTER].get("exclude", set())
     candidates = [k for k in range(len(stars)) if in_block[k] and int(src[k]) in pulsators and int(src[k]) not in exclude]
     by_amp = sorted(candidates, key=lambda k: -pulsators[int(src[k])]["amp"]["G"])
@@ -341,6 +374,35 @@ class RSPStar:
             a, b, pa, pb = i - 1, i, self.phase[i - 1], self.phase[i]
         w = 0.0 if pb == pa else (phase - pa) / (pb - pa)
         return (1 - w) * self.flux[a] + w * self.flux[b]
+
+
+class TransientSource:
+    """A transient (runs/transient_<field>_<label>/transient.h5, mesa_argus.transients): observer-frame SEDs against
+    observer-frame days since t0 (BJD_TDB), seen through the field's Milky Way reddening (recorded in the file).
+
+    No light before the model's first step; a time after its last step is an error (no extrapolation).
+    """
+
+    def __init__(self, path):
+        from mesa_argus import m67
+
+        with h5py.File(path) as f:
+            self.attrs = dict(f.attrs)
+            wave, flux, self.t = f["wavelength"][:], f["flux"][:], f["time_days"][:]
+        self.wave = wave * u.AA
+        self.flux = m67.redden(wave, flux, float(self.attrs["ebv"]))
+        self.t0 = float(self.attrs["t0_bjd"])
+
+    def sed_at(self, bjd):
+        """Observer-frame f_lambda at BJD bjd: linear between the bracketing stored steps."""
+        d = bjd - self.t0
+        if d > self.t[-1]:
+            raise ValueError(f"{self.attrs['model']}: {d:.2f} d after t0 is past the model's last step ({self.t[-1]:.2f} d)")
+        if d < self.t[0]:
+            return np.zeros(self.flux.shape[1])
+        i = int(np.clip(np.searchsorted(self.t, d), 1, len(self.t) - 1))
+        w = (d - self.t[i - 1]) / (self.t[i] - self.t[i - 1])
+        return (1 - w) * self.flux[i - 1] + w * self.flux[i]
 
 
 # ---------------------------------------------------------------- the night
@@ -550,8 +612,11 @@ def main(argv=None):
     G = column(stars, "Gmag")
     gaia_var = np.array([int(s) in pulsators for s in src])  # Gaia-classified pulsators: constant unless followed
     follow = choose_followed(stars, pulsators, args.highlight)
-    labels = {k: f"V{i + 1}" for i, k in enumerate(follow)}
-    print(f"{len(stars)} Gaia sources ({int(in_block.sum())} in the block); following {len(follow)} pulsators with "
+    labels = {k: f"T{-int(src[k])}" if src[k] < 0 else f"V{i + 1}" for i, k in enumerate(follow)}
+    n_tr = int(np.sum(src < 0))
+    print(f"{len(stars) - n_tr} {'synthetic stars' if CLUSTERS[args.cluster].get('synthetic') else 'Gaia sources'} "
+          f"({int(in_block.sum()) - n_tr} in the block)" + (f"; {n_tr} transients (sncosmo)" if n_tr else "")
+          + f"; following {len(follow) - n_tr} pulsators with "
           f"MESA RSP models; the other {int((gaia_var & in_block).sum()) - len(follow)} Gaia-classified variables in "
           "the block are held constant")
 
@@ -571,7 +636,7 @@ def main(argv=None):
     colour = column(stars, "BP-RP")
     # crowded-core sources often have no (or blended) BP/RP: give them the median colour of M3
     # stars of the same G outside the core (> 2.5'), where Gaia colours are reliable
-    outer = Table.read(DATA / "gaia_dr3_core.ecsv")
+    outer = Table.read(star_catalogue())
     r_out = 60 * np.hypot((column(outer, "RA_ICRS") - CENTRE.ra.deg) * np.cos(CENTRE.dec.rad), column(outer, "DE_ICRS") - CENTRE.dec.deg)
     og, oc = column(outer, "Gmag"), column(outer, "BP-RP")
     good = (r_out > 2.5) & np.isfinite(og) & np.isfinite(oc)
@@ -609,7 +674,25 @@ def main(argv=None):
 
     rsp_dir = {v["source"]: f"rsp_{rsp.PREFIX}{name}" for name, v in json.loads((DATA / "followed.json").read_text()).items()}
     rsp_stars, rsp_rate, rsp_mag, rsp_sed, rsp_cycle = {}, {}, {}, {}, {}
+    transient = {k for k in follow if "transient" in pulsators[int(src[k])]}
     for k in follow:
+        if k in transient:  # the model's SED at each exposure (mesa_argus.transients); its "cycle" is its track over the night
+            v = pulsators[int(src[k])]["transient"]
+            model = TransientSource(_REPO / v["file"])
+            rsp_stars[k] = model
+            seds = np.array([model.sed_at(b_) for b_ in bjd])
+            rsp_sed[k] = seds
+            rsp_rate[k] = {b: np.array([ab.electrons_from_sed(band, model.wave, f * FLAM, airmass=x).value
+                                        for f, x in zip(seds, airmass)]) for b, band in BANDS.items()}
+            rsp_mag[k] = {b: np.array([float(ab.mag_from_sed(band, model.wave, f * FLAM)) if f.any() else np.inf for f in seds])
+                          for b, band in BANDS.items()}
+            rsp_cycle[k] = {b: np.where(np.isfinite(rsp_mag[k][b]), rsp_mag[k][b], np.nan) for b in BANDS}
+            lit = np.isfinite(rsp_cycle[k]["rho"])
+            print(f"  {labels[k]}: {v['kind']} sncosmo {v['model']}, z {v['z']:g}, t0 BJD {v['t0_bjd']:.4f} "
+                  f"(night starts {bjd[0] - v['t0_bjd']:+.3f} d after t0); "
+                  + (f"rho {np.nanmin(rsp_cycle[k]['rho']):.2f}-{np.nanmax(rsp_cycle[k]['rho']):.2f} over the night"
+                     if lit.any() else "no light during the night"))
+            continue
         model = RSPStar(_REPO / "runs" / rsp_dir[int(src[k])] / "pulsation.h5", ab)
         rsp_stars[k] = model
         seds = np.array([model.sed(ph) for ph in phases_at(pulsators[int(src[k])], bjd)])
@@ -629,17 +712,21 @@ def main(argv=None):
     # MESA SEDs on a uniform phase grid), seen at each exposure's airmass
     ref_rate = {}
     for k in follow:
+        if k in transient:  # not in the reference: the reference is the field before the event
+            ref_rate[k] = {b: np.zeros(len(airmass)) for b in BANDS}
+            continue
         mean_sed = np.mean([rsp_stars[k].sed(ph) for ph in np.linspace(0, 1, 200, endpoint=False)], axis=0) * FLAM
         ref_rate[k] = {b: np.array([ab.electrons_from_sed(band, rsp_stars[k].wave, mean_sed, airmass=x).value
                                     for x in airmass]) for b, band in BANDS.items()}
 
-    def rates_at(b, j):
+    def rates_at(b, j, reference=False):
+        """Electrons/s of every star in exposure j; reference: as the difference reference sees it (no transients)."""
         x = float(np.clip(airmass[j], AIRMASS_GRID[0], AIRMASS_GRID[-1]))
         i1 = int(np.clip(np.searchsorted(AIRMASS_GRID, x), 1, len(AIRMASS_GRID) - 1))
         f = (x - AIRMASS_GRID[i1 - 1]) / (AIRMASS_GRID[i1] - AIRMASS_GRID[i1 - 1])
         out = static_rate[b][:, i1 - 1] * (1 - f) + static_rate[b][:, i1] * f
         for k in follow:
-            out[k] = rsp_rate[k][b][j]
+            out[k] = 0.0 if (reference and k in transient) else rsp_rate[k][b][j]
         return out
 
     def true_mag(b, k, j):
@@ -677,14 +764,31 @@ def main(argv=None):
           f"{np.mean(comp['illum_frac']) * 100:.0f}% illuminated, altitude {np.min(comp['moon_alt']):.0f} to "
           f"{np.max(comp['moon_alt']):.0f} deg; rho sky {sky_rate['rho'].min():.1f}-{sky_rate['rho'].max():.1f} e/s/pixel")
     ut = (times.jd - np.floor(times[0].jd - 0.5) - 0.5) * 24  # UT hours since 0h on the first date
+    # transients' model light curves on the light-curve panel's time grid (periodic models: from their cycle in draw)
+    model_curve = {}
+    for k in transient:
+        tb = bjd[0] + (np.linspace(ut[0], ut[-1], 800) - ut[0]) / 24.0
+        fl = [rsp_stars[k].sed_at(b_) for b_ in tb]
+        model_curve[k] = np.array([float(ab.mag_from_sed(BANDS[args.band], rsp_stars[k].wave, f * FLAM)) if f.any() else np.nan
+                                   for f in fl])
 
     # fixed display limits
     jbest = int(np.argmin(airmass))
     B = args.band  # the band shown in the images, light curves and CMD magnitude axis
     shown_px = ((np.abs(scene.xx - scene.centre) * scene.plate <= HALF + 2) & (np.abs(scene.yy - scene.centre) * scene.plate <= HALF + 2))
-    peak = max(scene.background(B, jbest) + (scene.design_at(B, jbest) @ (rates_at(B, jbest) * args.exptime))[shown_px].max(), 1)
-    vmax = float(min(peak, scene.fullwell))
-    lw = float(np.sqrt(np.median([scene.background(B, j) for j in range(len(times))]) + scene.readnoise**2))
+    # the exposure as a colour composite (display only): each band in AB flux units (its electrons over those of a
+    # flat-spectrum AB = 0 source at the exposure's airmass), rho -> red, beta -> blue, their mean -> green; one asinh
+    # stretch of the mean intensity with the colours preserved (Lupton et al. 2004, PASP 116, 133), so a source with
+    # beta - rho = 0 is grey. Limits as for one band: the night's best-airmass peak (full well) and the sky noise.
+    flat = (3631e-23 * 2.99792458e18 / templates.wave.to_value(u.AA) ** 2) * FLAM
+    ab0 = {b: np.array([ab.electrons_from_sed(band, templates.wave, flat, airmass=x).value for x in AIRMASS_GRID]) * args.exptime
+           for b, band in BANDS.items()}
+    to_ab = lambda b, j, e: e / np.interp(airmass[j], AIRMASS_GRID, ab0[b])  # noqa: E731
+    best = {b: np.minimum(scene.background(b, jbest) + scene.design_at(b, jbest) @ (rates_at(b, jbest) * args.exptime),
+                          scene.fullwell) for b in BANDS}
+    rgb = dict(to_ab=to_ab, vmax=float((0.5 * (to_ab("rho", jbest, best["rho"]) + to_ab("beta", jbest, best["beta"])))[shown_px].max()),
+               lw=float(np.mean([np.sqrt(np.median([scene.background(b, j) for j in range(len(times))]) + scene.readnoise**2)
+                                 / np.interp(np.median(airmass), AIRMASS_GRID, ab0[b]) for b in BANDS])))
     psf_peak = {k: scene.design_at(B, jbest)[:, k].max() for k in follow}
     # colour limit: half the largest pulsator excursion at its peak pixel, so the variation reads strongly
     dlim = 0.5 * max(np.max(np.abs(rsp_rate[k][B] - ref_rate[k][B])) * args.exptime * psf_peak[k] for k in follow)
@@ -694,6 +798,9 @@ def main(argv=None):
                   np.concatenate([rsp_cycle[k]["beta"] - rsp_cycle[k]["rho"] for k in follow])]
     cmd_m = np.r_[[static_mag[B][k] for k in fixed], np.concatenate([rsp_cycle[k][B] for k in follow])]
     follow_m = np.concatenate([rsp_cycle[k][B] for k in follow])
+    if transient:  # a transient has no light (nan) before its model starts
+        lit_ = np.isfinite(cmd_c) & np.isfinite(cmd_m)
+        cmd_c, cmd_m, follow_m = cmd_c[lit_], cmd_m[lit_], follow_m[np.isfinite(follow_m)]
 
     history = {k: {"t": [], "m": [], "e": [], "true": []} for k in follow}
     seeds = np.random.SeedSequence(args.seed).spawn(len(times))
@@ -709,7 +816,7 @@ def main(argv=None):
     stack, stack_sat = [], []
     for j in ref_frames:
         rng_ref = np.random.default_rng(seeds[j])  # both bands in the movie's order: the identical exposure
-        o = {b: scene.observe(b, rates_at(b, j), j, rng_ref) for b in BANDS}[B]
+        o = {b: scene.observe(b, rates_at(b, j, reference=True), j, rng_ref) for b in BANDS}[B]
         stack.append(o["image"])
         stack_sat.append(o["full"])
     ref_image = np.median(stack, axis=0)
@@ -733,6 +840,9 @@ def main(argv=None):
     cat_mag = static_mag[B].copy()
     cat_flux = static_rate[B][:, 0] * args.exptime
     for k in follow:
+        if k in transient:  # a new source: not in the catalogue
+            cat_mag[k], cat_flux[k] = np.nan, 0.0
+            continue
         cat_mag[k] = -2.5 * np.log10(np.mean(10 ** (-0.4 * rsp_cycle[k][B])))
         cat_flux[k] = np.mean(ref_rate[k][B]) * args.exptime
     p0 = scene.lookup[B, int(scene.seeing_index[ref_frames[0]]), 0, 0]
@@ -767,9 +877,12 @@ def main(argv=None):
     for k in follow:
         mm = np.array([f[k][0] for f in measured_frames], float)
         tt = np.array([true_mag(B, k, j) for j in frames], float)
-        rel[k] = dict(measured=float(np.nanmean(mm)) if np.isfinite(mm).any() else np.nan, model=float(np.mean(tt)),
-                      span=(np.nanmin(np.r_[mm - np.nanmean(mm) if np.isfinite(mm).any() else [], tt - tt.mean()]),
-                            np.nanmax(np.r_[mm - np.nanmean(mm) if np.isfinite(mm).any() else [], tt - tt.mean()])))
+        if k in transient:  # no light before t0 (inf): the model's mean over the exposures it is lit
+            tt = np.where(np.isfinite(tt), tt, np.nan)
+        mean_ = np.nanmean if k in transient else np.mean
+        rel[k] = dict(measured=float(np.nanmean(mm)) if np.isfinite(mm).any() else np.nan, model=float(mean_(tt)),
+                      span=(np.nanmin(np.r_[mm - np.nanmean(mm) if np.isfinite(mm).any() else [], tt - mean_(tt)]),
+                            np.nanmax(np.r_[mm - np.nanmean(mm) if np.isfinite(mm).any() else [], tt - mean_(tt)])))
 
     # fixed SED axis: every followed star's SED (300-1000 nm) over every exposure of the night
     sed_vals = np.concatenate([rsp_sed[k][:, (rsp_stars[k].wave.to_value(u.nm) >= 300) & (rsp_stars[k].wave.to_value(u.nm) <= 1000)].ravel()
@@ -792,8 +905,8 @@ def main(argv=None):
             fig.clear()
             draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels, colour_of, history,
                  static_mag, pulsators, src, gaia_var, in_block, G, templates, bjd, true_mag,
-                 dict(cycle=rsp_cycle, sed=rsp_sed, stars=rsp_stars),
-                 dict(vmax=vmax, lw=lw, dlim=dlim, cmd_c=cmd_c, cmd_m=cmd_m, follow_m=follow_m, ut=(ut[0], ut[-1]),
+                 dict(cycle=rsp_cycle, sed=rsp_sed, stars=rsp_stars, curve=model_curve),
+                 dict(rgb=rgb, dlim=dlim, cmd_c=cmd_c, cmd_m=cmd_m, follow_m=follow_m, ut=(ut[0], ut[-1]),
                       seeing=seeing, centre=block_centre_label(), n_ref=len(ref_frames),
                       rel=rel, sed_ylim=sed_ylim), ab)
             writer.grab_frame()
@@ -829,8 +942,11 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
                 s=4, color="#b9c4cc", zorder=1, label="Constant stars")
     for k in follow:
         cyc = rsp["cycle"][k]
-        cmd.plot(np.r_[cyc["beta"] - cyc["rho"], cyc["beta"][0] - cyc["rho"][0]], np.r_[cyc[B], cyc[B][0]],
-                 color=colour_of[k], lw=1.3, alpha=0.9, zorder=3)
+        if k in rsp["curve"]:  # a transient: its track over the night (not a closed cycle)
+            cmd.plot(cyc["beta"] - cyc["rho"], cyc[B], color=colour_of[k], lw=1.3, alpha=0.9, zorder=3)
+        else:
+            cmd.plot(np.r_[cyc["beta"] - cyc["rho"], cyc["beta"][0] - cyc["rho"][0]], np.r_[cyc[B], cyc[B][0]],
+                     color=colour_of[k], lw=1.3, alpha=0.9, zorder=3)
         now_c, now_m = true_mag("beta", k, j) - true_mag("rho", k, j), true_mag(B, k, j)
         cmd.scatter(now_c, now_m, s=60, color=colour_of[k], edgecolor="#2b2b2b", linewidth=0.6, zorder=5)
     cmd.set(xlim=(np.percentile(lim["cmd_c"], 0.5) - 0.15, np.percentile(lim["cmd_c"], 99.5) + 0.15),
@@ -849,23 +965,28 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
         t = np.array(h["t"])
         v = pulsators[int(src[k])]
         cyc = rsp["cycle"][k][B]
-        model = np.interp(((model_b - v["epoch"]) / v["period"]) % 1.0, np.linspace(0, 1, len(cyc) + 1), np.r_[cyc, cyc[0]])
+        if k in rsp["curve"]:
+            model = rsp["curve"][k]
+        else:
+            model = np.interp(((model_b - v["epoch"]) / v["period"]) % 1.0, np.linspace(0, 1, len(cyc) + 1), np.r_[cyc, cyc[0]])
         # each star relative to its own mean over the night: the model to the model's, the measurements to theirs
         lc.plot(model_t, model - lim["rel"][k]["model"], color=colour_of[k], lw=1.0, alpha=0.35)
         m, e = np.array(h["m"]), np.array(h["e"])
         ok = np.isfinite(m)
         lc.errorbar(t[ok], m[ok] - lim["rel"][k]["measured"], yerr=e[ok], fmt="o", ms=2.5, lw=0.5, color=colour_of[k],
-                    label=f"{labels[k]} {v['kind']} {v['period']:.3f} d")
+                    label=f"{labels[k]} {v['kind']} z {v['transient']['z']:g}" if k in rsp["curve"]
+                    else f"{labels[k]} {v['kind']} {v['period']:.3f} d")
         cont_ax.plot(t, np.array(h["m"]) - np.array(h["true"]), color=colour_of[k], lw=0.8)
-    kinds_ = {pulsators[int(src[k])]["kind"] for k in follow}
-    model_name = " / ".join(([("MESA RSP")] if kinds_ - {"EB"} else []) + (["PHOEBE"] if "EB" in kinds_ else []))
+    kinds_ = {pulsators[int(src[k])]["kind"] for k in follow if k not in rsp["curve"]}
+    model_name = " / ".join(([("MESA RSP")] if kinds_ - {"EB"} else []) + (["PHOEBE"] if "EB" in kinds_ else [])
+                            + (["sncosmo"] if rsp["curve"] else []))
     lc.plot([], [], color="0.5", lw=1.0, alpha=0.5, label=f"{model_name} model")
     for ax in (lc, cont_ax):
         ax.axvline(ut[j], color="#455868", lw=0.8, alpha=0.35)
         ax.grid(alpha=0.15)
         ax.set_xlim(lim["ut"][0] - 0.1, lim["ut"][1] + 0.1)
-    lo_ = min(lim["rel"][k]["span"][0] for k in follow)
-    hi_ = max(lim["rel"][k]["span"][1] for k in follow)
+    lo_ = np.nanmin([lim["rel"][k]["span"][0] for k in follow])
+    hi_ = np.nanmax([lim["rel"][k]["span"][1] for k in follow])
     pad = 0.08 * max(hi_ - lo_, 0.05)
     lc.set(ylim=(hi_ + pad, lo_ - 2.5 * pad), ylabel=rf"$\Delta m_{{\{B}}}$ (mag)")
     lc.legend(loc="upper left", ncol=4, fontsize=7.5, frameon=True, framealpha=0.85, edgecolor="none", columnspacing=0.8,
@@ -881,10 +1002,16 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
     cont_ax.invert_yaxis()
 
     # --- image
-    img = obs[B]["image"]
     extent = (np.array([0, scene.n, 0, scene.n]) - scene.centre) * scene.plate
-    norm = AsinhNorm(linear_width=lim["lw"], vmin=0.0, vmax=lim["vmax"])
-    shown = image_ax.imshow(img, origin="lower", interpolation="nearest", cmap="magma", norm=norm, extent=extent)
+    c_ = lim["rgb"]
+    red, blue = (np.maximum(c_["to_ab"](b, j, obs[b]["image"]), 0.0) for b in ("rho", "beta"))
+    green = 0.5 * (red + blue)  # = the mean intensity (red + green + blue) / 3
+    norm = AsinhNorm(linear_width=c_["lw"], vmin=0.0, vmax=c_["vmax"])
+    scale = np.where(green > 0, np.clip(norm(green), 0, None) / np.where(green > 0, green, 1.0), 0.0)
+    colour_img = np.stack([red, green, blue], axis=-1) * scale[..., None]
+    top = colour_img.max(axis=-1, keepdims=True)
+    colour_img = np.where(top > 1, colour_img / np.where(top > 0, top, 1.0), colour_img)  # saturate to white keeping hue
+    image_ax.imshow(colour_img, origin="lower", interpolation="nearest", extent=extent)
     step = MINIPIX_PX * SKY_PX
     for v in np.arange(-HALF, HALF + 1e-6, step):
         image_ax.plot([v, v], [-HALF, HALF], color="white", lw=0.5, alpha=0.35)
@@ -895,10 +1022,11 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
         image_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold")
     lim_a = HALF + 2
     image_ax.set(xlim=(-lim_a, lim_a), ylim=(-lim_a, lim_a), xlabel="Offset (arcsec)", ylabel="Offset (arcsec)")
-    image_ax.set_title(f"Exposure ({SYMBOLS[B]})", loc="left", weight="bold")
-    bar = fig.colorbar(shown, ax=image_ax, orientation="horizontal", fraction=0.05, pad=0.13, label="electrons / pixel")
-    bar.set_ticks(norm.inverse(np.linspace(0, 1, 5)))
-    bar.ax.xaxis.set_major_formatter(StrMethodFormatter("{x:.0f}"))
+    image_ax.set_title(f"Exposure ({SYMBOLS['beta']} blue, {SYMBOLS['rho']} red)", loc="left", weight="bold")
+    bar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap="gray"), ax=image_ax, orientation="horizontal", fraction=0.05,
+                       pad=0.13, label=r"mean of $\beta$, $\rho$ (AB mag arcsec$^{-2}$)")
+    bar.set_ticks(norm.inverse(np.linspace(0, 1, 5))[1:])
+    bar.ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{-2.5 * np.log10(v / scene.plate**2):.1f}"))
     bar.ax.tick_params(labelsize=7)
     diverging = plt.get_cmap("RdBu_r").copy()
     diverging.set_bad("#bfbfbf")
@@ -908,7 +1036,8 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
         diff_ax.add_patch(Circle((stars["dx"][k], stars["dy"][k]), 3.0, fill=False, ec=colour_of[k], lw=1.0))
         diff_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold")
     diff_ax.set_title("Difference (PSF-matched)", loc="left", weight="bold")
-    diff_ax.text(0.03, 0.97, f"ref: median of {lim['n_ref']} best-seeing exposures", transform=diff_ax.transAxes, va="top",
+    diff_ax.text(0.03, 0.97, f"ref: median of {lim['n_ref']} best-seeing exposures"
+                 + ("\nwithout the transients (pre-event)" if rsp["curve"] else ""), transform=diff_ax.transAxes, va="top",
                  fontsize=7.5, color="#333", bbox={"facecolor": "white", "alpha": 0.7, "edgecolor": "none", "pad": 2})
     diff_ax.set(xlim=(-lim_a, lim_a), ylim=(-lim_a, lim_a), xlabel="Offset (arcsec)")
     plt.setp(diff_ax.get_yticklabels(), visible=False)

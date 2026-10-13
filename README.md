@@ -113,6 +113,36 @@ model-number order, with light curves against star age from `LOGS/history.data` 
 python plot_sed_observation.py runs/<track> --distance-pc 2000      # -> <track>_argus.mp4
 ```
 
+## Night movies of Argus fields
+
+`argus_field.py` simulates one night of Argus 60 s exposures on any pointing and renders a movie per band
+(`outputs/<field>/<field>_night_<band>.mp4`, with its `.photometry.csv`). The movie shows a CMD, the exposure
+as a β/ρ colour composite, a difference image, the light curves (SExtractor MAG_AUTO) and the SEDs.
+Every source is an SED fed through ArgusSim, so the light it sends to the image depends on the band and the airmass:
+
+- **Constant stars:** the colour-matched MESA SED (`runs/*_sed/seds.h5`) scaled to the star's G.
+- **Pulsators:** MESA RSP limit cycles (`mesa_argus/rsp.py`).
+- **Eclipsing binaries:** PHOEBE with MESA atmosphere SEDs (`mesa_argus/binary.py`).
+  Pulsators and binaries both write `runs/rsp_<field>_<label>/pulsation.h5`.
+- **Transients:** sncosmo spectral time series (`mesa_argus/transients.py`, `runs/transient_<field>_<label>/transient.h5`).
+  `python -m mesa_argus.transients --list` lists the models.
+
+There are two modes:
+
+```bash
+# Gaia: the real field, with the Gaia-classified variables you choose modelled
+python argus_field.py --ra 294.7844 --dec -11.6235 --block 9 --list
+python argus_field.py --ra 294.7844 --dec -11.6235 --block 9 --select all --date auto
+
+# synthetic: the real field's Gaia magnitudes and colours at random positions, all constant, plus transients
+python argus_field.py --ra 294.7844 --dec -11.6235 --block 9 --date 2026-07-19 --synthetic --seed 1 \
+  --transient salt3:z=0.02,M=-19.3,x1=0,c=0,t0=start+0.2
+```
+
+`python argus_field.py --help` describes each step, and `synthetic()` in `argus_field.py` lists the transient keys.
+Each field's choices and assumptions are written to `outputs/<field>/field_summary.md`.
+`stage_batch.py` runs several fields overnight.
+
 ## Physics
 
 - **Atmospheres:** Kurucz2003 (ATLAS9). Magnitudes are absolute (10 pc): Vega for Gaia and

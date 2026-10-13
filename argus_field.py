@@ -467,6 +467,167 @@ def observable(ra, dec, date, site, start, end, max_airmass=2.0):
     return 5 * int(ok.sum()), (t[ok][0].iso[11:16], t[ok][-1].iso[11:16]) if ok.any() else (None, None)
 
 
+def bjd_tdb(t, ra, dec, site):
+    """BJD_TDB of astropy Time(s) t (UTC) for the field seen from the site."""
+    import astropy.units as u
+    from astropy.coordinates import EarthLocation, SkyCoord
+
+    if site is None:
+        from argus_sim import c as cfg
+        site = dict(latitude=cfg.observatory.latitude, longitude=cfg.observatory.longitude, altitude=cfg.observatory.altitude)
+    loc = EarthLocation(lat=site["latitude"] * u.deg, lon=site["longitude"] * u.deg, height=site["altitude"] * u.m)
+    return (t.tdb + t.light_travel_time(SkyCoord(ra * u.deg, dec * u.deg), location=loc)).jd
+
+
+SYN_EMPTY_ARCSEC = 5.0  # a randomly placed transient has no star within this (and is this far inside the block)
+
+
+def synthetic(args):
+    """A synthetic field: the stars of the real Gaia field at (ra, dec) -- every source within RADIUS_DEG, with its G,
+    BP and RP -- placed uniformly at random within the same circle (--seed), all constant; the night, site, sky and
+    Milky Way reddening (SFD at the centre) are those of the real position. No Gaia variable varies.
+
+    Transients (--transient, repeatable): MODEL:key=value,... with MODEL an sncosmo source (python -m
+    mesa_argus.transients --list) and keys
+        z        redshift (required)
+        M        rest-frame peak absolute magnitude (required), in `band` (sncosmo bandpass, default bessellb), `magsys`
+                 (default ab)
+        t0       the model's phase 0 (mesa_argus.transients): ISO UTC time (2026-07-20T05:30), or start+D / start-D days
+                 from the night's first dark, observable 5-minute step
+        dx, dy   offsets (arcsec) in the block; default: a random position with no star within SYN_EMPTY_ARCSEC
+        host_ebv host-galaxy E(B-V) (CCM89, R_V 3.1, rest frame; default 0)
+        version  sncosmo model version (default: sncosmo's)
+        anything else: the model's own parameter (e.g. x1, c for SALT2/3)
+    e.g. --transient salt3:z=0.03,M=-19.3,x1=0,c=0,t0=start+0.2
+    """
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
+    from astropy.table import Table
+    from astropy.time import Time
+    from argus_sim import skymap_shim as sh
+
+    import m3_night_movie as movie
+    from mesa_argus import transients as T
+
+    if args.date == "auto":
+        raise SystemExit("--date auto chooses a night for Gaia variables; give --date with --synthetic")
+    real = field_name(args.ra, args.dec)
+    name = args.name or f"{real}_syn{args.seed}"
+    data, out = Path("data") / name, Path("outputs") / name
+    site = SITES[args.site]
+    from datetime import date as Date
+
+    asked = args.date or Date.today().isoformat()
+    args.date, minutes, (t_a, t_b) = nearest_night(args.ra, args.dec, asked, site, args.start, args.end)
+    if args.date != asked:
+        print(f"not up on the night of {asked}: using the nearest night it is, {args.date}")
+    print(f"{name}: synthetic field at RA {args.ra:.5f} Dec {args.dec:+.5f}; observable {minutes / 60:.1f} h on the night of "
+          f"{args.date} (UT {t_a}-{t_b}, airmass <= 2) from {args.site}")
+
+    # stars: the real field's magnitudes and colours, new positions
+    fetch(args.ra, args.dec, Path("data") / real)
+    g = Table.read(Path("data") / real / "gaia_dr3_core.ecsv")
+    rng = np.random.default_rng(args.seed)
+    n = len(g)
+    r, th = RADIUS_DEG * np.sqrt(rng.random(n)), 2 * np.pi * rng.random(n)
+    pos = SkyCoord(args.ra * u.deg, args.dec * u.deg).spherical_offsets_by(r * np.cos(th) * u.deg, r * np.sin(th) * u.deg)
+    syn = Table({"Source": np.arange(1, n + 1), "RA_ICRS": pos.ra.deg, "DE_ICRS": pos.dec.deg})
+    for c_ in ("Gmag", "BPmag", "RPmag", "BP-RP"):
+        syn[c_] = g[c_]
+    syn.meta.update(dict(synthetic=True, parent=f"Gaia DR3 within {RADIUS_DEG} deg of RA {args.ra}, Dec {args.dec}",
+                         seed=args.seed, note="Gaia G, BP, RP of every source; positions uniform at random in the same circle"))
+    data.mkdir(parents=True, exist_ok=True)
+    syn.write(data / "synthetic_stars.ecsv", overwrite=True)
+    ebv = reddening(args.ra, args.dec)
+    tid, loc = sh.radec_to_composite_id(np.array([args.ra]), np.array([args.dec]))
+    tile, block = int(tid[0]), (int(loc[0]) % 64, int(loc[0]) // 64)
+    movie.set_block(args.block)
+    movie.TILE, movie.BLOCK = tile, block
+    sx, sy = movie.block_offsets(np.asarray(syn["RA_ICRS"], float), np.asarray(syn["DE_ICRS"], float))
+    print(f"{n} stars (Gaia G and BP-RP of the real field, random positions, seed {args.seed}); "
+          f"{int(np.sum((np.abs(sx) <= movie.HALF) & (np.abs(sy) <= movie.HALF)))} in the {args.block} x {args.block} block; "
+          f"E(B-V) {ebv:.3f} (SFD)")
+
+    # transients
+    night = night_times(args.ra, args.dec, args.date, site, args.start, args.end)
+    start = Time(night[0], format="jd", scale="utc")
+    end_bjd = float(bjd_tdb(Time(night[-1], format="jd", scale="utc"), args.ra, args.dec, site)) + 10 / 1440
+    placed, rows = [], []
+    for i, spec in enumerate(args.transient, 1):
+        model, _, rest = spec.partition(":")
+        kv = dict(item.split("=", 1) for item in rest.split(",") if item)
+        for key in ("z", "M", "t0"):
+            if key not in kv:
+                raise SystemExit(f"--transient {spec}: {key}= is required")
+        t0 = kv.pop("t0")
+        if t0.startswith("start"):
+            t0_bjd = float(bjd_tdb(start, args.ra, args.dec, site)) + float(t0[5:])
+        else:
+            t0_bjd = float(bjd_tdb(Time(t0, scale="utc"), args.ra, args.dec, site))
+        z, M = float(kv.pop("z")), float(kv.pop("M"))
+        band, magsys = kv.pop("band", "bessellb"), kv.pop("magsys", "ab")
+        host_ebv, version = float(kv.pop("host_ebv", 0.0)), kv.pop("version", None)
+        if "dx" in kv or "dy" in kv:
+            dx, dy = float(kv.pop("dx", 0.0)), float(kv.pop("dy", 0.0))
+        else:
+            lim = movie.HALF - SYN_EMPTY_ARCSEC
+            for _ in range(10000):
+                dx, dy = rng.uniform(-lim, lim, 2)
+                near = np.hypot(sx - dx, sy - dy) < SYN_EMPTY_ARCSEC
+                if not near.any() and all(np.hypot(px - dx, py - dy) >= SYN_EMPTY_ARCSEC for px, py in placed):
+                    break
+            else:
+                raise SystemExit(f"--transient {spec}: no position in the block without a star within {SYN_EMPTY_ARCSEC}\"; "
+                                 "give dx=,dy=")
+        placed.append((dx, dy))
+        params = {k: float(v) for k, v in kv.items()}
+        label = f"T{i}"
+        path = Path("runs") / f"transient_{name}_{label}" / "transient.h5"
+        a = T.make_sncosmo(path, model, z, t0_bjd, M, ebv, band, magsys, params, host_ebv, version)
+        with __import__("h5py").File(path) as f:
+            last = float(f["time_days"][-1])
+        if end_bjd - t0_bjd > last:
+            raise SystemExit(f"--transient {spec}: the night ends {end_bjd - t0_bjd:.1f} d after t0, past the model's last "
+                             f"step ({last:.1f} d)")
+        rows.append(dict(label=label, file=str(path), dx=float(dx), dy=float(dy), kind=a["kind"], model=a["model"],
+                         model_version=a["model_version"], z=z, t0_bjd=t0_bjd, peak_absmag=M, peak_band=band, magsys=magsys,
+                         host_ebv=host_ebv, params=a["params"], peak_days=a["peak_days"], ebv=ebv, reference=a["reference"]))
+        print(f"  {label}: {a['kind']} ({a['model']} {a['model_version']}), z {z:g}, M {M:g} ({band}, {magsys}), {a['params']}; "
+              f"t0 BJD {t0_bjd:.4f} (night starts {float(bjd_tdb(start, args.ra, args.dec, site)) - t0_bjd:+.3f} d after t0; "
+              f"B maximum at t0 {a['peak_days']:+.2f} d); at ({dx:+.1f}\", {dy:+.1f}\")")
+    (data / "transients.json").write_text(json.dumps(rows, indent=1))
+    (data / "followed.json").write_text("{}")
+    (data / "field.json").write_text(json.dumps(dict(
+        name=f"synthetic, seed {args.seed}", centre=[args.ra, args.dec], tile=tile, block=list(block), block_n=args.block,
+        date=args.date, site=site, synthetic=True,
+        rsp=dict(dm=0.0, ebv=ebv, z=Z_SUN, mass_rr=0.55, prefix=f"{name}_", kap="gs98")), indent=1))
+
+    out.mkdir(parents=True, exist_ok=True)
+    lines = [f"# {name} (synthetic)", "", f"RA {args.ra:.5f}, Dec {args.dec:+.5f}; night of {args.date}; site {args.site}; "
+             f"UT window {args.start or 'dusk'}-{args.end or 'dawn'}", "",
+             f"{n} stars: the G, BP and RP of every Gaia DR3 source within {RADIUS_DEG} deg of this position, at positions "
+             f"drawn uniformly at random in the same circle (seed {args.seed}); every star constant (colour-matched MESA SED "
+             f"scaled to G). Milky Way E(B-V) {ebv:.3f} (SFD at the centre) for the transients.", "", "## Transients", ""]
+    for v in rows:
+        lines += [f"**{v['label']}**: {v['kind']}, sncosmo `{v['model']}` {v['model_version']} ({v['reference']})", "",
+                  f"- z {v['z']}, peak absolute magnitude {v['peak_absmag']} ({v['peak_band']}, {v['magsys']}; sncosmo's "
+                  f"default cosmology, WMAP9); host E(B-V) {v['host_ebv']}; {v['params']}",
+                  f"- t0 (model phase 0) BJD_TDB {v['t0_bjd']:.5f}; rest-frame B maximum at t0 {v['peak_days']:+.2f} d (observer frame)",
+                  f"- position ({v['dx']:+.2f}\", {v['dy']:+.2f}\") from the block centre", ""]
+    lines += ["The difference-image reference leaves the transients out (the field before the event). Argus instrument, "
+              "PSF, sky, noise and photometry are as in outputs/m3/ASSUMPTIONS.md.", "", "## Outputs", ""]
+    lines += [f"- {band}: `{out / f'{name}_night_{band}.mp4'}`" for band in args.bands]
+    (out / "field_summary.md").write_text("\n".join(lines) + "\n")
+    print(f"summary: {out / 'field_summary.md'}")
+    for band in ([] if args.models_only else args.bands):
+        mp4 = out / f"{name}_night_{band}.mp4"
+        cmd = [sys.executable, "m3_night_movie.py", "--cluster", name, "--band", band, "-o", str(mp4)] \
+            + (["--start", args.start] if args.start else []) + (["--end", args.end] if args.end else [])
+        print(f"rendering {band} -> {mp4} (log {mp4.with_suffix('.log')})", flush=True)
+        with open(mp4.with_suffix(".log"), "w") as log:
+            subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, check=True)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--ra", type=float, required=True, help="deg (ICRS)")
@@ -484,6 +645,11 @@ def main(argv=None):
     p.add_argument("--models-only", action="store_true", help="make the MESA models, do not render")
     p.add_argument("--try-rrd", action="store_true", help="attempt double-mode RR Lyrae (no stable solution found so far)")
     p.add_argument("--block", type=int, default=3, help="minipixes across the block (odd, up to 9; 9 = 253\")")
+    p.add_argument("--synthetic", action="store_true", help="a synthetic field: the real field's Gaia G and BP-RP at "
+                                                            "random positions, every star constant (see synthetic())")
+    p.add_argument("--seed", type=int, default=1, help="--synthetic: seed of the star positions and transient placement")
+    p.add_argument("--transient", action="append", default=[], metavar="MODEL:key=value,...",
+                   help="--synthetic: a transient from sncosmo (repeatable); see synthetic()")
     args = p.parse_args(argv)
     global TRY_RRD
     TRY_RRD = args.try_rrd
@@ -493,6 +659,10 @@ def main(argv=None):
     os.chdir(Path(__file__).resolve().parent)  # data/, runs/, outputs/ live in the repo, wherever this is run from
     if not list(Path("runs").glob("*_sed/seds.h5")):  # the constant stars' SEDs (m3_night_movie.Templates)
         raise SystemExit("no runs/*_sed/seds.h5: run the SED tracks first (python -m mesa_argus run argus_sim_seds), or copy runs/*_sed/seds.h5 from a machine that has them")
+    if args.synthetic:
+        return synthetic(args)
+    if args.transient:
+        raise SystemExit("--transient needs --synthetic")
     name = args.name or field_name(args.ra, args.dec)
     data, out = Path("data") / name, Path("outputs") / name
     site = SITES[args.site]
