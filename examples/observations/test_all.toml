@@ -1,0 +1,89 @@
+# Every hand-made star of examples/stars/test_all.toml in one synthetic field (f294's stars scattered), on one night.
+#   python make_stars.py examples/stars/test_all.toml        # once
+#   python observe.py examples/observations/test_all.toml
+
+[field]
+ra = 294.7844
+dec = -11.6235
+block = 9
+
+[night]
+date = "2026-07-19"
+
+[stars]
+background = "f294_784m11_623_field"
+layout = "random"
+seed = 1
+
+# pulsators and binaries: a grid, each with its cycle phased to the night
+[[place]]
+star = "test_rrab"
+epoch = "start+0.1"
+x = 15
+y = 85
+[[place]]
+star = "test_rrc"
+epoch = "start+0.05"
+x = 40
+y = 85
+[[place]]
+star = "test_cepheid_f"
+epoch = "start+0.3"
+x = 65
+y = 85
+[[place]]
+star = "test_bl_her"
+epoch = "start+0.2"
+x = 88
+y = 85
+[[place]]
+star = "test_w_vir"
+epoch = "start+0.1"
+x = 15
+y = 60
+[[place]]
+star = "test_hads"
+epoch = "start+0.01"
+x = 40
+y = 60
+[[place]]
+star = "test_wuma"
+epoch = "start+0.05"
+x = 65
+y = 60
+[[place]]
+star = "test_detached_eb"
+epoch = "start+0.12"
+x = 88
+y = 60
+
+# transients: each one doing something during the night
+[[place]]
+star = "test_sn_ia"
+t0 = "start+0.2"                 # B maximum
+x = 15
+y = 30
+[[place]]
+star = "test_sn_iip"
+t0 = "start-10"                  # 10 days after explosion
+x = 40
+y = 30
+[[place]]
+star = "test_grb"
+t0 = "start+0.0625"              # the burst, 1.5 h into the night
+x = 65
+y = 30
+[[place]]
+star = "test_microlensing"
+t0 = "start+0.15"                # closest approach
+x = 88
+y = 30
+[[place]]
+star = "test_dwarf_nova"
+t0 = "start+0.02"                # the rise starts
+x = 50
+y = 10
+
+[output]
+bands = ["rho"]
+fits = true

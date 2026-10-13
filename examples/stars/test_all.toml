@@ -1,0 +1,158 @@
+# One star of every generator: a regression set. The pulsators reuse the luminosity, mass and composition of real
+# Gaia stars whose MESA RSP models converged (runs/rsp_gaia_G<source>/params.json), at round distances.
+#   python make_stars.py examples/stars/test_all.toml        # MESA RSP: ~0.5-2 h per pulsator, in parallel
+
+[[set]]
+name = "f294_784m11_623_field"
+generator = "Gaia field"
+ra = 294.7844
+dec = -11.6235
+
+# --- MESA RSP
+[[star]]
+name = "test_rrab"
+generator = "RR Lyrae"
+mode = "RRab"
+period = 0.55
+L = 46.34853100986705
+distance = 8000
+z = 0.001
+mass = 0.68
+
+[[star]]
+name = "test_rrc"                # as Gaia DR3 4096776721732855040
+generator = "RR Lyrae"
+mode = "RRc"
+period = 0.33057
+L = 41.728
+distance = 4200
+z = 0.000815
+mass = 0.664
+
+[[star]]
+name = "test_cepheid_f"          # as Gaia DR3 229602496313775872
+generator = "Cepheid"
+mode = "F"
+period = 2.0416
+L = 837.322
+distance = 7000
+z = 0.005016
+mass = 4.169
+hydrogen = 0.73
+kap = "gs98"
+
+[[star]]
+name = "test_bl_her"             # as Gaia DR3 4389902192257874560
+generator = "Type II Cepheid"
+mode = "BL Her"
+period = 1.59646
+L = 85.955
+distance = 3800
+z = 0.000534
+mass = 0.55
+hydrogen = 0.76
+
+[[star]]
+name = "test_w_vir"              # as Gaia DR3 4521180822614788480
+generator = "Type II Cepheid"
+mode = "W Vir"
+period = 4.83869
+L = 218.179
+distance = 4500
+z = 0.000534
+mass = 0.55
+hydrogen = 0.76
+
+[[star]]
+name = "test_hads"               # as Gaia DR3 4444906841983925504
+generator = "HADS"
+period = 0.09492
+L = 14.484
+distance = 1900
+z = 0.0169
+mass = 1.726
+hydrogen = 0.70
+kap = "gs98"
+
+# --- PHOEBE
+[[star]]
+name = "test_wuma"
+generator = "W UMa"
+period = 0.35
+q = 0.4
+incl = 80
+teff1 = 5800
+teff2 = 5600
+fillout = 0.2
+distance = 620
+
+[[star]]
+name = "test_detached_eb"
+generator = "detached EB"
+period = 1.2
+incl = 88
+teff1 = 6500
+teff2 = 5200
+r1 = 1.3
+r2 = 0.9
+distance = 1050
+
+# --- real Gaia variables (the f294 RRab; a detached binary in another field)
+[[star]]
+name = "test_gaia_rrab"
+generator = "Gaia variable"
+source = 4186921728614505856
+
+[[star]]
+name = "test_gaia_eb"
+generator = "Gaia variable"
+source = 1001448801332222848
+
+# --- transients
+[[star]]
+name = "test_sn_ia"
+generator = "supernova"
+model = "salt3"
+z = 0.02
+M = -19.3
+params = {x1 = 0.0, c = 0.0}
+
+[[star]]
+name = "test_sn_iip"
+generator = "supernova"
+model = "nugent-sn2p"
+z = 0.005
+M = -17.0
+
+[[star]]
+name = "test_grb"
+generator = "GRB"
+peak = 9
+
+[[star]]
+name = "test_microlensing"
+generator = "microlensing"
+tE = 0.2
+u0 = 0.02
+base = 19.06
+bp_rp = 1.0
+rho = 0.01
+
+[[star]]
+name = "test_dwarf_nova"
+generator = "dwarf nova"
+d = 400
+mdot_q = 1e-11
+mdot_peak = 3e-9
+t_rise = 0.5
+plateau = 2
+tau_decay = 2
+r_out = 0.3
+t_wd = 20000
+
+# the binary's own field (a real star is observed in its own field)
+[[set]]
+name = "f098_580p58_321_field"
+generator = "Gaia field"
+ra = 98.5795966362
+dec = 58.32086737177

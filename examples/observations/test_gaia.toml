@@ -1,0 +1,21 @@
+# The real Gaia RRab of examples/stars/test_all.toml in its own field (f294), on the night it changes most
+# (the binary: test_gaia_eb.toml).
+#   python observe.py examples/observations/test_gaia.toml
+
+[field]
+ra = 294.7844
+dec = -11.6235
+block = 9
+
+[night]
+date = "auto"
+
+[stars]
+background = "f294_784m11_623_field"
+layout = "real"
+
+[[place]]
+star = "test_gaia_rrab"
+
+[output]
+bands = ["rho"]

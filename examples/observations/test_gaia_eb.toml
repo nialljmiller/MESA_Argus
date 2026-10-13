@@ -1,0 +1,20 @@
+# The real Gaia binary of examples/stars/test_all.toml in its own field, on the night its eclipses are best covered.
+#   python observe.py examples/observations/test_gaia_eb.toml
+
+[field]
+ra = 98.5795966362
+dec = 58.32086737177
+block = 9
+
+[night]
+date = "auto"
+
+[stars]
+background = "f098_580p58_321_field"
+layout = "real"
+
+[[place]]
+star = "test_gaia_eb"
+
+[output]
+bands = ["rho"]
