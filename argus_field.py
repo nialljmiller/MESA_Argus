@@ -479,7 +479,12 @@ def bjd_tdb(t, ra, dec, site):
     return (t.tdb + t.light_travel_time(SkyCoord(ra * u.deg, dec * u.deg), location=loc)).jd
 
 
-SYN_EMPTY_ARCSEC = 5.0  # a randomly placed transient has no star within this (and is this far inside the block)
+# the parametric transients written in mesa_argus/transients.py (not sncosmo): what each is, and what its t0 means
+OWN_MODELS = {"afterglow": ("power law in time and frequency with a t^2 onset, observed frame, no redshift", "the burst"),
+              "microlensing": ("point lens, point or uniform-disc source, MESA template source SED; the source is not in "
+                               "the catalogue or the difference reference, as every transient", "closest approach"),
+              "dwarf_nova": ("steady accretion disc of time-varying Mdot plus the white-dwarf blackbody; no donor, bright "
+                             "spot or lines; the quiescent disc is only approximate", "the start of the rise")}
 
 
 def synthetic(args):
@@ -487,18 +492,29 @@ def synthetic(args):
     BP and RP -- placed uniformly at random within the same circle (--seed), all constant; the night, site, sky and
     Milky Way reddening (SFD at the centre) are those of the real position. No Gaia variable varies.
 
-    Transients (--transient, repeatable): MODEL:key=value,... with MODEL an sncosmo source (python -m
-    mesa_argus.transients --list) and keys
+    Transients (--transient, repeatable): MODEL:key=value,... Every transient takes
+        t0       the model's phase 0 (mesa_argus.transients): ISO UTC time (2026-07-20T05:30), or start+D / start-D days
+                 from the night's first dark, observable 5-minute step (required)
+        x, y     position in the shown image, percent of its width from the left and of its height from the bottom;
+                 default 50, 50 (the centre); -1: random (--seed)
+    MODEL an sncosmo source (python -m mesa_argus.transients --list), with
         z        redshift (required)
         M        rest-frame peak absolute magnitude (required), in `band` (sncosmo bandpass, default bessellb), `magsys`
                  (default ab)
-        t0       the model's phase 0 (mesa_argus.transients): ISO UTC time (2026-07-20T05:30), or start+D / start-D days
-                 from the night's first dark, observable 5-minute step
-        dx, dy   offsets (arcsec) in the block; default: a random position with no star within SYN_EMPTY_ARCSEC
         host_ebv host-galaxy E(B-V) (CCM89, R_V 3.1, rest frame; default 0)
         version  sncosmo model version (default: sncosmo's)
         anything else: the model's own parameter (e.g. x1, c for SALT2/3)
-    e.g. --transient salt3:z=0.03,M=-19.3,x1=0,c=0,t0=start+0.2
+    MODEL afterglow, a GRB optical afterglow (mesa_argus.transients.make_afterglow; t0 = the burst), with
+        peak     observed AB magnitude at 6400 A at t_peak (required)
+        t_peak   seconds after the burst (default 60); alpha, beta: decay and spectral indices (default 1.0, 0.66)
+    MODEL microlensing (make_microlensing; t0 = closest approach), with
+        tE, u0   Einstein time (days) and impact parameter (Einstein radii) (required)
+        base     the source's unmagnified rho (AB, after dust) (required); bp_rp: its intrinsic BP-RP (template) (required)
+        rho      source radius (Einstein radii; default 0, a point source); fs: source fraction of the baseline (default 1)
+    MODEL dwarf_nova (make_dwarf_nova; t0 = the start of the rise), with (all required)
+        d (pc), mdot_q, mdot_peak (Msun/yr), t_rise, plateau, tau_decay (days), r_out (disc outer radius, Rsun),
+        t_wd (K); optional m_wd (Msun, default 0.8), incl (deg, default 60)
+    e.g. --transient salt3:z=0.03,M=-19.3,x1=0,c=0,t0=start+0.2   --transient afterglow:peak=9,t0=start+0.0625,x=-1,y=-1
     """
     import astropy.units as u
     from astropy.coordinates import SkyCoord
@@ -552,11 +568,14 @@ def synthetic(args):
     night = night_times(args.ra, args.dec, args.date, site, args.start, args.end)
     start = Time(night[0], format="jd", scale="utc")
     end_bjd = float(bjd_tdb(Time(night[-1], format="jd", scale="utc"), args.ra, args.dec, site)) + 10 / 1440
-    placed, rows = [], []
+    rows = []
     for i, spec in enumerate(args.transient, 1):
         model, _, rest = spec.partition(":")
         kv = dict(item.split("=", 1) for item in rest.split(",") if item)
-        for key in ("z", "M", "t0"):
+        required = {"afterglow": ("t0", "peak"), "microlensing": ("t0", "tE", "u0", "base", "bp_rp"),
+                    "dwarf_nova": ("t0", "d", "mdot_q", "mdot_peak", "t_rise", "plateau", "tau_decay", "r_out", "t_wd")
+                    }.get(model, ("t0", "z", "M"))
+        for key in required:
             if key not in kv:
                 raise SystemExit(f"--transient {spec}: {key}= is required")
         t0 = kv.pop("t0")
@@ -564,37 +583,50 @@ def synthetic(args):
             t0_bjd = float(bjd_tdb(start, args.ra, args.dec, site)) + float(t0[5:])
         else:
             t0_bjd = float(bjd_tdb(Time(t0, scale="utc"), args.ra, args.dec, site))
-        z, M = float(kv.pop("z")), float(kv.pop("M"))
-        band, magsys = kv.pop("band", "bessellb"), kv.pop("magsys", "ab")
-        host_ebv, version = float(kv.pop("host_ebv", 0.0)), kv.pop("version", None)
-        if "dx" in kv or "dy" in kv:
-            dx, dy = float(kv.pop("dx", 0.0)), float(kv.pop("dy", 0.0))
-        else:
-            lim = movie.HALF - SYN_EMPTY_ARCSEC
-            for _ in range(10000):
-                dx, dy = rng.uniform(-lim, lim, 2)
-                near = np.hypot(sx - dx, sy - dy) < SYN_EMPTY_ARCSEC
-                if not near.any() and all(np.hypot(px - dx, py - dy) >= SYN_EMPTY_ARCSEC for px, py in placed):
-                    break
-            else:
-                raise SystemExit(f"--transient {spec}: no position in the block without a star within {SYN_EMPTY_ARCSEC}\"; "
-                                 "give dx=,dy=")
-        placed.append((dx, dy))
-        params = {k: float(v) for k, v in kv.items()}
+        x_pc, y_pc = float(kv.pop("x", 50.0)), float(kv.pop("y", 50.0))
+        x_pc, y_pc = (rng.uniform(0, 100) if v_ == -1 else v_ for v_ in (x_pc, y_pc))
+        if not (0 <= x_pc <= 100 and 0 <= y_pc <= 100):
+            raise SystemExit(f"--transient {spec}: x and y are percentages of the image (0-100), or -1 for random")
+        dx, dy = (x_pc / 100 - 0.5) * 2 * movie.HALF, (y_pc / 100 - 0.5) * 2 * movie.HALF  # block offsets (arcsec)
         label = f"T{i}"
         path = Path("runs") / f"transient_{name}_{label}" / "transient.h5"
-        a = T.make_sncosmo(path, model, z, t0_bjd, M, ebv, band, magsys, params, host_ebv, version)
+        if model in OWN_MODELS:
+            z, M, band, magsys, host_ebv = float("nan"), float("nan"), "", "", 0.0
+            g_ = lambda key, default=None: float(kv.pop(key)) if default is None or key in kv else default  # noqa: E731
+            if model == "afterglow":
+                a = T.make_afterglow(path, t0_bjd, g_("peak"), ebv, g_("t_peak", 60.0), g_("alpha", 1.0), g_("beta", 0.66))
+            elif model == "microlensing":
+                a = T.make_microlensing(path, t0_bjd, g_("tE"), g_("u0"), g_("base"), g_("bp_rp"), ebv, g_("rho", 0.0),
+                                        g_("fs", 1.0))
+            else:
+                a = T.make_dwarf_nova(path, t0_bjd, g_("d"), g_("mdot_q"), g_("mdot_peak"), g_("t_rise"), g_("plateau"),
+                                      g_("tau_decay"), g_("r_out"), g_("t_wd"), ebv, g_("m_wd", 0.8), g_("incl", 60.0))
+            if kv:
+                raise SystemExit(f"--transient {spec}: unknown keys {sorted(kv)}")
+        else:
+            z, M = float(kv.pop("z")), float(kv.pop("M"))
+            band, magsys = kv.pop("band", "bessellb"), kv.pop("magsys", "ab")
+            host_ebv, version = float(kv.pop("host_ebv", 0.0)), kv.pop("version", None)
+            params = {k: float(v) for k, v in kv.items()}
+            a = T.make_sncosmo(path, model, z, t0_bjd, M, ebv, band, magsys, params, host_ebv, version)
         with __import__("h5py").File(path) as f:
-            last = float(f["time_days"][-1])
+            first, last = float(f["time_days"][0]), float(f["time_days"][-1])
+        start_bjd = float(bjd_tdb(start, args.ra, args.dec, site))
+        if first < 0 and start_bjd - t0_bjd < first:  # a source that shines before t0 must not appear from nothing
+            raise SystemExit(f"--transient {spec}: the night starts {t0_bjd - start_bjd:.2f} d before t0, before the model's "
+                             f"first step ({first:.2f} d)")
         if end_bjd - t0_bjd > last:
             raise SystemExit(f"--transient {spec}: the night ends {end_bjd - t0_bjd:.1f} d after t0, past the model's last "
                              f"step ({last:.1f} d)")
-        rows.append(dict(label=label, file=str(path), dx=float(dx), dy=float(dy), kind=a["kind"], model=a["model"],
+        rows.append(dict(label=label, file=str(path), x_percent=x_pc, y_percent=y_pc, dx=float(dx), dy=float(dy), kind=a["kind"], model=a["model"],
                          model_version=a["model_version"], z=z, t0_bjd=t0_bjd, peak_absmag=M, peak_band=band, magsys=magsys,
-                         host_ebv=host_ebv, params=a["params"], peak_days=a["peak_days"], ebv=ebv, reference=a["reference"]))
-        print(f"  {label}: {a['kind']} ({a['model']} {a['model_version']}), z {z:g}, M {M:g} ({band}, {magsys}), {a['params']}; "
-              f"t0 BJD {t0_bjd:.4f} (night starts {float(bjd_tdb(start, args.ra, args.dec, site)) - t0_bjd:+.3f} d after t0; "
-              f"B maximum at t0 {a['peak_days']:+.2f} d); at ({dx:+.1f}\", {dy:+.1f}\")")
+                         host_ebv=host_ebv, params=a["params"], peak_days=a["peak_days"], ebv=ebv, reference=a["reference"],
+                         generator=a["generator"]))
+        what = a["params"] if model in OWN_MODELS else f"z {z:g}, M {M:g} ({band}, {magsys}), {a['params']}"
+        print(f"  {label}: {a['kind']} ({a['model']} {a['model_version']}), {what}; t0 BJD {t0_bjd:.4f} (night starts "
+              f"{float(bjd_tdb(start, args.ra, args.dec, site)) - t0_bjd:+.3f} d after t0; "
+              f"{'peak' if model in OWN_MODELS else 'B maximum'} at t0 {a['peak_days']:+.4f} d); "
+              f"at {x_pc:.1f}%, {y_pc:.1f}% of the image ({dx:+.1f}\", {dy:+.1f}\")")
     (data / "transients.json").write_text(json.dumps(rows, indent=1))
     (data / "followed.json").write_text("{}")
     (data / "field.json").write_text(json.dumps(dict(
@@ -609,11 +641,19 @@ def synthetic(args):
              f"drawn uniformly at random in the same circle (seed {args.seed}); every star constant (colour-matched MESA SED "
              f"scaled to G). Milky Way E(B-V) {ebv:.3f} (SFD at the centre) for the transients.", "", "## Transients", ""]
     for v in rows:
-        lines += [f"**{v['label']}**: {v['kind']}, sncosmo `{v['model']}` {v['model_version']} ({v['reference']})", "",
-                  f"- z {v['z']}, peak absolute magnitude {v['peak_absmag']} ({v['peak_band']}, {v['magsys']}; sncosmo's "
-                  f"default cosmology, WMAP9); host E(B-V) {v['host_ebv']}; {v['params']}",
-                  f"- t0 (model phase 0) BJD_TDB {v['t0_bjd']:.5f}; rest-frame B maximum at t0 {v['peak_days']:+.2f} d (observer frame)",
-                  f"- position ({v['dx']:+.2f}\", {v['dy']:+.2f}\") from the block centre", ""]
+        if v["model"] in OWN_MODELS:
+            what, t0_is = OWN_MODELS[v["model"]]
+            lines += [f"**{v['label']}**: {v['kind']}, {what} ({v['reference']}; mesa_argus/transients.py, a parametric "
+                      "model written for this repo, not from sncosmo)", "", f"- {v['params']}",
+                      f"- t0 ({t0_is}) BJD_TDB {v['t0_bjd']:.5f}"]
+        else:
+            lines += [f"**{v['label']}**: {v['kind']}, sncosmo `{v['model']}` {v['model_version']} ({v['reference']})", "",
+                      f"- z {v['z']}, peak absolute magnitude {v['peak_absmag']} ({v['peak_band']}, {v['magsys']}; sncosmo's "
+                      f"default cosmology, WMAP9); host E(B-V) {v['host_ebv']}; {v['params']}",
+                      f"- t0 (model phase 0) BJD_TDB {v['t0_bjd']:.5f}; rest-frame B maximum at t0 {v['peak_days']:+.2f} d (observer frame)"]
+        lines += [
+                  f"- position {v['x_percent']:g}%, {v['y_percent']:g}% of the image from its lower left "
+                  f"({v['dx']:+.2f}\", {v['dy']:+.2f}\" from the centre)", ""]
     lines += ["The difference-image reference leaves the transients out (the field before the event). Argus instrument, "
               "PSF, sky, noise and photometry are as in outputs/m3/ASSUMPTIONS.md.", "", "## Outputs", ""]
     lines += [f"- {band}: `{out / f'{name}_night_{band}.mp4'}`" for band in args.bands]

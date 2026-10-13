@@ -124,8 +124,9 @@ Every source is an SED fed through ArgusSim, so the light it sends to the image 
 - **Pulsators:** MESA RSP limit cycles (`mesa_argus/rsp.py`).
 - **Eclipsing binaries:** PHOEBE with MESA atmosphere SEDs (`mesa_argus/binary.py`).
   Pulsators and binaries both write `runs/rsp_<field>_<label>/pulsation.h5`.
-- **Transients:** sncosmo spectral time series (`mesa_argus/transients.py`, `runs/transient_<field>_<label>/transient.h5`).
-  `python -m mesa_argus.transients --list` lists the models.
+- **Transients:** sncosmo spectral time series, plus three parametric models written in this repo (GRB afterglow,
+  point-lens microlensing, dwarf-nova disc outburst; `mesa_argus/transients.py`, `runs/transient_<field>_<label>/transient.h5`).
+  `python -m mesa_argus.transients --list` lists the sncosmo models.
 
 There are two modes:
 

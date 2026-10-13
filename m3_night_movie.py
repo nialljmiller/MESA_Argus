@@ -249,9 +249,10 @@ def pulsator_title(follow, pulsators, src):
                      f"{len(puls)} pulsator{'s' if len(puls) != 1 else ''} ({', '.join(dict.fromkeys(puls))}): MESA RSP")
     if n_eb:
         parts.append(f"{n_eb} eclipsing binar{'ies' if n_eb != 1 else 'y'}: PHOEBE")
-    trans = [pulsators[int(src[k])]["kind"] for k in follow if "transient" in pulsators[int(src[k])]]
+    trans = [pulsators[int(src[k])] for k in follow if "transient" in pulsators[int(src[k])]]
     if trans:
-        parts.append(f"{len(trans)} transient{'s' if len(trans) != 1 else ''} ({', '.join(dict.fromkeys(trans))}): sncosmo")
+        parts.append(f"{len(trans)} transient{'s' if len(trans) != 1 else ''}: " + ", ".join(dict.fromkeys(
+            f"{v['kind']} ({v['transient'].get('generator', 'sncosmo')})" for v in trans)))
     return " · ".join(parts) or "no modelled variables"
 
 
@@ -403,6 +404,11 @@ class TransientSource:
         i = int(np.clip(np.searchsorted(self.t, d), 1, len(self.t) - 1))
         w = (d - self.t[i - 1]) / (self.t[i] - self.t[i - 1])
         return (1 - w) * self.flux[i - 1] + w * self.flux[i]
+
+    def sed_exposure(self, bjd, exptime, n=61):
+        """Mean f_lambda over an exposure of exptime seconds centred on BJD bjd (what the detector integrates: a
+        fast transient changes within one exposure)."""
+        return np.mean([self.sed_at(b) for b in bjd + np.linspace(-0.5, 0.5, n) * exptime / 86400], axis=0)
 
 
 # ---------------------------------------------------------------- the night
@@ -615,7 +621,7 @@ def main(argv=None):
     labels = {k: f"T{-int(src[k])}" if src[k] < 0 else f"V{i + 1}" for i, k in enumerate(follow)}
     n_tr = int(np.sum(src < 0))
     print(f"{len(stars) - n_tr} {'synthetic stars' if CLUSTERS[args.cluster].get('synthetic') else 'Gaia sources'} "
-          f"({int(in_block.sum()) - n_tr} in the block)" + (f"; {n_tr} transients (sncosmo)" if n_tr else "")
+          f"({int(in_block.sum()) - n_tr} in the block)" + (f"; {n_tr} transients" if n_tr else "")
           + f"; following {len(follow) - n_tr} pulsators with "
           f"MESA RSP models; the other {int((gaia_var & in_block).sum()) - len(follow)} Gaia-classified variables in "
           "the block are held constant")
@@ -680,7 +686,7 @@ def main(argv=None):
             v = pulsators[int(src[k])]["transient"]
             model = TransientSource(_REPO / v["file"])
             rsp_stars[k] = model
-            seds = np.array([model.sed_at(b_) for b_ in bjd])
+            seds = np.array([model.sed_exposure(b_, args.exptime) for b_ in bjd])
             rsp_sed[k] = seds
             rsp_rate[k] = {b: np.array([ab.electrons_from_sed(band, model.wave, f * FLAM, airmass=x).value
                                         for f, x in zip(seds, airmass)]) for b, band in BANDS.items()}
@@ -688,7 +694,7 @@ def main(argv=None):
                           for b, band in BANDS.items()}
             rsp_cycle[k] = {b: np.where(np.isfinite(rsp_mag[k][b]), rsp_mag[k][b], np.nan) for b in BANDS}
             lit = np.isfinite(rsp_cycle[k]["rho"])
-            print(f"  {labels[k]}: {v['kind']} sncosmo {v['model']}, z {v['z']:g}, t0 BJD {v['t0_bjd']:.4f} "
+            print(f"  {labels[k]}: {v['kind']} {v.get('generator', 'sncosmo')} {v['model']}, z {v['z']:g}, t0 BJD {v['t0_bjd']:.4f} "
                   f"(night starts {bjd[0] - v['t0_bjd']:+.3f} d after t0); "
                   + (f"rho {np.nanmin(rsp_cycle[k]['rho']):.2f}-{np.nanmax(rsp_cycle[k]['rho']):.2f} over the night"
                      if lit.any() else "no light during the night"))
@@ -776,22 +782,23 @@ def main(argv=None):
     jbest = int(np.argmin(airmass))
     B = args.band  # the band shown in the images, light curves and CMD magnitude axis
     shown_px = ((np.abs(scene.xx - scene.centre) * scene.plate <= HALF + 2) & (np.abs(scene.yy - scene.centre) * scene.plate <= HALF + 2))
-    # the exposure as a colour composite (display only): each band in AB flux units (its electrons over those of a
-    # flat-spectrum AB = 0 source at the exposure's airmass), rho -> red, beta -> blue, their mean -> green; one asinh
-    # stretch of the mean intensity with the colours preserved (Lupton et al. 2004, PASP 116, 133), so a source with
-    # beta - rho = 0 is grey. Limits as for one band: the night's best-airmass peak (full well) and the sky noise.
-    flat = (3631e-23 * 2.99792458e18 / templates.wave.to_value(u.AA) ** 2) * FLAM
-    ab0 = {b: np.array([ab.electrons_from_sed(band, templates.wave, flat, airmass=x).value for x in AIRMASS_GRID]) * args.exptime
-           for b, band in BANDS.items()}
-    to_ab = lambda b, j, e: e / np.interp(airmass[j], AIRMASS_GRID, ab0[b])  # noqa: E731
-    best = {b: np.minimum(scene.background(b, jbest) + scene.design_at(b, jbest) @ (rates_at(b, jbest) * args.exptime),
-                          scene.fullwell) for b in BANDS}
-    rgb = dict(to_ab=to_ab, vmax=float((0.5 * (to_ab("rho", jbest, best["rho"]) + to_ab("beta", jbest, best["beta"])))[shown_px].max()),
-               lw=float(np.mean([np.sqrt(np.median([scene.background(b, j) for j in range(len(times))]) + scene.readnoise**2)
-                                 / np.interp(np.median(airmass), AIRMASS_GRID, ab0[b]) for b in BANDS])))
+    # the exposure as a colour composite (display only): sky-subtracted electrons, rho -> red, beta -> blue, their mean ->
+    # green, with beta scaled so the field's median star (by its rho/beta electron ratio) is grey (white balance). The
+    # brightness is the shown band's electrons per pixel above the sky, on an asinh stretch, and the colour is the
+    # pixel's channel ratios (Lupton et al. 2004, PASP 116, 133), softened by the sky noise so blank sky is grey; a
+    # pixel at full well in either band is white. Limits: the night's best-airmass peak and the sky noise.
+    ratio = rates_at("rho", jbest) / np.where(rates_at("beta", jbest) > 0, rates_at("beta", jbest), np.nan)
+    balance = np.isfinite(ratio) & (G > 12) & (G < 17) & ~np.isin(np.arange(len(stars)), follow)
+    best = np.minimum(scene.background(B, jbest) + scene.design_at(B, jbest) @ (rates_at(B, jbest) * args.exptime),
+                      scene.fullwell)
+    rgb = dict(w_beta=float(np.median(ratio[balance])),
+               vmax=float((best - scene.background(B, jbest))[shown_px].max()),
+               lw=float(np.sqrt(np.median([scene.background(B, j) for j in range(len(times))]) + scene.readnoise**2)))
     psf_peak = {k: scene.design_at(B, jbest)[:, k].max() for k in follow}
-    # colour limit: half the largest pulsator excursion at its peak pixel, so the variation reads strongly
-    dlim = 0.5 * max(np.max(np.abs(rsp_rate[k][B] - ref_rate[k][B])) * args.exptime * psf_peak[k] for k in follow)
+    # colour limit: half the largest pulsator excursion at its peak pixel, so the variation reads strongly (an excursion
+    # is at most the full well: a pixel holds no more)
+    dlim = 0.5 * max(min(np.max(np.abs(rsp_rate[k][B] - ref_rate[k][B])) * args.exptime * psf_peak[k], scene.fullwell)
+                     for k in follow)
     blockmask = in_block & (G < 20)
     fixed = np.nonzero(blockmask & ~np.isin(np.arange(len(stars)), follow))[0]
     cmd_c = np.r_[[static_mag["beta"][k] - static_mag["rho"][k] for k in fixed],
@@ -974,12 +981,14 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
         m, e = np.array(h["m"]), np.array(h["e"])
         ok = np.isfinite(m)
         lc.errorbar(t[ok], m[ok] - lim["rel"][k]["measured"], yerr=e[ok], fmt="o", ms=2.5, lw=0.5, color=colour_of[k],
-                    label=f"{labels[k]} {v['kind']} z {v['transient']['z']:g}" if k in rsp["curve"]
+                    label=(f"{labels[k]} {v['kind']}" + (f" z {v['transient']['z']:g}" if np.isfinite(v['transient']['z']) else ""))
+                    if k in rsp["curve"]
                     else f"{labels[k]} {v['kind']} {v['period']:.3f} d")
         cont_ax.plot(t, np.array(h["m"]) - np.array(h["true"]), color=colour_of[k], lw=0.8)
     kinds_ = {pulsators[int(src[k])]["kind"] for k in follow if k not in rsp["curve"]}
     model_name = " / ".join(([("MESA RSP")] if kinds_ - {"EB"} else []) + (["PHOEBE"] if "EB" in kinds_ else [])
-                            + (["sncosmo"] if rsp["curve"] else []))
+                            + list(dict.fromkeys(pulsators[int(src[k])]["transient"].get("generator", "sncosmo")
+                                                 for k in follow if k in rsp["curve"])))
     lc.plot([], [], color="0.5", lw=1.0, alpha=0.5, label=f"{model_name} model")
     for ax in (lc, cont_ax):
         ax.axvline(ut[j], color="#455868", lw=0.8, alpha=0.35)
@@ -1004,11 +1013,14 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
     # --- image
     extent = (np.array([0, scene.n, 0, scene.n]) - scene.centre) * scene.plate
     c_ = lim["rgb"]
-    red, blue = (np.maximum(c_["to_ab"](b, j, obs[b]["image"]), 0.0) for b in ("rho", "beta"))
-    green = 0.5 * (red + blue)  # = the mean intensity (red + green + blue) / 3
+    sub = {b: obs[b]["image"] - scene.background(b, j) for b in BANDS}
+    red, blue = np.maximum(sub["rho"], 0.0), np.maximum(c_["w_beta"] * sub["beta"], 0.0)
+    chan = np.stack([red, 0.5 * (red + blue), blue], axis=-1)
+    hue = (chan + c_["lw"]) / (chan.mean(axis=-1, keepdims=True) + c_["lw"])
+    full = np.any([obs[b]["image"] >= scene.fullwell - 5 * scene.readnoise for b in BANDS], axis=0)
+    hue[full] = 1.0
     norm = AsinhNorm(linear_width=c_["lw"], vmin=0.0, vmax=c_["vmax"])
-    scale = np.where(green > 0, np.clip(norm(green), 0, None) / np.where(green > 0, green, 1.0), 0.0)
-    colour_img = np.stack([red, green, blue], axis=-1) * scale[..., None]
+    colour_img = hue * np.clip(norm(np.maximum(sub[B], 0.0)), 0, 1)[..., None]
     top = colour_img.max(axis=-1, keepdims=True)
     colour_img = np.where(top > 1, colour_img / np.where(top > 0, top, 1.0), colour_img)  # saturate to white keeping hue
     image_ax.imshow(colour_img, origin="lower", interpolation="nearest", extent=extent)
@@ -1024,9 +1036,9 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
     image_ax.set(xlim=(-lim_a, lim_a), ylim=(-lim_a, lim_a), xlabel="Offset (arcsec)", ylabel="Offset (arcsec)")
     image_ax.set_title(f"Exposure ({SYMBOLS['beta']} blue, {SYMBOLS['rho']} red)", loc="left", weight="bold")
     bar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap="gray"), ax=image_ax, orientation="horizontal", fraction=0.05,
-                       pad=0.13, label=r"mean of $\beta$, $\rho$ (AB mag arcsec$^{-2}$)")
-    bar.set_ticks(norm.inverse(np.linspace(0, 1, 5))[1:])
-    bar.ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{-2.5 * np.log10(v / scene.plate**2):.1f}"))
+                       pad=0.13, label=f"{SYMBOLS[B]} electrons / pixel above sky")
+    bar.set_ticks([v for v in (0, 10, 100, 1000, 10000) if v <= c_["vmax"]])
+    bar.ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:,.0f}"))
     bar.ax.tick_params(labelsize=7)
     diverging = plt.get_cmap("RdBu_r").copy()
     diverging.set_bad("#bfbfbf")
@@ -1077,7 +1089,7 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
     fig.suptitle(
         f"ARGUS — {lim['centre']} ({CLUSTERS[args.cluster]['name']}) — {block_label()} — {args.date} — 60 s exposures — "
         + pulsator_title(follow, pulsators, src),
-        fontsize=13.5,
+        fontsize=13.5 if len(pulsator_title(follow, pulsators, src)) <= 60 else 11.5,
     )
 
 
