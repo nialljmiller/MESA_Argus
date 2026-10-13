@@ -132,17 +132,29 @@ def build(paths, only=(), rebuild=()):
         print(f"  {p['name']}: {g.name} — {'built already' if st == 'built' else 'to build'}", flush=True)
         if st == "build":
             todo.append((table, g, p, S.Context(p["name"], REPO / "runs")))
-    for table, g, p, ctx in todo:  # one at a time: network queries, shared module state
-        if g.prepare:
-            g.prepare(p, ctx)
     failed = []
+    for table, g, p, ctx in list(todo):  # one at a time: network queries, shared module state
+        if g.prepare:
+            try:
+                g.prepare(p, ctx)
+            except (Exception, SystemExit) as err:
+                failed.append(p["name"])
+                todo.remove((table, g, p, ctx))
+                print(f"  {p['name']}: FAILED before building: {err}", flush=True)
 
     def one(item):
         table, g, p, ctx = item
         work = REPO / "runs" / "stars" / p["name"]
         work.mkdir(parents=True, exist_ok=True)
         print(f"  {p['name']}: building ({g.engine}) …", flush=True)
-        meta = g.make(work, p, ctx)
+        try:
+            meta = g.make(work, p, ctx)
+        except (Exception, SystemExit) as err:  # one star's failure does not stop the others
+            import traceback
+
+            failed.append(p["name"])
+            print(f"  {p['name']}: FAILED: {err!r}\n" + traceback.format_exc(), flush=True)
+            return
         if meta is None:
             failed.append(p["name"])
             print(f"  {p['name']}: NOT built (the engine found no acceptable model; see runs/)", flush=True)
