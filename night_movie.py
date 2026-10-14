@@ -1124,11 +1124,16 @@ def draw(fig, args, stars, scene, obs, j, n, times, ut, airmass, follow, labels,
     sed_ax.legend(loc="upper right", fontsize=8, frameon=False)
     sed_ax.grid(alpha=0.12)
 
-    what = pulsator_title(follow, pulsators, src)  # long lists of sources: smaller, then on a second line
+    what = pulsator_title(follow, pulsators, src)  # long lists of sources: smaller, then on further lines
+    if len(what) > 70:
+        import textwrap
+
+        what = "\n" + "\n".join(textwrap.wrap(what, 150, break_long_words=False))
+    else:
+        what = " — " + what
     fig.suptitle(
-        f"ARGUS — {lim['centre']} ({FIELDS[args.field]['name']}) — {block_label()} — {args.date} — 60 s exposures"
-        + ("\n" if len(what) > 70 else " — ") + what,
-        fontsize=13.5 if len(what) <= 45 else 11.5,
+        f"ARGUS — {lim['centre']} ({FIELDS[args.field]['name']}) — {block_label()} — {args.date} — 60 s exposures" + what,
+        fontsize=13.5 if len(what) <= 48 else 11.5,
     )
 
 
