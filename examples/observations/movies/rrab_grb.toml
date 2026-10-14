@@ -1,0 +1,29 @@
+# A synthetic field (f294's stars scattered at random) with an RRab in the central minipix and a GRB afterglow
+# going off 1.5 h into the night, off-centre.
+[field]
+ra = 294.7844
+dec = -11.6235
+block = 9
+
+[night]
+date = ""                 # the nearest night from today the field is up >= 3 h
+
+[stars]
+background = "f294_784m11_623_field"
+layout = "random"
+seed = 11
+
+[[place]]
+star = "test_rrab"
+epoch = "start+0.15"      # a maximum mid-night
+x = 50
+y = 50
+
+[[place]]
+star = "test_grb"
+t0 = "start+0.0625"
+x = 75
+y = 70
+
+[output]
+bands = ["rho"]

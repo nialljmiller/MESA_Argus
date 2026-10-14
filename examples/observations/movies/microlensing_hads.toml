@@ -1,0 +1,29 @@
+# A synthetic field (the f098 field's stars scattered at random) with a short microlensing event in the central
+# minipix, peaking mid-night, and a HADS (P 2.3 h) off-centre.
+[field]
+ra = 98.5795966362
+dec = 58.32086737177
+block = 9
+
+[night]
+date = ""
+
+[stars]
+background = "f098_580p58_321_field"
+layout = "random"
+seed = 12
+
+[[place]]
+star = "test_microlensing"
+t0 = "start+0.12"         # closest approach
+x = 50
+y = 50
+
+[[place]]
+star = "test_hads"
+epoch = "start"
+x = 25
+y = 30
+
+[output]
+bands = ["rho"]

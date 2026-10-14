@@ -1,0 +1,29 @@
+# A synthetic field (the f359 field's stars scattered at random) with a W UMa contact binary (P 8.4 h) in the central
+# minipix and a dwarf nova starting its rise early in the night, off-centre.
+[field]
+ra = 359.539
+dec = 61.214
+block = 9
+
+[night]
+date = ""
+
+[stars]
+background = "f359_539p61_214_field"
+layout = "random"
+seed = 13
+
+[[place]]
+star = "test_wuma"
+epoch = "start+0.05"      # a primary eclipse
+x = 50
+y = 50
+
+[[place]]
+star = "test_dwarf_nova"
+t0 = "start+0.02"         # the rise starts
+x = 70
+y = 25
+
+[output]
+bands = ["rho"]

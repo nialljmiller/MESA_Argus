@@ -98,8 +98,8 @@ real Gaia variable the E(B−V) of its own sightline.
 - **Transients** (`mesa_argus/transients.py`): SEDs against time since t0.
   - sncosmo models (supernova templates built from observed spectra; no physics run), placed at a redshift and peak
     absolute magnitude with sncosmo's default cosmology.
-  - Three parametric models written in this repo, not from sncosmo: a GRB afterglow (power law in time and frequency
-    with a t² onset), point-lens microlensing (MESA template source), and a dwarf-nova outburst (steady accretion disc
+  - Two parametric models written in this repo, not from sncosmo: point-lens microlensing (MESA template source), and
+    a dwarf-nova outburst (steady accretion disc
     of changing accretion rate plus the white dwarf; no donor, bright spot or lines).
   - Transients are not in the catalogue (no catalogue colour; see calibration above) and not in the difference
     reference.

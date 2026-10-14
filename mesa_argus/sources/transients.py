@@ -6,21 +6,17 @@ from . import REQUIRED, Generator
 
 def supernova(folder, k, name):
     params = {key: float(value) for key, value in k["params"].items()}
-    return T.make_sncosmo(folder / "sed.h5", k["model"], k["z"], 0.0, k["M"], 0.0, k["band"], k["magsys"], params,
+    return T.make_sncosmo(folder / "sed.h5", k["model"], k["z"], k["M"], k["band"], k["magsys"], params,
                           k["host_ebv"], k["version"] or None)
 
 
-def grb(folder, k, name):
-    return T.make_afterglow(folder / "sed.h5", 0.0, k["peak"], 0.0, k["t_peak"], k["alpha"], k["beta"])
-
-
 def microlensing(folder, k, name):
-    return T.make_microlensing(folder / "sed.h5", 0.0, k["tE"], k["u0"], k["base"], k["bp_rp"], k["rho"], k["fs"])
+    return T.make_microlensing(folder / "sed.h5", k["tE"], k["u0"], k["base"], k["bp_rp"], k["rho"], k["fs"])
 
 
 def dwarf_nova(folder, k, name):
-    return T.make_dwarf_nova(folder / "sed.h5", 0.0, k["d"], k["mdot_q"], k["mdot_peak"], k["t_rise"], k["plateau"],
-                             k["tau_decay"], k["r_out"], k["t_wd"], 0.0, k["m_wd"], k["incl"])
+    return T.make_dwarf_nova(folder / "sed.h5", k["d"], k["mdot_q"], k["mdot_peak"], k["t_rise"], k["plateau"],
+                             k["tau_decay"], k["r_out"], k["t_wd"], k["m_wd"], k["incl"])
 
 
 GENERATORS = [
@@ -36,14 +32,6 @@ GENERATORS = [
                    version=("", "sncosmo model version (default: sncosmo's)"),
                    params=({}, "the model's own parameters, e.g. {x1 = 0, c = 0} for SALT2/3")),
               supernova, "Barbary et al. (sncosmo); the model's own reference"),
-    Generator("GRB", "transient", "power law",
-              "GRB optical afterglow, f_nu ~ t^-alpha nu^-beta with a t^2 onset peaking at t_peak; observed frame, no "
-              "redshift (written in this repo); t0 is the burst",
-              dict(peak=(REQUIRED, "observed AB magnitude at 6400 A at t_peak, before dust"),
-                   t_peak=(60.0, "seconds after the burst"),
-                   alpha=(1.0, "temporal decay index"),
-                   beta=(0.66, "spectral index")),
-              grb, "Sari, Piran & Narayan 1998; Sari & Piran 1999"),
     Generator("microlensing", "transient", "point lens",
               "point-lens microlensing of a point or uniform-disc source, achromatic; the source a MESA template SED "
               "(written in this repo); t0 is the closest approach",

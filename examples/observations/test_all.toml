@@ -69,11 +69,6 @@ t0 = "start-10"                  # 10 days after explosion
 x = 40
 y = 30
 [[place]]
-star = "test_grb"
-t0 = "start+0.0625"              # the burst, 1.5 h into the night
-x = 65
-y = 30
-[[place]]
 star = "test_microlensing"
 t0 = "start+0.15"                # closest approach
 x = 88

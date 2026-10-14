@@ -40,26 +40,26 @@ simulates a star: it names stars that are already built and adds everything abou
 
 ```bash
 python make_stars.py examples/stars/f294_field.toml examples/stars/transients.toml   # build stars (seconds)
-python observe.py examples/observations/synthetic_grb.toml --set output.stride=30     # quick look: every 30th exposure
-python observe.py examples/observations/synthetic_grb.toml                            # the whole night (~30 min per band)
+python observe.py examples/observations/synthetic_transients.toml --set output.stride=30   # quick look: every 30th exposure
+python observe.py examples/observations/synthetic_transients.toml                          # the whole night (~30 min per band)
 ```
 
 The first command builds a background (every Gaia star around RA 294.78, Dec −11.62, as constant stars) and four
-transients. The second observes a synthetic field (those stars scattered at random) with a GRB going off 1.5 h into
-the night of 2026-07-19, and writes `outputs/synthetic_grb/synthetic_grb_night_rho.mp4` and its photometry.
+transients. The second observes a synthetic field (those stars scattered at random) with a microlensing event and a
+dwarf nova on the night of 2026-07-19, and writes `outputs/synthetic_transients/synthetic_transients_night_rho.mp4`
+and its photometry.
 
 The examples:
 
 | Star file (`examples/stars/`) | Builds | Time |
 |---|---|---|
 | `f294_field.toml` | the background set for every example observation | seconds |
-| `transients.toml` | a microlensing event, a dwarf nova, a GRB afterglow, a SN Ia | seconds |
+| `transients.toml` | a microlensing event, a dwarf nova, a SN Ia | seconds |
 | `variables.toml` | a W UMa and a detached eclipsing binary (PHOEBE), an RRab (MESA RSP) | minutes; ~1 h for the RRab |
 | `f294.toml` | the real f294 field's set and its two Gaia variables (MESA RSP) | ~1–4 h |
 
 | Observation file (`examples/observations/`) | Needs | What it shows |
 |---|---|---|
-| `synthetic_grb.toml` | f294_field, transients | a bright GRB afterglow rising past saturation and fading |
 | `synthetic_transients.toml` | f294_field, transients | a short microlensing event and a dwarf nova rising |
 | `synthetic_variables.toml` | f294_field, variables | the three hand-made periodic variables |
 | `f294.toml` | f294 | the real field with its RRab and HADS on their real ephemerides |
@@ -167,12 +167,11 @@ Gaia field set's constant stars are used as measured. Gaia queries are cached in
 | `detached EB` | periodic | PHOEBE | detached binary from period, inclination, Teffs, radii (masses optional), distance |
 | `Gaia variable` | periodic | MESA RSP / PHOEBE | a real Gaia DR3 variable, modelled as itself |
 | `supernova` | transient | sncosmo | any sncosmo model at a redshift and peak absolute magnitude |
-| `GRB` | transient | power law | optical afterglow, f_ν ∝ t^−α ν^−β with a t² onset |
 | `microlensing` | transient | point lens | point or uniform-disc source, a MESA template SED |
 | `dwarf nova` | transient | steady disc | accretion disc with a rising and decaying accretion rate, plus the white dwarf |
 | `Gaia field` | set | Gaia DR3 | every Gaia star around a pointing, as constant stars |
 
-GRB, microlensing and dwarf nova are parametric models written in this repo (equations and references in
+Microlensing and dwarf nova are parametric models written in this repo (equations and references in
 `mesa_argus/transients.py`). MESA RSP models take ~0.5–2 h each and PHOEBE a few minutes.
 
 **Adding a generator:** a module in `mesa_argus/sources/` with a list `GENERATORS` of `Generator(name, timing,
@@ -206,11 +205,11 @@ Every assumption (what comes from ArgusSim, what is written here, what is assume
   `make_stars.py` run.
 
 ```toml
-base = "../examples/observations/synthetic_grb.toml"
+base = "../examples/observations/synthetic_transients.toml"
 [vary]
 "field.ra,field.dec" = [[294.7844, -11.6235], [273.0414, -20.7099]]
 place = [
-  [{star = "grb_peak9", t0 = "start+0.06"}],
+  [{star = "dwarf_nova_400pc", t0 = "start+0.02"}],
   [{star = "microlensing_te02", t0 = "start+0.15", x = 30, y = 70}],
 ]
 ```
@@ -298,7 +297,7 @@ mesa_argus/             the Python package (python -m mesa_argus ...)
   rsp.py                  MESA RSP pulsator models
   binary.py               PHOEBE eclipsing-binary models
   sources/                the star generators (one module per family; python -m mesa_argus.sources)
-  transients.py           the transient physics: sncosmo, GRB, microlensing, dwarf nova
+  transients.py           the transient physics: sncosmo, microlensing, dwarf nova
   gaia.py                 Gaia DR3 queries, a field's variables, a variable's physical parameters
   night.py                when a pointing is observable; BJD at the site
   runconfig.py            observation files: schema, defaults, validation, overrides

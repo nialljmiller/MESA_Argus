@@ -9,7 +9,7 @@ Observation batches (base: an observation file, observe.py). Each run is the bas
 values; it is written out in full as outputs/batch_<batch>/runs/<name>.toml and made with `python observe.py <that
 file>`, so it can be repeated on its own. Several run at once, sharing the cores.
 
-    base = "../examples/observations/synthetic_grb.toml"   # relative to this batch file
+    base = "../examples/observations/synthetic_transients.toml"   # relative to this batch file
     combine = "product"                       # "product": every combination of the lists; "zip": side by side
     jobs = 3                                  # observations at once (--jobs overrides)
 
@@ -19,7 +19,7 @@ file>`, so it can be repeated on its own. Several run at once, sharing the cores
     [vary]                                    # each key a list; several keys together: a list of tuples, or a CSV
     "field.ra,field.dec" = [[294.78, -11.62], [273.04, -20.71]]
     place = [                                 # whole [[place]] lists, one per run
-      [{star = "grb_peak9", t0 = "start+0.06"}],
+      [{star = "dwarf_nova_400pc", t0 = "start+0.02"}],
       [{star = "microlensing_te02", t0 = "start+0.15", x = 30, y = 70}],
     ]
 

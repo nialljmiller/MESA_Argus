@@ -3,7 +3,7 @@
 #   python make_stars.py examples/stars/f294_field.toml examples/stars/transients.toml   # once (seconds)
 #   python tools/stage_batch.py batches/example_sweep.toml --check     # the four observations, run nothing
 
-base = "../examples/observations/synthetic_grb.toml"
+base = "../examples/observations/synthetic_transients.toml"
 combine = "product"
 
 [set]
@@ -12,7 +12,7 @@ combine = "product"
 [vary]
 "field.ra,field.dec" = [[294.7844, -11.6235], [273.0414, -20.7099]]
 place = [
-  [{star = "grb_peak9", t0 = "start+0.06"}],
+  [{star = "dwarf_nova_400pc", t0 = "start+0.02"}],
   [{star = "sn_ia_z002", t0 = "start+0.2", x = -1, y = -1},
    {star = "microlensing_te02", t0 = "start+0.15", x = 30, y = 70}],
 ]

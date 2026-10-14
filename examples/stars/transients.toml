@@ -22,11 +22,6 @@ r_out = 0.3
 t_wd = 20000
 
 [[star]]
-name = "grb_peak9"
-generator = "GRB"
-peak = 9                     # AB at 6400 A at t_peak, before dust
-
-[[star]]
 name = "sn_ia_z002"
 generator = "supernova"
 model = "salt3"
