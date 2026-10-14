@@ -366,12 +366,12 @@ def orbit_seds(p, contact, w, f10):
     return phases, seds, phases[int(np.argmax(light))] * p["period"]
 
 
-def write_orbit(out_dir, w, seds, time_days, attrs):
-    """out_dir/pulsation.h5, the RSP pulsators' format: one cycle of SEDs (f_lambda at 10 pc) against time."""
+def write_orbit(path, w, seds, time_days, attrs):
+    """One cycle of SEDs (f_lambda at 10 pc) against time, in the RSP pulsators' format."""
     import h5py
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    with h5py.File(out_dir / "pulsation.h5", "w") as f:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(path, "w") as f:
         f.attrs.update(**attrs, flux_units="erg s^-1 cm^-2 A^-1 (f_lambda at 10 pc)")
         f.create_dataset("wavelength", data=w)
         f.create_dataset("flux", data=seds, compression="gzip", compression_opts=4)
@@ -455,7 +455,7 @@ def model_binary(target, out_dir, field_dm, ebv, mh=0.0):
     # one orbit of SEDs
     phases, seds, t_max = orbit_seds(p, contact, w, f10)
     t_ecl1 = float(veb["TimeRef"]) + 2455197.5 + float(veb["PhaseE1"]) * period  # BJD (TCB) of a primary eclipse
-    write_orbit(out_dir, w, seds, phases * period, dict(
+    write_orbit(out_dir / "pulsation.h5", w, seds, phases * period, dict(
         label=out_dir.name, kind="EB", gaia_source=int(target["source"]), gaia_period=period,
         gaia_epoch_bjd=t_ecl1 + t_max, nonlinear_period=period, distance_modulus=field_dm, ebv=ebv,
         mass=m1, mass2=m2, teff1=p["teff1"], teff2=p["teff2"], R1=r1, R2=r2, incl=p["incl"], q=p["q"],

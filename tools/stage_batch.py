@@ -129,7 +129,7 @@ def expand(batch_path):
                 stars.append(e)
         out = REPO / "outputs" / f"batch_{tag}"
         out.mkdir(parents=True, exist_ok=True)
-        from mesa_argus.runconfig import _key, _value
+        from mesa_argus.tomlfile import key as _key, value as _value
 
         text = [f"# batch {tag}: {len(stars)} stars from {base_path.name} ({batch_path.name})", ""]
         for e in base.get("set", []):
@@ -137,7 +137,7 @@ def expand(batch_path):
         for e in stars:
             text += ["[[star]]"] + [f"{_key(k)} = {_value(v)}" for k, v in e.items()] + [""]
         (out / "stars.toml").write_text("\n".join(text))
-        entries = MS.load(out / "stars.toml")  # validates every star
+        entries = MS.read_star_files([out / "stars.toml"])  # checks every star
         return tag, "stars", 1, [(p["name"], p) for _, _, p in entries]
     runs = []
     for combo in cs:
