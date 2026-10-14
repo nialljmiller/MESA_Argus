@@ -9,7 +9,9 @@ Stars must be built first (make_stars.py); an observation only names them. The o
 (examples/observations/template.toml lists every key):
 
     [field]    where Argus points and how big a block is shown
-    [night]    which night ("auto": the night the placed real stars change most), UT window, site
+    [night]    which night ("auto": the night the placed real stars change most), UT window, site; observing
+               "ideal" (every exposure in both bands, the season's median seeing, one PSF field angle) or "survey"
+               (the exposures ArgusSim's array actually takes: telescope, band, field angle, seeing per ratchet)
     [stars]    the background: a built star set, at its real positions or scattered at random (a synthetic field)
     [[place]]  each star: where (x, y in percent of the image; real Gaia stars sit where they are) and when (t0 for
                transients, epoch for periodic stars; real stars keep their own ephemeris)
@@ -277,7 +279,18 @@ def main():
     site = night.SITES[n["site"]]
     max_airmass = n["max_airmass"] or None
     n["date"] = choose_night(f, n, window, [m["real"] for _, _, m in placements if m.get("real")], site, max_airmass)
-    exposures = night.exposures(ra, dec, n["date"], site, *window, max_airmass)[0].jd
+    if n["observing"] not in ("ideal", "survey"):
+        raise SystemExit(f"[night] observing = {n['observing']!r}: \"ideal\" or \"survey\"")
+    if n["observing"] == "survey":  # the exposures the array takes of the pointing (mesa_argus/survey.py)
+        from astropy.table import unique
+        from mesa_argus import survey
+
+        coverage = survey.exposures(ra, dec, n["date"], n["nights"], n["survey_seed"], *window)
+        if len(coverage) == 0:
+            raise SystemExit(f"the array does not cover RA {ra}, Dec {dec} on the night of {n['date']} (in the UT window)")
+        exposures = Time(list(unique(coverage, keys="time")["time"]), scale="utc").jd
+    else:
+        exposures = night.exposures(ra, dec, n["date"], site, *window, max_airmass)[0].jd
     start = Time(exposures[0], format="jd", scale="utc")
     night_start_bjd = float(night.bjd_tdb(start, ra, dec, site))
     night_end_bjd = float(night.bjd_tdb(Time(exposures[-1], format="jd", scale="utc"), ra, dec, site)) + 10 / 1440
@@ -297,12 +310,19 @@ def main():
                       tile=tile, block=list(block), block_n=f["block"], date=n["date"], site=site,
                       synthetic=s["layout"] == "random", ebv=ebv)
     (scene_dir / "field.json").write_text(json.dumps(field_json, indent=1))
+    if n["observing"] == "survey":
+        coverage.write(scene_dir / "exposures.ecsv", overwrite=True)  # the engine observes exactly these
 
     # what was done, for reading and for making it again
     resolved = out / "observation.toml"
     resolved.write_text(runconfig.dumps(obs, f"observe.py: {name}, resolved (python observe.py "
                                              f"{resolved.relative_to(REPO)} makes it again)"))
-    summary = [f"# {name}", "", f"RA {ra:.5f}, Dec {dec:+.5f}; night of {n['date']}; site {n['site']}; UT window "
+    observing = ("observing: ideal (every exposure, both bands)" if n["observing"] == "ideal" else
+                 f"observing: survey ({len(coverage)} exposures at {len(exposures)} times (overlapping telescopes take "
+                 f"some together) through {len(set(coverage['tel_id']))} telescopes: "
+                 f"{int(np.sum(coverage['band'] == 'beta'))} beta, {int(np.sum(coverage['band'] == 'rho'))} rho; "
+                 f"{n['nights']} night(s), seeing seed {n['survey_seed']}; scene/exposures.ecsv)")
+    summary = [f"# {name}", "", observing, "", f"RA {ra:.5f}, Dec {dec:+.5f}; night of {n['date']}; site {n['site']}; UT window "
                f"{window[0] or 'dusk'}-{window[1] or 'dawn'}; Milky Way E(B-V) {ebv:.3f} (the whole column at the pointing; each "
                "star sees the 3D map's dust in front of it, mesa_argus/dust.py)", "",
                background_note, "", "## Stars placed", ""]

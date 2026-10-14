@@ -393,28 +393,46 @@ def night_schedule(date, max_airmass, cfg, start=None, end=None):
     return times, night.bjd_tdb(times, CENTRE.ra.deg, CENTRE.dec.deg, cfg=cfg), airmass, alt, az
 
 
+def survey_schedule(band, cfg):
+    """The survey's exposures of the field in one band (scene/exposures.ecsv, written by observe.py from
+    mesa_argus.survey): mid-exposure UTC times, BJD_TDB, airmass, altitude, azimuth, and the table's rows (telescope,
+    field angle, the ratchet's zenith seeing)."""
+    from astropy.time import Time
+
+    from mesa_argus import night
+
+    rows = Table.read(DATA / "exposures.ecsv")
+    rows = rows[rows["band"] == band]
+    if len(rows) == 0:
+        raise SystemExit(f"the survey takes no {band} exposures of this field in the window")
+    times = Time(list(rows["time"]), scale="utc")
+    airmass, alt, az = night.sky_position(times, CENTRE.ra.deg, CENTRE.dec.deg, night.location(cfg))
+    return times, night.bjd_tdb(times, CENTRE.ra.deg, CENTRE.dec.deg, cfg=cfg), airmass, alt, az, rows
+
+
 def phases_at(var, bjd):
     return ((bjd - var["epoch"]) / var["period"]) % 1.0
 
 
 # ---------------------------------------------------------------- the detector
 class Scene:
-    """Every star's ArgusSim PSF on one pixel grid, for each seeing on a grid; sky and dark per exposure; observe()
-    makes an exposure."""
+    """Every star's ArgusSim PSF on one pixel grid, for each PSF set (a seeing, at a field angle: --field-angle unless
+    given per set); sky and dark per exposure; observe() makes an exposure."""
 
-    def __init__(self, stars, args, cfg, ab, seeings):
+    def __init__(self, stars, args, cfg, ab, seeings, field_angles=None):
         self.plate = cfg.telescope.plate_scale
         self.n = int(np.ceil(2 * AREA_HALF / self.plate)) + 30
         self.n += self.n % 2
         self.centre = self.n / 2.0
         psf_model = ZemaxPSF.from_config(cfg)
         self.seeings = list(seeings)
-        self.lookup = {}  # (band, seeing index, y phase, x phase) -> unit-flux PSF stamp
-        for si, seeing in enumerate(self.seeings):
+        self.field_angles = list(field_angles) if field_angles is not None else [args.field_angle] * len(self.seeings)
+        self.lookup = {}  # (band, PSF set index, y phase, x phase) -> unit-flux PSF stamp
+        for si, (seeing, angle) in enumerate(zip(self.seeings, self.field_angles)):
             for name, band in BANDS.items():
                 for iy in range(PSF_PHASES):
                     for ix in range(PSF_PHASES):
-                        p, _ = psf_model.with_seeing(seeing=seeing, band=band, field_angle_deg=args.field_angle,
+                        p, _ = psf_model.with_seeing(seeing=seeing, band=band, field_angle_deg=angle,
                                                      pixel_phase=(iy / PSF_PHASES, ix / PSF_PHASES))
                         p = np.maximum(p, 0.0)
                         self.lookup[name, si, iy, ix] = p / p.sum()
@@ -609,17 +627,29 @@ def followed_star_light(k, v, args, ab, bjd, airmass, model_file, model_ebv):
     return model, seds, rate, mag, cycle
 
 
-def conditions(times, airmass, alt, az, args, stars, cfg, ab):
-    """Seeing per exposure, the detector scene (PSFs), and the sky per exposure, all from ArgusSim."""
-    # seeing: the season's median zenith seeing at the site (DIMMs, Barker et al. 2003) x airmass^0.6; PSFs on a 0.05" grid
-    zenith_seeing = args.seeing if args.seeing else seasonal_seeing_params(times[0])[0]
-    seeing = seeing_at_airmass(zenith_seeing, airmass)
-    seeing_grid = np.round(np.arange(np.floor(seeing.min() * 20) / 20, seeing.max() + 0.05, 0.05), 2)
-    print(f"seeing: {zenith_seeing:.2f}\" at zenith -> {seeing.min():.2f}-{seeing.max():.2f}\" (ArgusSim site model); "
-          f"{len(seeing_grid)} PSF sets", flush=True)
-    print("building the detector scene …", flush=True)
-    scene = Scene(stars, args, cfg, ab, seeing_grid)
-    scene.set_seeing(np.abs(seeing[:, None] - seeing_grid[None, :]).argmin(axis=1))
+def conditions(times, airmass, alt, az, args, stars, cfg, ab, survey=None):
+    """Seeing per exposure, the detector scene (PSFs), and the sky per exposure, all from ArgusSim. survey: the survey's
+    exposure rows (survey_schedule), each with its ratchet's zenith seeing and its field angle."""
+    if survey is None:
+        # seeing: the season's median zenith seeing at the site (DIMMs, Barker et al. 2003) x airmass^0.6; PSFs on a 0.05" grid
+        zenith_seeing = args.seeing if args.seeing else seasonal_seeing_params(times[0])[0]
+        seeing = seeing_at_airmass(zenith_seeing, airmass)
+        seeing_grid = np.round(np.arange(np.floor(seeing.min() * 20) / 20, seeing.max() + 0.05, 0.05), 2)
+        print(f"seeing: {zenith_seeing:.2f}\" at zenith -> {seeing.min():.2f}-{seeing.max():.2f}\" (ArgusSim site model); "
+              f"{len(seeing_grid)} PSF sets", flush=True)
+        print("building the detector scene …", flush=True)
+        scene = Scene(stars, args, cfg, ab, seeing_grid)
+        scene.set_seeing(np.abs(seeing[:, None] - seeing_grid[None, :]).argmin(axis=1))
+    else:
+        # seeing: each ratchet's zenith draw x airmass^0.6; PSFs at 0.05" in seeing and 0.01 deg in field angle
+        seeing = seeing_at_airmass(np.asarray(survey["seeing_zenith"], float), airmass)
+        sets = np.c_[np.round(seeing * 20) / 20, np.round(np.asarray(survey["field_angle"], float), 2)]
+        unique, index = np.unique(sets, axis=0, return_inverse=True)
+        print(f"seeing (survey: per ratchet): {seeing.min():.2f}-{seeing.max():.2f}\"; field angles "
+              f"{np.min(survey['field_angle']):.2f}-{np.max(survey['field_angle']):.2f} deg; {len(unique)} PSF sets", flush=True)
+        print("building the detector scene …", flush=True)
+        scene = Scene(stars, args, cfg, ab, unique[:, 0], unique[:, 1])
+        scene.set_seeing(np.ravel(index))
     # sky: airglow (solar activity, airmass), zodiacal light, integrated starlight, Moon (Krisciunas & Schaefer 1991),
     # site light
     observatory = Observatory(cfg)
@@ -638,14 +668,14 @@ def conditions(times, airmass, alt, az, args, stars, cfg, ab):
     return seeing, scene
 
 
-def difference_reference(scene, seeing, rates_at, seeds, band, args):
+def difference_reference(scene, seeing, rates_at, seeds, band, args, bands):
     """The difference image's reference: the median of the best-seeing exposures (each a full noisy exposure, the
     transients left out), and the stamps around bright stars the kernel is fitted on."""
     ref_frames = np.argsort(seeing, kind="stable")[: max(20, len(seeing) // 5)]
     stack, stack_full = [], []
     for j in ref_frames:
-        rng = np.random.default_rng(seeds[j])  # both bands in the movie's order: the identical exposure
-        exposure = {b: scene.observe(b, rates_at(b, j, reference=True), j, rng) for b in BANDS}[band]
+        rng = np.random.default_rng(seeds[j])  # the bands in the movie's order: the identical exposure
+        exposure = {b: scene.observe(b, rates_at(b, j, reference=True), j, rng) for b in bands}[band]
         stack.append(exposure["image"])
         stack_full.append(exposure["full"])
     ref_image = np.median(stack, axis=0)
@@ -664,7 +694,7 @@ def difference_reference(scene, seeing, rates_at, seeds, band, args):
 
 
 def write_fits(folder, j, exposures, s, args):
-    """Exposure j in both bands as FITS, with what made it in the header."""
+    """Exposure j in each band it is taken in as FITS, with what made it in the header."""
     from astropy.io import fits
 
     folder.mkdir(parents=True, exist_ok=True)
@@ -675,6 +705,9 @@ def write_fits(folder, j, exposures, s, args):
                            SKY_E=float(s.scene.background(band, j)), FULLWELL=float(s.scene.fullwell),
                            RDNOISE=float(s.scene.readnoise), PLATESCL=float(s.scene.plate), RA_CEN=CENTRE.ra.deg,
                            DEC_CEN=CENTRE.dec.deg, BUNIT="electron", ORIGIN="MESA_ARGUS night_movie.py"))
+        if s.survey is not None:  # which telescope took it, and where in its field the block fell
+            header.update(dict(TEL_ID=int(s.survey["tel_id"][j]), RATCHET=int(s.survey["ratchet"][j]),
+                               FIELDANG=float(s.survey["field_angle"][j])))
         fits.writeto(folder / f"{FIELD}_{band}_{j:04d}.fits", exposure["image"].astype(np.float32), header, overwrite=True)
 
 
@@ -758,9 +791,17 @@ def main(argv=None):
     # 2. the night
     if args.exptime > cfg.survey.base_cadence_s:
         raise SystemExit(f"--exptime {args.exptime} s is longer than ArgusSim's cadence ({cfg.survey.base_cadence_s} s)")
-    times, bjd, airmass, alt, az = night_schedule(args.date, args.max_airmass, cfg, args.start, args.end)
-    print(f"night of {args.date}: {len(times)} exposures, UT {times[0].iso[11:16]}-{times[-1].iso[11:16]}, "
-          f"airmass {airmass.min():.2f}-{airmass.max():.2f}")
+    survey = None  # observing "survey": the exposures ArgusSim's array takes of the field, each in one band
+    if (DATA / "exposures.ecsv").exists():
+        times, bjd, airmass, alt, az, survey = survey_schedule(B, cfg)
+        print(f"survey ({B}): {len(times)} exposures through {len(np.unique(survey['tel_id']))} telescopes in "
+              f"{len(np.unique(survey['ratchet']))} ratchets, UT {times[0].iso[11:16]}-{times[-1].iso[11:16]}, "
+              f"airmass {airmass.min():.2f}-{airmass.max():.2f}")
+    else:
+        times, bjd, airmass, alt, az = night_schedule(args.date, args.max_airmass, cfg, args.start, args.end)
+        print(f"night of {args.date}: {len(times)} exposures, UT {times[0].iso[11:16]}-{times[-1].iso[11:16]}, "
+              f"airmass {airmass.min():.2f}-{airmass.max():.2f}")
+    bands = [B] if survey is not None else list(BANDS)  # the bands each exposure is taken in
     ut = (times.jd - np.floor(times[0].jd - 0.5) - 0.5) * 24  # UT hours since 0h on the first date
 
     # 3. constant stars
@@ -815,15 +856,15 @@ def main(argv=None):
         return float(follow_mag[k][b][j]) if k in follow_mag else static_mag[b][k]
 
     # 5. conditions per exposure
-    seeing, scene = conditions(times, airmass, alt, az, args, stars, cfg, ab)
+    seeing, scene = conditions(times, airmass, alt, az, args, stars, cfg, ab, survey)
 
     # 6. the difference reference
     seeds = np.random.SeedSequence(args.seed).spawn(len(times))  # one per exposure: the same exposure in every pass
-    ref_frames, ref_image, ref_full, stamps = difference_reference(scene, seeing, rates_at, seeds, B, args)
+    ref_frames, ref_image, ref_full, stamps = difference_reference(scene, seeing, rates_at, seeds, B, args, bands)
 
-    def exposure(j):  # both bands, from the exposure's own seed
+    def exposure(j):  # every band it is taken in, from the exposure's own seed
         rng = np.random.default_rng(seeds[j])
-        return {b: scene.observe(b, rates_at(b, j), j, rng) for b in BANDS}
+        return {b: scene.observe(b, rates_at(b, j), j, rng) for b in bands}
 
     # 7. every exposure, measured. The catalogue a pipeline calibrates against: every star's magnitude (periodic
     # stars: their intensity mean; transients: not in it); the expected fluxes pick the calibration stars.
@@ -844,7 +885,7 @@ def main(argv=None):
     phot = SExtractorPhotometry(scene.x, scene.y, cat_mag, cat_flux, scene.n, scene.fullwell, follow,
                                 colour=column(stars, "BP-RP"), fwhm=ref_fwhm, cfg=json.loads(args.measure))
     frames = range(0, len(times), args.stride)
-    s = SimpleNamespace(times=times, bjd=bjd, airmass=airmass, seeing=seeing, scene=scene)  # for write_fits
+    s = SimpleNamespace(times=times, bjd=bjd, airmass=airmass, seeing=seeing, scene=scene, survey=survey)  # for write_fits
     print(f"observing and rendering {len(frames)} frames ({len(times)} exposures) -> {args.output}", flush=True)
     rows, measured = [], []
     for n, j in enumerate(frames):
@@ -860,6 +901,9 @@ def main(argv=None):
                              seeing_model=scene.seeings[int(scene.seeing_index[j])], star=labels[k],
                              true_mag=true_mag(B, k, j), saturated=bool(r["saturated"][i]),
                              sextractor_mag=r["mag"][i], sextractor_err=r["mag_err"][i]))
+            if survey is not None:
+                rows[-1].update(band=B, tel_id=int(survey["tel_id"][j]), ratchet=int(survey["ratchet"][j]),
+                                field_angle=float(survey["field_angle"][j]), time_utc=survey["time"][j])
         measured.append(this_frame)
         if (n + 1) % max(1, len(frames) // 10) == 0:
             print(f"  measured {n + 1}/{len(frames)}", flush=True)
@@ -873,7 +917,8 @@ def main(argv=None):
         draw_data = movie_data(args, stars, scene, follow, transient, models, follow_sed, follow_rate, follow_cycle, ref_rate,
                                static_mag, rates_at, true_mag, measured, frames, times, bjd, ut, airmass, seeing, G, in_block,
                                ab, ref_frames)
-        draw_data.update(labels=labels, pulsators=pulsators, source=source, gaia_var=gaia_var, templates=templates)
+        draw_data.update(labels=labels, pulsators=pulsators, source=source, gaia_var=gaia_var, templates=templates,
+                         survey=survey)
         render(args, exposure, draw_data, ref_image, ref_full, stamps, frames)
     print(f"saved {args.output.with_suffix('.photometry.csv') if args.no_render else args.output}")
 
@@ -1026,7 +1071,11 @@ def draw(fig, args, exposures, j, d):
         else:
             label = f"{labels[k]} {v['kind']} {v['period']:.3f} d"
         lc.errorbar(t[ok], m[ok] - d["rel"][k]["measured"], yerr=e[ok], fmt="o", ms=2.5, lw=0.5, color=colour_of[k], label=label)
-        resid_ax.plot(t, np.array(h["m"]) - np.array(h["true"]), color=colour_of[k], lw=0.8)
+        resid = np.array(h["m"]) - np.array(h["true"])
+        if d["survey"] is not None:  # not across the gaps between ratchets
+            gap = np.r_[False, np.diff(t) > 0.1]
+            t, resid = np.insert(t, np.nonzero(gap)[0], np.nan), np.insert(resid, np.nonzero(gap)[0], np.nan)
+        resid_ax.plot(t, resid, color=colour_of[k], lw=0.8)
     engines = [engine_of(pulsators[int(source[k])]) for k in follow]
     model_name = " / ".join([e for e in ("MESA RSP", "PHOEBE") if e in engines]
                             + list(dict.fromkeys(e for e in engines if e not in ("MESA RSP", "PHOEBE"))))
@@ -1053,14 +1102,18 @@ def draw(fig, args, exposures, j, d):
     resid_ax.yaxis.set_label_coords(-0.075, 0.5)
     resid_ax.invert_yaxis()
 
-    # the colour exposure (see movie_data); a pixel at full well in either band is white
+    # the colour exposure (see movie_data); a pixel at full well in either band is white. The survey takes one band at
+    # a time: that band alone, grey
     extent = (np.array([0, scene.n, 0, scene.n]) - scene.centre) * scene.plate
     rgb = d["rgb"]
-    above_sky = {b: exposures[b]["image"] - scene.background(b, j) for b in BANDS}
-    red, blue = np.maximum(above_sky["rho"], 0.0), np.maximum(rgb["w_beta"] * above_sky["beta"], 0.0)
-    channels = np.stack([red, 0.5 * (red + blue), blue], axis=-1)
-    hue = (channels + rgb["lw"]) / (channels.mean(axis=-1, keepdims=True) + rgb["lw"])  # softened: blank sky is grey
-    hue[np.any([exposures[b]["image"] >= scene.fullwell - 5 * scene.readnoise for b in BANDS], axis=0)] = 1.0
+    above_sky = {b: exposures[b]["image"] - scene.background(b, j) for b in exposures}
+    if len(exposures) == len(BANDS):
+        red, blue = np.maximum(above_sky["rho"], 0.0), np.maximum(rgb["w_beta"] * above_sky["beta"], 0.0)
+        channels = np.stack([red, 0.5 * (red + blue), blue], axis=-1)
+        hue = (channels + rgb["lw"]) / (channels.mean(axis=-1, keepdims=True) + rgb["lw"])  # softened: blank sky is grey
+    else:
+        hue = np.ones(exposures[B]["image"].shape + (3,))
+    hue[np.any([exposures[b]["image"] >= scene.fullwell - 5 * scene.readnoise for b in exposures], axis=0)] = 1.0
     norm = AsinhNorm(linear_width=rgb["lw"], vmin=0.0, vmax=rgb["vmax"])
     colour_img = hue * np.clip(norm(np.maximum(above_sky[B], 0.0)), 0, 1)[..., None]
     top = colour_img.max(axis=-1, keepdims=True)
@@ -1076,7 +1129,13 @@ def draw(fig, args, exposures, j, d):
         image_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold")
     edge = HALF + 2
     image_ax.set(xlim=(-edge, edge), ylim=(-edge, edge), xlabel="Offset (arcsec)", ylabel="Offset (arcsec)")
-    image_ax.set_title(f"Exposure ({SYMBOLS['beta']} blue, {SYMBOLS['rho']} red)", loc="left", weight="bold")
+    if d["survey"] is None:
+        image_ax.set_title(f"Exposure ({SYMBOLS['beta']} blue, {SYMBOLS['rho']} red)", loc="left", weight="bold")
+    else:
+        image_ax.set_title(f"Exposure ({SYMBOLS[B]})", loc="left", weight="bold")
+        image_ax.text(0.97, 0.97, f"telescope {int(d['survey']['tel_id'][j])}\n{float(d['survey']['field_angle'][j]):.2f}° off-axis",
+                      transform=image_ax.transAxes, va="top", ha="right", fontsize=8, color="white",
+                      bbox={"facecolor": "#111726", "alpha": 0.65, "edgecolor": "none", "pad": 3})
     bar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap="gray"), ax=image_ax, orientation="horizontal", fraction=0.05,
                        pad=0.13, label=f"{SYMBOLS[B]} electrons / pixel above sky")
     bar.set_ticks([v for v in (0, 10, 100, 1000, 10000) if v <= rgb["vmax"]])

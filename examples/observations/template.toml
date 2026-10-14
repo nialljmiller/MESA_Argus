@@ -17,6 +17,12 @@ start = ""                # UT HH:MM (default: dusk / when the field rises); "st
 end = ""                  # UT HH:MM (default: dawn / when the field sets)
 site = "argus"            # "argus": ArgusSim's site; "sro": Sierra Remote Observatories
 max_airmass = 0.0         # a further airmass limit; 0: none (the array's minimum altitude, 32.84 deg, always applies)
+observing = "ideal"       # "ideal": every exposure in both bands, the season's median seeing, one PSF field angle;
+                          # "survey": the exposures ArgusSim's array actually takes (mesa_argus/survey.py): one band
+                          # each (the covering telescope's), gaps between telescopes, seeing per ratchet, the PSF at
+                          # the field's angle in that telescope; no weather or clouds
+nights = 1                # survey: nights from date
+survey_seed = 0           # survey: the seeing draws (one seed, one realisation)
 
 [stars]
 background = "f294_784m11_623_field"   # a built star set (required): the field's constant stars

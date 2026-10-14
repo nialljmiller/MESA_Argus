@@ -36,6 +36,13 @@ def location(cfg):
     return EarthLocation(lat=o.latitude * u.deg, lon=o.longitude * u.deg, height=o.altitude * u.m)
 
 
+def sky_position(t, ra, dec, site_location):
+    """Airmass (ArgusSim's, Pickering 2002; inf below the horizon), altitude and azimuth of the field at times t."""
+    here = SkyCoord(ra * u.deg, dec * u.deg).transform_to(AltAz(obstime=t, location=site_location))
+    alt, az = here.alt.deg, here.az.deg
+    return np.where(alt > 0, pickering_airmass(np.clip(alt, 1e-3, 90)), np.inf), alt, az
+
+
 def ut_hours(h):
     """UT hours across midnight: 20-24 h become -4-0 h."""
     return np.where(h >= 20, h - 24, h)
@@ -62,9 +69,7 @@ def exposures(ra, dec, date, site=None, start=None, end=None, max_airmass=None, 
         t = schedule.exposures(t0, t0 + 14 * u.hour, site_location)["time"]
     if len(t) == 0:
         return t, np.array([]), np.array([]), np.array([])
-    here = SkyCoord(ra * u.deg, dec * u.deg).transform_to(AltAz(obstime=t, location=site_location))
-    alt, az = here.alt.deg, here.az.deg
-    airmass = np.where(alt > 0, pickering_airmass(np.clip(alt, 1e-3, 90)), np.inf)
+    airmass, alt, az = sky_position(t, ra, dec, site_location)
     ok = alt >= cfg.observatory.min_alt
     if max_airmass:
         ok &= airmass <= max_airmass

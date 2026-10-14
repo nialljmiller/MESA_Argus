@@ -21,7 +21,7 @@ def defaults():
     output.update({k: engine[k] for k in night_movie.MOVIE_OPTIONS if k != "max_airmass"})
     return dict(
         field=dict(ra=REQUIRED, dec=REQUIRED, block=3, name=""),
-        night=dict(date="", start="", end="", site="argus", max_airmass=0.0),
+        night=dict(date="", start="", end="", site="argus", max_airmass=0.0, observing="ideal", nights=1, survey_seed=0),
         stars=dict(background=REQUIRED, layout="real", seed=1, missing="stop"),
         measure=dict(SETTINGS),
         output=output,
