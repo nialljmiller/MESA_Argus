@@ -16,7 +16,7 @@ date = ""                 # local date the night starts, YYYY-MM-DD (default tod
 start = ""                # UT HH:MM (default: dusk / when the field rises); "start+D" times count from here
 end = ""                  # UT HH:MM (default: dawn / when the field sets)
 site = "argus"            # "argus": ArgusSim's site; "sro": Sierra Remote Observatories
-max_airmass = 2.0
+max_airmass = 0.0         # a further airmass limit; 0: none (the array's minimum altitude, 32.84 deg, always applies)
 
 [stars]
 background = "f294_784m11_623_field"   # a built star set (required): the field's constant stars

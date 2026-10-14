@@ -3,7 +3,7 @@
 
     python demo/validate/mean_image.py   # -> demo/build/validate_mean/<band>_<exposure>.f64
 
-Exposures 0, 165 and 330 of f294 in both bands: night_movie's Scene (its seeing grid), the variables' rates from
+Exposures 0, 150 and 298 (first, middle, last) of f294 in both bands: night_movie's Scene (its seeing grid), the variables' rates from
 their SED at each exposure's exact airmass (as the movie; the page interpolates on AIRMASS_GRID), ArgusSim's sky.
 """
 
@@ -25,7 +25,7 @@ from argus_sim import c as ARGUS_CONFIG  # noqa: E402
 from argus_sim.observatory import Observatory, seasonal_seeing_params, seeing_at_airmass  # noqa: E402
 from mesa_argus.argus import BANDS, FLAM  # noqa: E402
 
-EXPOSURES = (0, 165, 330)
+EXPOSURES = (0, 150, 298)
 
 
 def main():
@@ -41,7 +41,7 @@ def main():
     stars, pulsators = M.load_scene(), M.load_pulsators()
     src = np.asarray(stars["Source"]).astype(np.int64)
     follow = M.choose_followed(stars, pulsators, 2)
-    times, bjd, airmass, alt, az = M.night_schedule(M.FIELDS[F]["date"], 2.0, cfg)
+    times, bjd, airmass, alt, az = M.night_schedule(M.FIELDS[F]["date"], None, cfg)
     d = json.loads((REPO / "demo" / "build" / f"{F}.json").read_text())
     static = {b: E_unpack(d["stars"]["rate"][b]) for b in BANDS}  # the export's template rates (same code as main)
 

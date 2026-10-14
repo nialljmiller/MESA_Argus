@@ -11,7 +11,7 @@ const Measure = require("../src/measure.js");
 
 const root = new URL("../build/", import.meta.url), dir = new URL("validate_sep/", root);
 mkdirSync(dir, { recursive: true });
-const D = await Sim.unpackAll(JSON.parse(readFileSync(new URL("f294_784m11_623.json", root))));
+const D = await Sim.unpackAll(JSON.parse(readFileSync(new URL(`${process.env.DEMO_FIELD || "f294"}.json`, root))));
 const NA = D.airmass_grid.length;
 
 // the scene as the page builds it, plus `extra` random constant stars and `vars` library variables (seeded)
@@ -39,11 +39,11 @@ function scene(extra, vars, seed) {
 }
 
 const CASES = [
-  { name: "native_rho_165", extra: 0, vars: 0, band: "rho", j: 165 },
+  { name: "native_rho_150", extra: 0, vars: 0, band: "rho", j: 150 },
   { name: "native_rho_0", extra: 0, vars: 0, band: "rho", j: 0 },
-  { name: "native_beta_330", extra: 0, vars: 0, band: "beta", j: 330 },
-  { name: "crowded_rho_165", extra: 1500, vars: 7, band: "rho", j: 165 },
-  { name: "packed_rho_165", extra: 6000, vars: 7, band: "rho", j: 165 },
+  { name: "native_beta_298", extra: 0, vars: 0, band: "beta", j: 298 },
+  { name: "crowded_rho_150", extra: 1500, vars: 7, band: "rho", j: 150 },
+  { name: "packed_rho_150", extra: 6000, vars: 7, band: "rho", j: 150 },
 ];
 const seeingAt = (j) => Measure.seeingAt(D.zenith_seeing, D.night.airmass[j]);
 

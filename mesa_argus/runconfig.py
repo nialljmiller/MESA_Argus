@@ -47,7 +47,8 @@ def schema():
             "start": ("", str, "UT HH:MM to start (default: dusk / when the field rises)", ()),
             "end": ("", str, "UT HH:MM to stop (default: dawn / when the field sets)", ()),
             "site": ("argus", str, "argus = ArgusSim's site; sro = Sierra Remote Observatories", ("argus", "sro")),
-            "max_airmass": (2.0, float, "observe while the field is at or below this airmass", ()),
+            "max_airmass": (0.0, float, "a further airmass limit (0: none; the array's minimum altitude, ArgusSim's "
+                                        "observatory.min_alt = 32.84 deg, always applies)", ()),
         },
         "stars": {
             "background": (REQUIRED, str, "a built star set (make_stars.py [[set]]): the field's constant stars", ()),

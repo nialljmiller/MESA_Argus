@@ -86,7 +86,7 @@ def main():
     src = np.asarray(stars["Source"]).astype(np.int64)
     G = M.column(stars, "Gmag")
     follow = M.choose_followed(stars, pulsators, 2)
-    times, bjd, airmass, alt, az = M.night_schedule(date, 2.0, cfg)
+    times, bjd, airmass, alt, az = M.night_schedule(date, None, cfg)
 
     # every star's colour and template rates: as night_movie.main
     from astropy.table import Table

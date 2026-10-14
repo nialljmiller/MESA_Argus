@@ -98,7 +98,7 @@ def scene(obs, out):
 
     f, n, st = obs["field"], obs["night"], obs["stars"]
     ra, dec, name = f["ra"], f["dec"], f["name"]
-    N.MAX_AIRMASS = n["max_airmass"]
+    N.MAX_AIRMASS = n["max_airmass"] or None
     site = N.SITES[n["site"]]
     start_, end_ = n["start"] or None, n["end"] or None
     bg_folder, bg = built(st["background"], "star set")
@@ -278,7 +278,7 @@ def main(argv=None):
 
     opts = []
     for k in M.MOVIE_OPTIONS:
-        v = n["max_airmass"] if k == "max_airmass" else o.get(k)
+        v = (n["max_airmass"] or None) if k == "max_airmass" else o.get(k)
         if v is not None:
             opts += [f"--{k.replace('_', '-')}", str(v)]
     if not o["movie"]:

@@ -16,7 +16,9 @@ Stars are simulated by `make_stars.py` with no dust and nothing about observing;
 | Atmospheric transmission, raised to the airmass | `SystemThroughput` atmosphere curve; `ABPhot.electrons_from_sed` |
 | Sky per exposure: airglow (solar activity, airmass), zodiacal light (ecliptic position), integrated starlight (Galactic latitude), moonlight (Krisciunas & Schaefer 1991), site artificial light | `Observatory.sky_components_at` + `SpectralSky.sky_electrons` |
 | Seeing: the site's seasonal median from the DIMMs, scaled to airmass as X^0.6 | `seasonal_seeing_params`, `seeing_at_airmass` |
-| Cadence: 60 s exposures; 15-min ratchets on UTC quarter hours, the last minute a reset | `config.survey` |
+| The night's exposures: 60 s cadence in 15-min ratchets on UTC quarter hours, the last minute a reset, the Sun below −18° | `coverage_exact.Schedule` built from `config.survey` (as `Survey` builds it) |
+| When a field can be observed: at or above the array's minimum altitude, 32.84° (airmass ≈ 1.84) | `config.observatory.min_alt` |
+| Airmass: Pickering (2002), for the stars' extinction and seeing as for the sky | `pickering_airmass` |
 | Site | `config.observatory` (a field may move it, e.g. `--site sro`; the instrument stays Argus) |
 | Synthetic AB magnitudes (filter only) and detected electrons (full system) from an SED | `ABPhot.mag_from_sed`, `ABPhot.electrons_from_sed` |
 | HDPS minipix geometry (32 × 0.879″ = 28.1″) | `skymap_shim` |
@@ -46,16 +48,24 @@ does not make images or measure them. The following is this repo's own code, bui
 
 ## 3. Argus-related choices made here (assumptions, not from ArgusSim)
 
+Items 1–5 are conditions ArgusSim's own survey simulation draws (Survey, ForwardMC) and these movies do not use yet.
+
 1. **Field angle 1.44°, fixed all night.** The area-weighted median of the 2.03° field. The PSF depends strongly on
-   it (HFD 2.34″ at 1°, 2.70″ at 1.44°, 3.25″ at 2°). In reality a field lands at a different place on the detector
-   each ratchet, and possibly on different telescope units.
-2. **Continuous coverage.** Every 60 s exposure of the night (all 14 per ratchet) is assumed to image the field with
-   one telescope. Not checked against ArgusSim's ratchet/coverage engine.
-3. **A median-seeing night.** The seasonal median, with no nightly draw and no variation apart from airmass.
-4. **Photometric sky.** Transparency 1 (no cloud); weather not drawn.
-5. **Solar activity 0.8** (ArgusSim's config default, solar minimum). This sets the airglow level.
+   it (HFD 2.34″ at 1°, 2.70″ at 1.44°, 3.25″ at 2°). ArgusSim's survey takes it per ratchet (`random_field_angle`,
+   or exact from `coverage_exact`).
+2. **Continuous coverage, both bands.** Every exposure of the night is taken to image the field in both β and ρ with
+   one telescope. ArgusSim's `coverage_exact` / `tanseg_coverage` say which OTA (so which single band) covers a
+   position in each exposure, and when it falls in a gap.
+3. **A median-seeing night.** The seasonal median zenith seeing for the whole night, varying only with airmass.
+   ArgusSim's survey draws it per ratchet (`draw_atmosphere`: lognormal about the seasonal median, correlated with
+   transparency).
+4. **Photometric sky, every night clear.** Transparency 1. ArgusSim draws a grey cloud transparency per exposure
+   (`draw_cloud_transparency`) and whether a night is clear (`observable_weather`).
+5. **Solar activity 0.8** (ArgusSim's config default, solar minimum), which sets the airglow level. ArgusSim's survey
+   uses a per-night 2028–2033 prior (`solar_activity_by_ratchet`).
 6. **PSF details.** The PSF stamp ends at 29 × 29 pixels (ArgusSim's Zemax grid limit), so very bright stars lose
-   their far wings. Detector axes are taken as aligned with the HDPS tile axes.
+   their far wings. Detector axes are taken as aligned with the HDPS tile axes. The same seeing FWHM is used in β and
+   ρ (real seeing scales as λ^−0.2, so β's would be ~8% broader; ArgusSim has no chromatic seeing either).
 7. **Not modelled at all:** flat-field and calibration errors, detector non-linearity, blooming beyond full-well
    clipping, cosmic rays, persistence, gain and ADC quantisation, scintillation, tracking jitter and image rotation.
 

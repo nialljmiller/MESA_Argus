@@ -1,5 +1,11 @@
-"""When a pointing can be observed: the night's observable steps, the nearest night it is up, the night its
-variables change most, and BJD_TDB at the site. Used by observe.py.
+"""When a pointing is observed, from ArgusSim's own survey rules: the night's exposures, the nearest night it is up, the
+night its variables change most, and BJD_TDB at the site. Used by observe.py and night_movie.py.
+
+The exposures are ArgusSim's schedule (coverage_exact.Schedule, built as Survey builds it from config.survey): a
+base_cadence_s cadence in ratchets of ratchet_len minutes on UTC boundaries, the last reset_min of each a reset, and
+the Sun below survey.min_sun_alt. Of those, the field is observed while it is at or above observatory.min_alt (the
+lowest the array points); [night] max_airmass, if given, is a further limit of the observation's own. Airmass is
+ArgusSim's (Pickering 2002), as its sky model and survey use.
 """
 from __future__ import annotations
 
@@ -7,30 +13,74 @@ import numpy as np
 
 SITES = {"argus": None,  # ArgusSim's configured site
          "sro": dict(latitude=37.07, longitude=-119.41, altitude=1400.0)}  # Sierra Remote Observatories
-MAX_AIRMASS = 2.0  # [night] max_airmass
+MAX_AIRMASS = None  # [night] max_airmass: a further limit (None / 0: ArgusSim's min_alt only)
 
 
-def night_times(ra, dec, date, site, start, end, max_airmass=None):
-    """BJD-like JD (UTC + light time ignored, < 10 min) of the 5-minute steps the field is observable on a night."""
-    max_airmass = MAX_AIRMASS if max_airmass is None else max_airmass
+def _config(site):
+    """ArgusSim's configuration, with the site moved if asked (the instrument stays Argus)."""
+    import copy
+
+    from argus_sim import c as ARGUS_CONFIG
+
+    cfg = copy.deepcopy(ARGUS_CONFIG)
+    for k, v in (site or {}).items():
+        setattr(cfg.observatory, k, v)
+    return cfg
+
+
+def _location(cfg):
     import astropy.units as u
-    from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_sun
-    from astropy.time import Time
+    from astropy.coordinates import EarthLocation
 
-    if site is None:
-        from argus_sim import c as cfg
-        site = dict(latitude=cfg.observatory.latitude, longitude=cfg.observatory.longitude, altitude=cfg.observatory.altitude)
-    loc = EarthLocation(lat=site["latitude"] * u.deg, lon=site["longitude"] * u.deg, height=site["altitude"] * u.m)
-    t = Time(f"{date} 23:00:00") + np.arange(0, 14 * 60, 5) * u.min
-    frame = AltAz(obstime=t, location=loc)
-    alt = SkyCoord(ra * u.deg, dec * u.deg).transform_to(frame).alt.deg
-    ok = (get_sun(t).transform_to(frame).alt.deg < -18) & (alt > 0) & (1 / np.sin(np.radians(np.clip(alt, 1e-3, 90))) <= max_airmass)
-    clock = np.array([(h - 24 if h >= 20 else h) for h in (t.datetime64.astype("datetime64[m]").astype(int) % 1440) / 60])
+    o = cfg.observatory
+    return EarthLocation(lat=o.latitude * u.deg, lon=o.longitude * u.deg, height=o.altitude * u.m)
+
+
+def exposures(ra, dec, date, site=None, start=None, end=None, max_airmass=None, cfg=None, coarse=False):
+    """The exposures of the night starting on local `date` (UTC 23:00 + 14 h), as ArgusSim schedules them (module
+    docstring), with the field at or above min_alt (and at or below max_airmass), within the UT window start-end.
+    coarse: every 5th minute only, by the same rules (for searches over many nights; ~5x faster).
+    Returns (mid-exposure times, airmass, alt, az)."""
+    import astropy.units as u
+    from astropy.coordinates import AltAz, SkyCoord
+    from astropy.time import Time
+    from argus_sim.coverage_exact import Schedule
+    from argus_sim.observatory import pickering_airmass
+
+    cfg = cfg or _config(site)
+    max_airmass = MAX_AIRMASS if max_airmass is None else max_airmass
+    sv = cfg.survey
+    sched = Schedule(exptime_s=sv.base_cadence_s, track_min=sv.ratchet_len - sv.reset_min, reset_min=sv.reset_min,
+                     sun_alt_max_deg=sv.min_sun_alt)
+    t0 = Time(f"{date} 23:00:00", scale="utc")
+    if coarse:  # the schedule's own rules on a 5-minute grid: ratchet tracking minutes, the Sun below the limit
+        from astropy.coordinates import get_sun
+
+        t = t0 + (np.arange(0, 14 * 60, 5) + 0.5 * sv.base_cadence_s / 60) * u.min
+        in_track = (t.datetime64.astype("datetime64[s]").astype(np.int64) / 60) % sv.ratchet_len < sv.ratchet_len - sv.reset_min
+        sun = get_sun(t).transform_to(AltAz(obstime=t, location=_location(cfg))).alt.deg
+        t = t[in_track & (sun < sv.min_sun_alt)]
+    else:
+        t = sched.exposures(t0, t0 + 14 * u.hour, _location(cfg))["time"]
+    if len(t) == 0:
+        return t, np.array([]), np.array([]), np.array([])
+    here = SkyCoord(ra * u.deg, dec * u.deg).transform_to(AltAz(obstime=t, location=_location(cfg)))
+    alt, az = here.alt.deg, here.az.deg
+    airmass = np.where(alt > 0, pickering_airmass(np.clip(alt, 1e-3, 90)), np.inf)
+    ok = alt >= cfg.observatory.min_alt
+    if max_airmass:
+        ok &= airmass <= max_airmass
+    clock = np.array([(h - 24 if h >= 20 else h) for h in (t.datetime64.astype("datetime64[s]").astype(np.int64) % 86400) / 3600])
     if start:
         ok &= clock >= (lambda h: h - 24 if h >= 20 else h)(int(start[:2]) + int(start[3:5]) / 60)
     if end:
         ok &= clock <= (lambda h: h - 24 if h >= 20 else h)(int(end[:2]) + int(end[3:5]) / 60)
-    return t[ok].jd
+    return t[ok], airmass[ok], alt[ok], az[ok]
+
+
+def night_times(ra, dec, date, site, start, end, max_airmass=None):
+    """JD (UTC) of the night's exposures (exposures())."""
+    return exposures(ra, dec, date, site, start, end, max_airmass)[0].jd
 
 
 def variability_score(jd, picks):
@@ -79,14 +129,14 @@ def best_night(ra, dec, date, site, start, end, picks, min_minutes=180):
     best = (-1.0, None, None)
     for offset in range(-182, 183):
         d = (d0 + timedelta(days=offset)).isoformat()
-        jd = night_times(ra, dec, d, site, start, end)
+        jd = exposures(ra, dec, d, site, start, end, coarse=True)[0].jd
         if 5 * len(jd) < min_minutes:
             continue
         sc = variability_score(jd, picks)
         if sc > best[0] or (sc == best[0] and abs(offset) < abs((Date.fromisoformat(best[1]) - d0).days)):
             best = (sc, d, jd)
     if best[1] is None:
-        raise SystemExit("never observable for 3 h from this site (dark, airmass <= 2)")
+        raise SystemExit("never observable for 3 h from this site (dark, above the array's minimum altitude)")
     return best[1], best[0]
 
 
@@ -100,30 +150,15 @@ def nearest_night(ra, dec, date, site, start, end, min_minutes=180):
         minutes, span = observable(ra, dec, d, site, start, end)
         if minutes >= min_minutes:
             return d, minutes, span
-    raise SystemExit("never observable for 3 h from this site (dark, airmass <= 2)")
+    raise SystemExit("never observable for 3 h from this site (dark, above the array's minimum altitude)")
 
 
 def observable(ra, dec, date, site, start, end, max_airmass=None):
-    """Minutes the field is dark (Sun < -18) at airmass <= max_airmass on the night of `date` (within the window)."""
-    max_airmass = MAX_AIRMASS if max_airmass is None else max_airmass
-    import astropy.units as u
-    from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_sun
-    from astropy.time import Time
-
-    if site is None:
-        from argus_sim import c as cfg
-        site = dict(latitude=cfg.observatory.latitude, longitude=cfg.observatory.longitude, altitude=cfg.observatory.altitude)
-    loc = EarthLocation(lat=site["latitude"] * u.deg, lon=site["longitude"] * u.deg, height=site["altitude"] * u.m)
-    t = Time(f"{date} 23:00:00") + np.arange(0, 14 * 60, 5) * u.min
-    frame = AltAz(obstime=t, location=loc)
-    alt = SkyCoord(ra * u.deg, dec * u.deg).transform_to(frame).alt.deg
-    ok = (get_sun(t).transform_to(frame).alt.deg < -18) & (alt > 0) & (1 / np.sin(np.radians(np.clip(alt, 1e-3, 90))) <= max_airmass)
-    clock = np.array([(h - 24 if h >= 20 else h) for h in (t.datetime64.astype("datetime64[m]").astype(int) % 1440) / 60])
-    if start:
-        ok &= clock >= (lambda h: h - 24 if h >= 20 else h)(int(start[:2]) + int(start[3:5]) / 60)
-    if end:
-        ok &= clock <= (lambda h: h - 24 if h >= 20 else h)(int(end[:2]) + int(end[3:5]) / 60)
-    return 5 * int(ok.sum()), (t[ok][0].iso[11:16], t[ok][-1].iso[11:16]) if ok.any() else (None, None)
+    """Minutes the field is observed on the night of `date` (exposures(), 5-minute steps), and the UT of the first
+    and last step."""
+    t = exposures(ra, dec, date, site, start, end, max_airmass, coarse=True)[0]
+    minutes = 5.0 * len(t)
+    return minutes, ((t[0].iso[11:16], t[-1].iso[11:16]) if len(t) else (None, None))
 
 
 def bjd_tdb(t, ra, dec, site):

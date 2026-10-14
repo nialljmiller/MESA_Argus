@@ -15,8 +15,9 @@ matches their colour, scaled to their G. Followed pulsators are MESA RSP models 
 (runs/rsp_<field>_<label>/pulsation.h5), phased to their Gaia period and epoch, so the movie is a prediction for the
 night. Transients (mesa_argus.transients) are SEDs against time since their t0.
 
-Observing (from ArgusSim unless noted): the night of --date while the field is above --max-airmass and the Sun below
--18 deg; 60 s exposures in 15-min ratchets on UTC quarter hours, the last minute a reset. Sky per exposure from
+Observing (from ArgusSim unless noted): the night of --date as ArgusSim schedules it (coverage_exact.Schedule: 60 s
+cadence in 15-min ratchets on UTC quarter hours, the last minute a reset, the Sun below -18 deg), while the field is
+at or above the array's minimum altitude (32.84 deg; --max-airmass a further limit); Pickering (2002) airmass. Sky per exposure from
 ArgusSim's Observatory model (airglow, zodiacal light, starlight, Moon, site light); seeing the site's seasonal median
 scaled to each exposure's airmass (X^0.6); real airmass in the source extinction. Assumed here: field angle 1.44 deg
 (area median of the field) all night, continuous coverage by one telescope, transparency 1. Each exposure is a
@@ -34,9 +35,8 @@ from pathlib import Path
 import warnings
 
 import astropy.units as u
-from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_sun
+from astropy.coordinates import EarthLocation, SkyCoord
 from astropy.table import Table
-from astropy.time import Time, TimeDelta
 from astropy.utils import iers
 import h5py
 import matplotlib
@@ -421,24 +421,18 @@ class TransientSource:
 
 
 # ---------------------------------------------------------------- the night
-def night_schedule(date, max_airmass, cfg):
-    """UTC start times of every 60 s exposure on the night of `date` with the field up and astronomical dark."""
+def night_schedule(date, max_airmass, cfg, start=None, end=None):
+    """Every exposure of the night of `date` at the field, as ArgusSim schedules them (mesa_argus.night.exposures:
+    its cadence, ratchets and resets, Sun limit, the array's minimum altitude, Pickering airmass), within the UT
+    window. Returns mid-exposure UTC times, BJD_TDB, airmass, altitude, azimuth."""
+    from mesa_argus import night as N
+
+    times, airmass, alt, az = N.exposures(CENTRE.ra.deg, CENTRE.dec.deg, date, start=start, end=end,
+                                          max_airmass=max_airmass, cfg=cfg)
     site = EarthLocation(lat=cfg.observatory.latitude * u.deg, lon=cfg.observatory.longitude * u.deg,
                          height=cfg.observatory.altitude * u.m)
-    start = Time(f"{date} 23:00:00")  # local early evening (UTC-5/6) -> scan 14 h
-    grid = start + TimeDelta(np.arange(0, 14 * 60, 1) * 60, format="sec")
-    frame = AltAz(obstime=grid, location=site)
-    sun = get_sun(grid).transform_to(frame).alt.deg
-    here = CENTRE.transform_to(frame)
-    airmass = np.where(here.alt.deg > 5, 1 / np.cos(np.radians(90 - here.alt.deg)), np.inf)
-    ok = (sun < -18) & (airmass <= max_airmass)
-    ratchet, reset = cfg.survey.ratchet_len, cfg.survey.reset_min
-    minute_of_ratchet = (grid.datetime64.astype("datetime64[m]").astype(int)) % int(ratchet)
-    ok &= minute_of_ratchet < ratchet - reset
-    times = grid[ok]
-    ltt = times.light_travel_time(CENTRE, location=site)
-    bjd = (times.tdb + ltt).jd + 30.0 / 86400  # mid-exposure
-    return times, bjd, airmass[ok], here.alt.deg[ok], here.az.deg[ok]
+    bjd = (times.tdb + times.light_travel_time(CENTRE, location=site)).jd
+    return times, bjd, airmass, alt, az
 
 
 def phases_at(var, bjd):
@@ -587,7 +581,8 @@ def parser():
     p.add_argument("--date", default=None,
                    help="local date the night starts; 2027-05-05: new Moon (ArgusSim sky V ~22.0), every followed star "
                         "predicted to peak while M3 is up (default: the field's own date)")
-    p.add_argument("--max-airmass", type=float, default=2.0)
+    p.add_argument("--max-airmass", type=float, default=None,
+                   help="a further airmass limit (default: none; the array's minimum altitude, ArgusSim's min_alt, applies)")
     p.add_argument("--start", default=None, help="UT (HH:MM) to start; default: when the field is first observable")
     p.add_argument("--end", default=None, help="UT (HH:MM) to stop; default: when the field is last observable")
     p.add_argument("--exptime", type=float, default=60.0)
@@ -659,14 +654,9 @@ def main(argv=None):
           f"MESA RSP models; the other {int((gaia_var & in_block).sum()) - len(follow)} Gaia-classified variables in "
           "the block are held constant")
 
-    times, bjd, airmass, alt, az = night_schedule(args.date, args.max_airmass, cfg)
-    if args.start or args.end:  # UT window; evening UT (>= 20h) counts as before midnight
-        clock = lambda h: h - 24 if h >= 20 else h  # noqa: E731
-        hours = np.array([clock(t.datetime.hour + t.datetime.minute / 60) for t in times])
-        lo = clock(int(args.start[:2]) + int(args.start[3:5]) / 60) if args.start else -np.inf
-        hi = clock(int(args.end[:2]) + int(args.end[3:5]) / 60) if args.end else np.inf
-        keep = (hours >= lo) & (hours <= hi)
-        times, bjd, airmass, alt, az = times[keep], bjd[keep], airmass[keep], alt[keep], az[keep]
+    if args.exptime > cfg.survey.base_cadence_s:
+        raise SystemExit(f"--exptime {args.exptime} s is longer than ArgusSim's cadence ({cfg.survey.base_cadence_s} s)")
+    times, bjd, airmass, alt, az = night_schedule(args.date, args.max_airmass, cfg, args.start, args.end)
     print(f"night of {args.date}: {len(times)} exposures, UT {times[0].iso[11:16]}-{times[-1].iso[11:16]}, "
           f"airmass {airmass.min():.2f}-{airmass.max():.2f}")
 
