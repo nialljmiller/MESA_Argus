@@ -17,8 +17,6 @@ Library models are re-reddened to this field's E(B-V) and keep their own distanc
 Arrays are gzipped float32, base64 encoded.
 """
 
-from __future__ import annotations
-
 import base64
 import copy
 import gzip
@@ -88,40 +86,9 @@ def main():
     follow = M.choose_followed(stars, pulsators, 2)
     times, bjd, airmass, alt, az = M.night_schedule(date, None, cfg)
 
-    # every star's colour and template rates: as night_movie.main
-    from astropy.table import Table
-
-    templates = M.Templates()
-    colour = M.column(stars, "BP-RP")
-    outer = Table.read(M.DATA / "gaia_dr3_core.ecsv")
-    r_out = 60 * np.hypot((M.column(outer, "RA_ICRS") - M.CENTRE.ra.deg) * np.cos(M.CENTRE.dec.rad),
-                          M.column(outer, "DE_ICRS") - M.CENTRE.dec.deg)
-    og, oc = M.column(outer, "Gmag"), M.column(outer, "BP-RP")
-    good = (r_out > 2.5) & np.isfinite(og) & np.isfinite(oc)
-    bins = np.arange(11.5, 20.51, 0.5)
-    centres = 0.5 * (bins[1:] + bins[:-1])
-    fiducial = np.array([np.median(oc[good & (og >= lo) & (og < hi)]) if np.sum(good & (og >= lo) & (og < hi)) >= 5 else np.nan
-                         for lo, hi in zip(bins[:-1], bins[1:])])
-    ok_f = np.isfinite(fiducial)
-    missing = ~(np.isfinite(colour) & (colour > -0.5) & (colour < 3.0))
-    colour = np.where(missing, np.interp(G, centres[ok_f], fiducial[ok_f]), colour)
+    # every star's colour and template rates (the movie's own)
+    static_rate, static_mag, templates, colour = M.constant_star_rates(stars, pulsators, ab)
     gaia_var = np.array([int(s) in pulsators for s in src])
-    for k in np.nonzero(gaia_var)[0]:
-        v = pulsators[int(src[k])]
-        mean_c = v["mean"].get("BP", np.nan) - v["mean"].get("RP", np.nan)
-        low, high, typical = (0.2, 0.9, 0.55 if v["kind"] != "RRc" else 0.42) if v["kind"].startswith("RR") else (0.3, 1.3, 0.7)
-        colour[k] = mean_c if np.isfinite(mean_c) and low <= mean_c <= high else typical
-    t_index = np.array([templates.index(c_) for c_ in colour])
-    scale = 10 ** (-0.4 * (G - templates.g[t_index]))
-    static_rate = {b: np.zeros((len(stars), len(M.AIRMASS_GRID))) for b in BANDS}
-    static_mag = {b: np.zeros(len(stars)) for b in BANDS}
-    for i_t in np.unique(t_index):
-        s_ = templates.flux[i_t] * FLAM
-        on = t_index == i_t
-        for b, band in BANDS.items():
-            static_rate[b][on] = np.outer(scale[on], [ab.electrons_from_sed(band, templates.wave, s_, airmass=x).value
-                                                      for x in M.AIRMASS_GRID])
-            static_mag[b][on] = float(ab.mag_from_sed(band, templates.wave, s_)) - 2.5 * np.log10(scale[on])
 
     # templates for stars added on the page: the movie's choice (Templates.index) on a BP-RP grid, rates at G = 15
     added = dict(bp_rp=np.round(np.arange(-0.3, 3.001, 0.05), 2).tolist(), G=15.0, rate={b: [] for b in BANDS},
@@ -200,7 +167,6 @@ def main():
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(out))
     print(f"{path}: {path.stat().st_size / 1e6:.1f} MB; {len(stars)} stars, {len(times)} exposures, {len(models)} models")
-
 
 
 if __name__ == "__main__":

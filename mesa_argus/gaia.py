@@ -2,10 +2,11 @@
 and a variable's physical parameters (distance, reddening along its sightline, composition, mass) for MESA RSP or
 PHOEBE. Used by make_stars.py (Gaia variables, Gaia field sets).
 """
-from __future__ import annotations
-
-import sys
-
+import astropy.units as u
+from astropy.coordinates import SkyCoord
+from astropy.table import Table
+from astroquery.ipac.irsa.irsa_dust import IrsaDust
+from astroquery.vizier import Vizier
 import numpy as np
 
 RADIUS_DEG = 0.12  # Gaia query radius: covers the 8' x 8' simulated area
@@ -27,11 +28,6 @@ def col(t, name):
 
 def fetch(ra, dec, data):
     """Gaia DR3 tables for the field (cached in data/)."""
-    import astropy.units as u
-    from astropy.coordinates import SkyCoord
-    from astropy.table import Table
-    from astroquery.vizier import Vizier
-
     data.mkdir(parents=True, exist_ok=True)
     c = SkyCoord(ra * u.deg, dec * u.deg)
     tables = {"gaia_dr3_core.ecsv": ("I/355/gaiadr3", ["Source", "RA_ICRS", "DE_ICRS", "Plx", "e_Plx", "pmRA", "pmDE",
@@ -56,29 +52,24 @@ def fetch(ra, dec, data):
 
 
 def reddening(ra, dec):
-    import astropy.units as u
-    from astropy.coordinates import SkyCoord
-    from astroquery.ipac.irsa.irsa_dust import IrsaDust
-
+    """SFD E(B-V) (Schlafly & Finkbeiner 2011 recalibration) at ra, dec, from IRSA."""
     t = IrsaDust.get_query_table(SkyCoord(ra * u.deg, dec * u.deg), section="ebv")
     return float(t["ext SandF mean"][0])
 
 
 def inventory(data, ra, dec, block_n=3):
     """Gaia-classified variables in the block_n x block_n block, as rows of dicts (modellable first)."""
-    from astropy.table import Table
     from argus_sim import skymap_shim as sh
 
     import night_movie as movie
 
+    # the engine's star list for this pointing (which stars are in the block), pointed at the cached tables
+    tile_id, minipix = sh.radec_to_composite_id(np.array([ra]), np.array([dec]))
+    tile, block = int(tile_id[0]), (int(minipix[0]) % 64, int(minipix[0]) // 64)
     movie.set_block(block_n)
-    tid, loc = sh.radec_to_composite_id(np.array([ra]), np.array([dec]))
-    tile, block = int(tid[0]), (int(loc[0]) % 64, int(loc[0]) // 64)
     movie.FIELDS["_probe"] = dict(name="", centre=(ra, dec), tile=tile, block=block, date="", site=None)
-    movie.FIELD, movie.DATA = "_probe", data
-    from astropy.coordinates import SkyCoord
-    import astropy.units as u
-    movie.CENTRE, movie.TILE, movie.BLOCK = SkyCoord(ra * u.deg, dec * u.deg), tile, block
+    movie.FIELD, movie.DATA, movie.TILE, movie.BLOCK = "_probe", data, tile, block
+    movie.CENTRE = SkyCoord(ra * u.deg, dec * u.deg)
     stars = movie.load_scene()
     in_block = np.asarray(stars["in_block"])
     src = np.asarray(stars["Source"]).astype(np.int64)
@@ -191,21 +182,6 @@ def show(rows, block_n=3):
         print(f"  {i:>2}  {r['source']:>19}  {r['kind']:<17} {r['G']:6.2f} {amp:>7} {per:>9}  {r['model'] or r['why']}")
 
 
-def choose(rows, select):
-    ok = [i for i, r in enumerate(rows, 1) if r["model"]]
-    if select is None:
-        if not sys.stdin.isatty():
-            raise SystemExit("[field] select is not set: give select = \"all\", \"none\" or [1, 3] (numbers from --list)")
-        select = input(f"\nSimulate which? numbers from {ok} separated by commas, 'all', or blank for none: ").strip()
-    if select in ("", "none"):
-        return []
-    picks = ok if select == "all" else [int(x) for x in select.split(",")]
-    bad = [i for i in picks if i not in ok]
-    if bad:
-        raise SystemExit(f"cannot model {bad}: " + "; ".join(rows[i - 1]["why"] for i in bad if 0 < i <= len(rows)))
-    return [rows[i - 1] for i in picks]
-
-
 def physical(row, stars, ra, dec):
     """The star's own distance, reddening, composition and mass, with where each came from (None if it cannot be
     modelled, with the reason)."""
@@ -215,7 +191,6 @@ def physical(row, stars, ra, dec):
     if row["kind"] == "EB":
         if not (np.isfinite(plx) and np.isfinite(e_plx) and plx / e_plx >= MIN_PLX_SNR):
             return None, f"parallax S/N {plx / e_plx:.1f} < {MIN_PLX_SNR:g}: no distance"
-        from astroquery.vizier import Vizier
         ap = Vizier(columns=["Source", "Teff", "logg"]).query_constraints(catalog="I/355/paramp", Source=str(row["source"]))
         val = lambda c: float(ap[0][c][0]) if ap and len(ap[0]) and not np.ma.is_masked(ap[0][c][0]) else np.nan  # noqa: E731
         d_pc = 1000.0 / (plx + 0.017)
@@ -283,7 +258,6 @@ def physical(row, stars, ra, dec):
     elif cepheid:
         x, mass, mass_note = 0.76, 0.55, "assumed: 0.55 Msun as MESA's rsp_Type_II_Cepheid"
     elif hads:
-        from astroquery.vizier import Vizier
         r = Vizier(columns=["Source", "Mass-Flame", "Lum-Flame", "Teff"]).query_constraints(catalog="I/355/paramp",
                                                                                              Source=str(row["source"]))
         val = lambda c: float(r[0][c][0]) if r and len(r[0]) and not np.ma.is_masked(r[0][c][0]) else np.nan  # noqa: E731

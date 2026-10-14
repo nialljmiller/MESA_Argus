@@ -15,7 +15,7 @@ def grb(folder, k, name):
 
 
 def microlensing(folder, k, name):
-    return T.make_microlensing(folder / "sed.h5", 0.0, k["tE"], k["u0"], k["base"], k["bp_rp"], 0.0, k["rho"], k["fs"])
+    return T.make_microlensing(folder / "sed.h5", 0.0, k["tE"], k["u0"], k["base"], k["bp_rp"], k["rho"], k["fs"])
 
 
 def dwarf_nova(folder, k, name):

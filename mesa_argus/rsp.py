@@ -36,21 +36,23 @@ with default and set C/D convection, gentle and strong kicks, and higher mass/vi
 envelope either cools below the opacity tables (logT < 2.7) or diverges within ~10 cycles.
 """
 
-from __future__ import annotations
-
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
 
+from astropy.table import Table
+import h5py
 import numpy as np
 
 from . import config as C
+from .seds import read_sed_csv
 
 # Cluster parameters (literature; assumptions of the models). use() selects one.
 CLUSTERS = {
@@ -82,18 +84,6 @@ X, Z = 0.75, 0.001
 # BL Her and W Vir default to the 0.55 Msun of MESA's rsp_Type_II_Cepheid test model
 MASS = {"RRab": 0.68, "RRc": 0.68, "RRd": 0.68, "Type II Cepheid": 0.55, "BL Her": 0.55, "W Vir": 0.55}
 
-
-def use(cluster):
-    """Point every module-level parameter at one cluster (default m3), or at an old argus_field.py field
-    (data/<field>/field.json; its targets carry their own distance, reddening, Z, mass and opacities)."""
-    global CLUSTER, TARGETS, DM, EBV, Z, PREFIX, KAP_MIX
-    if cluster not in CLUSTERS:
-        CLUSTERS[cluster] = json.loads((C.DATA / cluster / "field.json").read_text())["rsp"]
-    p = CLUSTERS[cluster]
-    KAP_MIX = p.get("kap", "a09")
-    CLUSTER, TARGETS, DM, EBV, Z, PREFIX = cluster, C.DATA / cluster / "followed.json", p["dm"], p["ebv"], p["z"], p["prefix"]
-    for kind in ("RRab", "RRc", "RRd"):
-        MASS[kind] = p["mass_rr"]
 MODE = {"RRab": 0, "RRc": 1, "RRd": 0, "Type II Cepheid": 0, "DCEP F": 0, "DCEP 1O": 1, "BL Her": 0, "W Vir": 0,
         "HADS": 0}
 STAR = C.STAR_BIN
@@ -140,6 +130,19 @@ MAX_FINE_STEPS = 4000  # SEDs per cycle in the fine run (long-period stars: >25 
 FINE_STEP_S = 25.0
 
 
+def use(cluster):
+    """Point every module-level parameter at one cluster (default m3), or at an old argus_field.py field
+    (data/<field>/field.json; its targets carry their own distance, reddening, Z, mass and opacities)."""
+    global CLUSTER, TARGETS, DM, EBV, Z, PREFIX, KAP_MIX
+    if cluster not in CLUSTERS:
+        CLUSTERS[cluster] = json.loads((C.DATA / cluster / "field.json").read_text())["rsp"]
+    p = CLUSTERS[cluster]
+    KAP_MIX = p.get("kap", "a09")
+    CLUSTER, TARGETS, DM, EBV, Z, PREFIX = cluster, C.DATA / cluster / "followed.json", p["dm"], p["ebv"], p["z"], p["prefix"]
+    for kind in ("RRab", "RRc", "RRd"):
+        MASS[kind] = p["mass_rr"]
+
+
 def m_bol_to_lsun(m_bol):
     return 10 ** ((4.74 - m_bol) / 2.5)
 
@@ -153,8 +156,6 @@ def luminosity(target):
     if "dm" in target:
         return m_bol_to_lsun(target["G_mean"] - target["dm"] - A_G_PER_EBV * target["ebv"])
     if target["kind"].startswith("RR"):
-        from astropy.table import Table
-
         rr = Table.read(C.DATA / CLUSTER / "gaia_rrlyrae.ecsv")
         col = rr["Gmagavg"]
         g = np.nanmedian(np.asarray(col.filled(np.nan) if hasattr(col, "filled") else col, float))
@@ -169,8 +170,6 @@ RSP_INSTRUMENT = C.REPO / "filters" / "RSP_ArgusGaia" / "RSP_ArgusGaia"
 def build_sed_instrument():
     """The RSP runs' instruments, from `python -m mesa_argus setup`'s ArgusGaiaSDSS: Gaia + Argus (no SDSS), and a
     one-filter instrument with a short table for the SED cycles (MESA pads each SED CSV to the filter's length)."""
-    import shutil
-
     full = C.REPO / "filters" / "ArgusGaiaSDSS" / "ArgusGaiaSDSS"
     if not RSP_INSTRUMENT.exists():
         RSP_INSTRUMENT.mkdir(parents=True)
@@ -220,7 +219,10 @@ def inlist(params, stage):
                      "history_interval = 1"]
     make_csv = ".true." if stage == "fine" else ".false."
     instrument = SED_INSTRUMENT if stage == "fine" else RSP_INSTRUMENT
-    block = lambda name, lines: f"&{name}\n" + "".join(f"      {ln}\n" for ln in lines) + "/\n"  # noqa: E731
+
+    def block(name, lines):
+        return f"&{name}\n" + "".join(f"      {ln}\n" for ln in lines) + "/\n"
+
     return (block("star_job", star_job) + "&eos\n/\n"
             + block("kap", [f"Zbase = {params.get('z', Z)}d0"] + KAP[params.get("kap", KAP_MIX)])
             + block("colors", ["use_colors = .true.", f"instrument = '{instrument}'",
@@ -294,8 +296,6 @@ def run(directory: Path, text: str, log="out.txt", limit_s=RUN_LIMIT_S):
 
 def linear(params, directory):
     """Periods (d) and growth rates per period of the lowest modes (RSP's LINA), or None if the static model fails."""
-    import shutil
-
     shutil.rmtree(directory / "LOGS", ignore_errors=True)  # never read a previous run's results
     run(directory, inlist(params, "lina"), "lina.txt")
     out = directory / "LOGS" / "LINA_period_growth.data"
@@ -400,8 +400,6 @@ def accept_double_mode(label, target, base):
     1O are both unstable; the model's 1O period is compared with Gaia's. Non-linear: in each convection set (A-D, in
     parallel) a mixed F + 1O kick, DM_PERIODS periods; accepted if both modes keep >= DM_MIN_RATIO of the stronger's
     luminosity amplitude with a ratio stable to DM_RATIO_STABILITY between the third and fourth quarters of the run."""
-    import shutil
-
     L0 = luminosity(target)
     p_1o = target.get("period2")
     found = None
@@ -469,8 +467,6 @@ def accept_double_mode(label, target, base):
 def bracket_limit(label, target, base, params):
     """Limit cycle of a weakly unstable model by bracketing (see BRACKET_FACTORS). Returns the accepted params, with
     base/limit/limit.mod taken from the run nearest the drift's sign change, or None if the period is not the star's."""
-    import shutil
-
     kicks = [round(KICK[target["kind"]] * f, 3) for f in BRACKET_FACTORS]
     print(f"  {label}: weakly unstable (convergence stop met at once): bracketing kicks {kicks} km/s, "
           f"{BRACKET_PERIODS} periods each", flush=True)
@@ -518,8 +514,6 @@ def accept_nonlinear(label, target, base):
     than MODE_TOL (the non-linear period at full amplitude differs from the linear one tuned to) gets its Teff
     corrected by that offset (P ~ Teff^-3.48 at fixed L, M) and the limit cycle rerun, up to MAX_CORRECTIONS times.
     Rejected attempts are recorded in base/rejected.json."""
-    import shutil
-
     rejected = []
     for params in candidates(label, target, base):
         params.update(limit_periods=LIMIT_PERIODS[target["kind"]], kick=KICK[target["kind"]],
@@ -610,10 +604,6 @@ def build(label, target, base, done):
 
 def pack(fine_dir, out, params, target):
     """SEDs of every high-resolution step, with time and stellar parameters, in one file."""
-    import h5py
-
-    from .seds import read_sed_csv
-
     h = np.genfromtxt(fine_dir / "LOGS" / "history.data", skip_header=5, names=True)
     row = {int(m): i for i, m in enumerate(h["model_number"])}
     files = {int(re.search(r"_(\d+)\.csv$", p.name)[1]): p for p in (fine_dir / "SED").glob("*_SED_*.csv")}

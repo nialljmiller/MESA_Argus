@@ -4,7 +4,7 @@
     python observe.py examples/observations/f294.toml --scene-only
     python studies/photometry_offset/offset_study.py synthetic_variables f294 --stride 3
 
-For each observation (its scene, outputs/<name>/scene/), the movie (night_movie.main) is run unchanged, with its drawing switched off, and every measured
+For each observation (its scene, outputs/<name>/scene/), the movie (night_movie.main) is run unchanged, with --no-render, and every measured
 exposure's pixels and per-star electron rates are captured. Each exposure is then measured again exactly as
 mesa_argus.photometry does (SEP background, detection, Kron aperture, MAG_AUTO, the per-exposure zero point with a
 colour term), and, because the scene is known, the measured flux of each star is split into what lies in its
@@ -33,8 +33,6 @@ the colour model.
 Outputs (outputs/offset_study/): per-field CSVs (targets: the followed sources; field: every catalogue star measured
 in every captured exposure) and figures.
 """
-from __future__ import annotations
-
 import argparse
 import sys
 from pathlib import Path
@@ -49,7 +47,7 @@ TERMS = ("aperture", "neighbours", "sky", "noise", "zp_colour", "zp_cal")
 
 # ---------------------------------------------------------------- capture
 def capture(field, stride, band="rho"):
-    """Run the movie for `field` with drawing off; return what it measured from."""
+    """Run the movie for `field` without drawing it; return what it measured from."""
     import night_movie as M
     from mesa_argus import photometry as P
 
@@ -59,7 +57,7 @@ def capture(field, stride, band="rho"):
     def observe_(self, name, rates, j, rng):
         r = observe(self, name, rates, j, rng)
         cap["scene"] = self
-        if name == band:  # the last call per exposure is the measured one (reference stacking comes first)
+        if name == band:  # the measured exposure (the reference stack's exposures come first)
             cap["obs"][j] = dict(image=r["image"].copy(), rates=np.array(rates, float), background=float(r["background"]))
         return r
 
@@ -70,12 +68,10 @@ def capture(field, stride, band="rho"):
         cap["phot"] = self
 
     M.Scene.observe, P.SExtractorPhotometry.__init__ = observe_, init_
-    M.draw = lambda *a, **k: None
-    M.difference_image = lambda image, *a, **k: (np.zeros_like(image), 1.0)
     out = OUT / "work" / f"{field}.mp4"
     out.parent.mkdir(parents=True, exist_ok=True)
     M.main(["--scene", str(REPO / "outputs" / field / "scene"), "--field", field, "--band", band, "--stride", str(stride),
-            "-o", str(out)])
+            "-o", str(out), "--no-render"])
     M.Scene.observe, P.SExtractorPhotometry.__init__ = observe, init
     import pandas as pd
 
@@ -128,7 +124,6 @@ def aperture_sum(img, det, j, pad=3):
 
 def decompose(cap, exposures=None, field_stars=True):
     """Rows (one per star per captured exposure) with measured - true and its six terms."""
-    from mesa_argus.photometry import MATCH_FWHM
 
     phot, scene, ex = cap["phot"], cap["scene"], cap["exptime"]
     labels = {}  # target index -> label, from the movie's CSV order
@@ -151,7 +146,7 @@ def decompose(cap, exposures=None, field_stars=True):
         def nearest(i):
             d = np.hypot(det["x"] - phot.x[i], det["y"] - phot.y[i])
             k = int(np.argmin(d))
-            return k if d[k] <= MATCH_FWHM * phot.fwhm else -1
+            return k if d[k] <= phot.cfg["match_fwhm"] * phot.fwhm else -1
 
         # the pipeline's zero point (as photometry.measure), and the ideal one fitted the same way
         cy, cc, ci, ideal = [], [], [], []

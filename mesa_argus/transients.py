@@ -30,12 +30,17 @@ accretion disc (Shakura & Sunyaev 1973) whose accretion rate rises and decays, p
 The afterglow, microlensing and dwarf-nova models are parametric models written here, not sncosmo models.
 """
 
-from __future__ import annotations
-
 import argparse
 from pathlib import Path
 
+import astropy.units as u
+import h5py
 import numpy as np
+
+from argus_sim import ABPhot, SystemThroughput
+from argus_sim import c as ARGUS_CONFIG
+from mesa_argus import dust
+from mesa_argus.seds import Templates
 
 WAVE_STEP = 5.0  # A, observer frame (the templates are tabulated at ~10 A)
 TIME_STEP = 0.25  # observer-frame days between stored SEDs (the templates are tabulated at ~1 d; the movie interpolates linearly)
@@ -60,7 +65,6 @@ def model_info(name, version=None):
 def make_sncosmo(out, name, z, t0_bjd, peak_absmag, ebv, peak_band="bessellb", magsys="ab", params=None, host_ebv=0.0,
                  version=None):
     """Write one sncosmo transient to `out` (transient.h5); returns its attrs."""
-    import h5py
     import sncosmo
 
     name_, version_, kind, reference = model_info(name, version)
@@ -87,14 +91,7 @@ def make_sncosmo(out, name, z, t0_bjd, peak_absmag, ebv, peak_band="bessellb", m
                  flux_units="erg s^-1 cm^-2 A^-1 (f_lambda at the observer, before Milky Way dust)",
                  time_note="observer-frame days since t0 (the model's phase 0; BJD_TDB)", source="sncosmo " + sncosmo.__version__,
                  generator="sncosmo")
-    out = Path(out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(out, "w") as f:
-        f.create_dataset("wavelength", data=wave)
-        f.create_dataset("time_days", data=time)
-        f.create_dataset("flux", data=flux, compression="gzip", compression_opts=4)
-        f.attrs.update(attrs)
-    return attrs
+    return write(out, wave, time, flux, attrs)
 
 
 AFTERGLOW_REF_A = 6400.0  # A: where peak_mag is given (R-band-like; within Argus rho)
@@ -104,8 +101,6 @@ AFTERGLOW_STEPS = 600  # log-spaced steps from 1 s to AFTERGLOW_DAYS (adjacent s
 
 def make_afterglow(out, t0_bjd, peak_mag, ebv, t_peak_s=60.0, alpha=1.0, beta=0.66, smooth=2.0):
     """Write a GRB optical afterglow (module docstring) to `out` (transient.h5); returns its attrs."""
-    import h5py
-
     wave = np.arange(WAVE_RANGE[0], WAVE_RANGE[1] + 1e-6, WAVE_STEP)
     time = np.r_[0.0, np.geomspace(1.0 / 86400, AFTERGLOW_DAYS, AFTERGLOW_STEPS)]  # days; no light at the burst itself
     x = time[1:] * 86400 / t_peak_s
@@ -121,6 +116,11 @@ def make_afterglow(out, t0_bjd, peak_mag, ebv, t_peak_s=60.0, alpha=1.0, beta=0.
                         f"beta {beta:g}",
                  flux_units="erg s^-1 cm^-2 A^-1 (f_lambda at the observer, before Milky Way dust)",
                  time_note="observer-frame days since the burst (BJD_TDB)")
+    return write(out, wave, time, flux, attrs)
+
+
+def write(out, wave, time, flux, attrs):
+    """transient.h5 (module docstring)."""
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(out, "w") as f:
@@ -131,27 +131,9 @@ def make_afterglow(out, t0_bjd, peak_mag, ebv, t_peak_s=60.0, alpha=1.0, beta=0.
     return attrs
 
 
-def _write(out, wave, time, flux, attrs):
-    import h5py
-
-    out = Path(out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(out, "w") as f:
-        f.create_dataset("wavelength", data=wave)
-        f.create_dataset("time_days", data=time)
-        f.create_dataset("flux", data=flux, compression="gzip", compression_opts=4)
-        f.attrs.update(attrs)
-    return attrs
-
-
-def _rho_mag(wave, flam, ebv):
+def rho_mag(wave, flam, ebv):
     """Argus rho AB magnitude (ArgusSim ABPhot, no airmass) of f_lambda (erg/s/cm2/A) after Milky Way dust (CCM89)."""
-    import astropy.units as u
-    from argus_sim import ABPhot, SystemThroughput
-    from argus_sim import c as cfg
-
-    from mesa_argus import dust
-
+    cfg = ARGUS_CONFIG
     ab = ABPhot(throughput=SystemThroughput(filters={"g": True, "rho": True}, throughput_loss=cfg.telescope.throughput_loss),
                 collecting_area=cfg.telescope.collecting_area)
     seen = dust.redden(wave, flam, ebv) * u.erg / (u.s * u.cm**2 * u.AA)
@@ -159,73 +141,73 @@ def _rho_mag(wave, flam, ebv):
 
 
 # ---------------------------------------------------------------- microlensing
-def magnification(u_, rho=0.0):
-    """Point-lens magnification of a point source (Paczynski 1986) at lens-source separation u_ (Einstein radii), or of
-    a uniform disc of radius rho: the point-lens A(r) averaged over the disc, integrated in rings about the lens,
-        A = [pi a sqrt(a^2 + 4) + int_{|u-rho|}^{u+rho} 2 arccos((r^2 + u^2 - rho^2) / (2 r u)) (r^2 + 2) / sqrt(r^2 + 4) dr]
-            / (pi rho^2),   a = max(rho - u, 0)
-    (r A(r) = (r^2 + 2) / sqrt(r^2 + 4); the first term is the rings wholly inside the disc, exactly; the rest is
-    Gauss-Legendre in r = u - rho cos(phi) over the rings the disc's edge crosses). At u = 0 this is sqrt(rho^2 + 4)/rho."""
-    u_ = np.atleast_1d(np.asarray(u_, float))
+def magnification(separation, rho=0.0):
+    """Point-lens magnification (Paczynski 1986) at lens-source separation(s) in Einstein radii:
+        point source:                 A(u) = (u^2 + 2) / (u sqrt(u^2 + 4))
+        uniform disc of radius rho:   A(u) averaged over the disc,
+            A = [pi a sqrt(a^2 + 4) + int 2 arccos((r^2 + u^2 - rho^2) / (2 r u)) r A(r) dr] / (pi rho^2)
+    summed in rings of radius r about the lens: rings wholly inside the disc (r < a = rho - u) exactly, as
+    int 2 pi r A(r) dr = pi a sqrt(a^2 + 4); rings the disc's edge crosses (|u - rho| < r < u + rho) by Gauss-Legendre,
+    each weighted by the arc of it inside the disc. Exact at the singularity (lens inside the disc), where a plain
+    average over the disc converges slowly. At u = 0: sqrt(rho^2 + 4) / rho."""
+    separation = np.atleast_1d(np.asarray(separation, float))
     if rho <= 0:
-        return (u_**2 + 2) / (u_ * np.sqrt(u_**2 + 4))
+        return (separation**2 + 2) / (separation * np.sqrt(separation**2 + 4))
     x, w = np.polynomial.legendre.leggauss(400)
-    phi, wphi = 0.5 * np.pi * (x + 1), 0.5 * np.pi * w
-    out = np.empty_like(u_)
-    for i, uu in enumerate(u_):
-        a = max(rho - uu, 0.0)
-        inner = np.pi * a * np.sqrt(a**2 + 4)
-        lo = abs(uu - rho)
-        if uu <= 0:
-            out[i] = inner / (np.pi * rho**2)
+    phi, w_phi = 0.5 * np.pi * (x + 1), 0.5 * np.pi * w  # r = centre - half cos(phi) spreads the nodes to the ends
+    out = np.empty_like(separation)
+    for i, u_i in enumerate(separation):
+        a = max(rho - u_i, 0.0)
+        inside = np.pi * a * np.sqrt(a**2 + 4)  # the rings wholly inside the disc
+        if u_i <= 0:
+            out[i] = inside / (np.pi * rho**2)
             continue
-        # r = c - h cos(phi) runs over [lo, uu + rho]; dr = h sin(phi) dphi
-        c, h = 0.5 * (lo + uu + rho), 0.5 * (uu + rho - lo)
-        r = c - h * np.cos(phi)
-        arc = 2 * np.arccos(np.clip((r**2 + uu**2 - rho**2) / (2 * r * uu), -1, 1))
-        ring = np.sum(wphi * h * np.sin(phi) * arc * (r**2 + 2) / np.sqrt(r**2 + 4))
-        out[i] = (inner + ring) / (np.pi * rho**2)
+        r_lo = abs(u_i - rho)  # the rings the disc's edge crosses: r_lo to u + rho
+        centre, half = 0.5 * (r_lo + u_i + rho), 0.5 * (u_i + rho - r_lo)
+        r = centre - half * np.cos(phi)
+        arc = 2 * np.arccos(np.clip((r**2 + u_i**2 - rho**2) / (2 * r * u_i), -1, 1))  # angle of the ring in the disc
+        crossed = np.sum(w_phi * half * np.sin(phi) * arc * (r**2 + 2) / np.sqrt(r**2 + 4))  # r A(r) = (r^2+2)/sqrt(r^2+4)
+        out[i] = (inside + crossed) / (np.pi * rho**2)
     return out
 
 
 MICROLENS_STEPS = 2001
 
 
-def make_microlensing(out, t0_bjd, t_e, u0, base_mag, bp_rp, ebv, rho=0.0, fs=1.0):
+def make_microlensing(out, t0_bjd, t_e, u0, base_mag, bp_rp, rho=0.0, fs=1.0):
     """Write a microlensing event (point lens; point source, or a uniform disc of radius rho Einstein radii) to `out`.
 
     The baseline is the MESA template SED of intrinsic BP-RP `bp_rp` (as the field stars: runs/*_sed), scaled so it is
-    rho = base_mag (AB) through the field's dust, unmagnified. fs: the source's fraction of the baseline
-    light (the rest is unlensed blended light; 1 = no blend). u(t) = sqrt(u0^2 + ((t - t0)/t_E)^2); the lensing is
-    achromatic (no limb darkening). The file holds all the light at the position, (fs A + 1 - fs) x the baseline SED:
-    the source (and its blend) is not otherwise in the field, so like every transient it is left out of the catalogue
-    and the difference reference.
+    rho = base_mag (AB) unmagnified, before dust (the observation adds the dust). fs: the source's fraction of the
+    baseline light (the rest is unlensed blended light; 1 = no blend). u(t) = sqrt(u0^2 + ((t - t0)/t_E)^2); the
+    lensing is achromatic (no limb darkening). The file holds all the light at the position, (fs A + 1 - fs) x the
+    baseline SED: the source (and its blend) is not otherwise in the field, so like every transient it is left out of
+    the catalogue and the difference reference.
     """
-    from mesa_argus.seds import Templates
-
     tpl = Templates()
     i = tpl.index(bp_rp)
     wave = np.arange(WAVE_RANGE[0], WAVE_RANGE[1] + 1e-6, WAVE_STEP)
     sed = np.interp(wave, tpl.wave.value, tpl.flux[i])
-    sed *= 10 ** (-0.4 * (base_mag - _rho_mag(wave, sed, ebv)))
-    width = t_e * max(u0, rho, 1e-3)  # the grid is densest within this of t0
+    sed *= 10 ** (-0.4 * (base_mag - rho_mag(wave, sed, 0.0)))
+    # time grid: steps of ~width near t0 (where A changes fastest), growing to ~span away from it
+    width = t_e * max(u0, rho, 1e-3)
     span = max(10 * t_e, 3.0)  # days either side of t0
     s = np.arcsinh(span / width)
     time = width * np.sinh(np.linspace(-s, s, MICROLENS_STEPS))
     A = magnification(np.sqrt(u0**2 + (time / t_e) ** 2), rho)
     flux = (fs * A + 1 - fs)[:, None] * sed[None, :]
-    peak_mag = _rho_mag(wave, sed * (fs * A.max() + 1 - fs), ebv)
+    peak_mag = rho_mag(wave, sed * (fs * A.max() + 1 - fs), 0.0)
     attrs = dict(kind="microlensing", model="microlensing", model_version="point lens" + (", finite source" if rho else ""),
                  generator="point lens", reference="Paczynski 1986" + ("; uniform finite source" if rho else ""),
                  z=float("nan"), t0_bjd=float(t0_bjd), t_e_days=float(t_e), u0=float(u0), rho=float(rho), fs=float(fs),
                  base_mag=float(base_mag), bp_rp=float(bp_rp), template_bp_rp=float(tpl.colour[i]),
-                 template_feh=float(tpl.feh[i]), ebv=float(ebv), peak_days=0.0, peak_magnification=float(A.max()),
+                 template_feh=float(tpl.feh[i]), ebv=0.0, peak_days=0.0, peak_magnification=float(A.max()),
                  peak_rho=peak_mag,
-                 params=f"t_E {t_e:g} d, u0 {u0:g}, rho {rho:g}, fs {fs:g}; source rho {base_mag:g} (AB, after dust), "
+                 params=f"t_E {t_e:g} d, u0 {u0:g}, rho {rho:g}, fs {fs:g}; source rho {base_mag:g} (AB, before dust), "
                         f"BP-RP {bp_rp:g} (template {tpl.colour[i]:.2f}); peak A {A.max():.1f} (rho {peak_mag:.2f})",
                  flux_units="erg s^-1 cm^-2 A^-1 ((fs A + 1 - fs) x baseline; at the observer, before Milky Way dust)",
                  time_note="days since closest approach (BJD_TDB)")
-    return _write(out, wave, time, flux, attrs)
+    return write(out, wave, time, flux, attrs)
 
 
 # ---------------------------------------------------------------- dwarf nova
@@ -297,7 +279,7 @@ def make_dwarf_nova(out, t0_bjd, d_pc, mdot_q, mdot_peak, t_rise, plateau, tau_d
     wd = np.pi * planck(wave, t_wd) * (r_in / (d_pc * PC)) ** 2
     disc, lum = zip(*(disc_flux(wave, m * MSUN / YEAR, m_wd, r_in, r_out * RSUN, incl, d_pc) for m in mdot))
     flux = np.array(disc) + wd[None, :]
-    rho_q, rho_p = (_rho_mag(wave, flux[k], ebv) for k in (0, int(np.argmax(mdot))))
+    rho_q, rho_p = (rho_mag(wave, flux[k], ebv) for k in (0, int(np.argmax(mdot))))
     attrs = dict(kind="dwarf nova", model="dwarf_nova", model_version="steady disc + white dwarf", generator="steady disc",
                  reference="Shakura & Sunyaev 1973; Frank, King & Raine 2002; Nauenberg 1972", z=float("nan"),
                  t0_bjd=float(t0_bjd), d_pc=float(d_pc), mdot_q=float(mdot_q), mdot_peak=float(mdot_peak),
@@ -310,7 +292,7 @@ def make_dwarf_nova(out, t0_bjd, d_pc, mdot_q, mdot_peak, t_rise, plateau, tau_d
                         f"d {d_pc:g} pc; rho {rho_q:.2f} quiescent, {rho_p:.2f} peak",
                  flux_units="erg s^-1 cm^-2 A^-1 (f_lambda at the observer, before Milky Way dust)",
                  time_note="days since the outburst starts (BJD_TDB)")
-    return _write(out, wave, time, flux, attrs)
+    return write(out, wave, time, flux, attrs)
 
 
 def main(argv=None):

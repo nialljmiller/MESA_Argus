@@ -176,9 +176,10 @@ GRB, microlensing and dwarf nova are parametric models written in this repo (equ
 `mesa_argus/transients.py`). MESA RSP models take ~0.5–2 h each and PHOEBE a few minutes.
 
 **Adding a generator:** a module in `mesa_argus/sources/` with a list `GENERATORS` of `Generator(name, timing,
-engine, summary, params, make)`. It is found automatically: its keys are validated in star files and listed by
-`python -m mesa_argus.sources`, and observations place it like every other star. The package docstring
-(`mesa_argus/sources/__init__.py`) gives the details.
+engine, about, keys, make)`, added to `MODULES` in `all_generators()` (`mesa_argus/sources/__init__.py`). Its keys
+are then checked in star files and listed by `python -m mesa_argus.sources`, and observations place it like every
+other star. A star file names its generator exactly as listed (e.g. `"W UMa"`); an unknown generator or key, or a
+missing required key, stops the run with the names.
 
 ### How it fits together
 

@@ -28,7 +28,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import astropy.units as u
-from astropy.coordinates import EarthLocation, SkyCoord
+from astropy.coordinates import SkyCoord
 from astropy.table import Table, vstack
 from astropy.utils import iers
 import h5py
@@ -389,10 +389,7 @@ def night_schedule(date, max_airmass, cfg, start=None, end=None):
 
     times, airmass, alt, az = night.exposures(CENTRE.ra.deg, CENTRE.dec.deg, date, start=start, end=end,
                                               max_airmass=max_airmass, cfg=cfg)
-    site = EarthLocation(lat=cfg.observatory.latitude * u.deg, lon=cfg.observatory.longitude * u.deg,
-                         height=cfg.observatory.altitude * u.m)
-    bjd = (times.tdb + times.light_travel_time(CENTRE, location=site)).jd
-    return times, bjd, airmass, alt, az
+    return times, night.bjd_tdb(times, CENTRE.ra.deg, CENTRE.dec.deg, cfg=cfg), airmass, alt, az
 
 
 def phases_at(var, bjd):
@@ -518,7 +515,7 @@ def difference_image(image, image_sat, reference, reference_sat, readnoise, half
 # ---------------------------------------------------------------- the steps of main
 def constant_star_rates(stars, pulsators, ab):
     """Every star as a constant: the MESA template SED matched to its BP-RP, scaled to its G. Returns electrons/s on
-    AIRMASS_GRID and above-atmosphere magnitudes, per band."""
+    AIRMASS_GRID and above-atmosphere magnitudes, per band; the templates; each star's colour as used."""
     templates = Templates()
     G = column(stars, "Gmag")
     colour = column(stars, "BP-RP")
@@ -558,7 +555,7 @@ def constant_star_rates(stars, pulsators, ab):
             rate[b][these] = np.outer(scale[these], [ab.electrons_from_sed(band, templates.wave, sed, airmass=x).value
                                                      for x in AIRMASS_GRID])
             mag[b][these] = float(ab.mag_from_sed(band, templates.wave, sed)) - 2.5 * np.log10(scale[these])
-    return rate, mag, templates
+    return rate, mag, templates, colour
 
 
 def followed_star_light(k, v, args, ab, bjd, airmass, model_file, model_ebv):
@@ -738,7 +735,7 @@ def main(argv=None):
     ut = (times.jd - np.floor(times[0].jd - 0.5) - 0.5) * 24  # UT hours since 0h on the first date
 
     # 3. constant stars
-    static_rate, static_mag, templates = constant_star_rates(stars, pulsators, ab)
+    static_rate, static_mag, templates, _ = constant_star_rates(stars, pulsators, ab)
 
     # 4. followed stars: real variables and placed stars from their model files, with the observation's dust
     from mesa_argus import rsp

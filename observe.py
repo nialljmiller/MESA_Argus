@@ -74,19 +74,19 @@ def built_star(name):
     return folder, json.loads((folder / "meta.json").read_text())
 
 
-def choose_night(f, n, window, real_stars, site):
+def choose_night(f, n, window, real_stars, site, max_airmass):
     """The night asked for, or the nearest one the field is up >= 3 h (with a UT window: at all), or "auto"."""
     from mesa_argus import night
 
     if n["date"] == "auto":  # the night the placed real stars change most
         picks = [dict(kind=r["kind"], period=r["period"], epoch_bjd=r["epoch_bjd"], amp_G=r["amp_G"], veb=r.get("veb"))
                  for r in real_stars]
-        date, score = night.best_night(f["ra"], f["dec"], Date.today().isoformat(), site, *window, picks)
+        date, score = night.best_night(f["ra"], f["dec"], Date.today().isoformat(), site, *window, max_airmass, picks)
         print(f"night chosen for the placed real stars (date auto): {date} (visibility score {score:.2f} of {len(picks)})")
         return date
     asked = n["date"] or Date.today().isoformat()
     shortest = 5 if any(window) else 180  # minutes
-    date, minutes, _ = night.nearest_night(f["ra"], f["dec"], asked, site, *window, shortest)
+    date, minutes = night.nearest_night(f["ra"], f["dec"], asked, site, *window, max_airmass, shortest)
     if date != asked:
         print(f"not up on the night of {asked}: using the nearest night it is, {date}")
     return date
@@ -250,9 +250,9 @@ def main():
 
     # the night
     site = night.SITES[n["site"]]
-    night.MAX_AIRMASS = n["max_airmass"] or None
-    n["date"] = choose_night(f, n, window, [m["real"] for _, _, m in placements if m.get("real")], site)
-    exposures = night.night_times(ra, dec, n["date"], site, *window)
+    max_airmass = n["max_airmass"] or None
+    n["date"] = choose_night(f, n, window, [m["real"] for _, _, m in placements if m.get("real")], site, max_airmass)
+    exposures = night.exposures(ra, dec, n["date"], site, *window, max_airmass)[0].jd
     start = Time(exposures[0], format="jd", scale="utc")
     night_start_bjd = float(night.bjd_tdb(start, ra, dec, site))
     night_end_bjd = float(night.bjd_tdb(Time(exposures[-1], format="jd", scale="utc"), ra, dec, site)) + 10 / 1440

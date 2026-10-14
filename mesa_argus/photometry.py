@@ -16,12 +16,8 @@ their detections give the zero point with a linear colour term in BP-RP (3-sigma
 exposure.
 """
 
-from __future__ import annotations
-
 import numpy as np
 import sep
-
-MATCH_FWHM = 0.5
 
 # every setting an observation can change ([measure] in observe.py's file); these defaults are SExtractor's own
 SETTINGS = dict(
@@ -33,7 +29,7 @@ SETTINGS = dict(
     deblend_cont=0.005,    # DEBLEND_MINCONT
     kron_fact=2.5,         # PHOT_AUTOPARAMS: aperture = max(kron_fact x Kron radius, min_radius) in units of (a, b)
     min_radius=3.5,
-    match_fwhm=MATCH_FWHM,  # cross-match radius (FWHM) between catalogue stars and detections
+    match_fwhm=0.5,        # cross-match radius (FWHM) between catalogue stars and detections
     n_calibrators=300,     # calibration stars per exposure (the least blended of the brightest 4x this many)
     colour_term=True,      # zero point a + b (BP-RP); false: a only
     clip_sigma=3.0,        # zero-point fit: reject calibrators beyond this many (MAD) sigma, refit
@@ -105,7 +101,7 @@ class SExtractorPhotometry:
         x, y, flux, ferr, peak = extract(image, self.fwhm, self.cfg)
         sat_level = 0.98 * self.fullwell
 
-        def nearest(i):  # standard cross-match: the nearest detection within MATCH_FWHM x FWHM
+        def nearest(i):  # standard cross-match: the nearest detection within match_fwhm x FWHM
             d = np.hypot(x - self.x[i], y - self.y[i])
             j = int(np.argmin(d))
             return j if d[j] <= self.cfg["match_fwhm"] * self.fwhm else -1

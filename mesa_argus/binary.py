@@ -27,16 +27,16 @@ geometry, blackbody). The system SED at each time is the sum of the two componen
 surface fluxes at each star's Teff, log g, [M/H], scaled by (R/10 pc)^2), each weighted by its visible fraction,
 interpolated in wavelength between the BP and RP pivot wavelengths (constant outside them).
 """
-from __future__ import annotations
-
 from functools import lru_cache
 import json
 import logging
 import time
 
+import h5py
 import numpy as np
 
 from . import config as C
+from .dust import redden
 
 SIGMA_SB = 5.6704e-5
 RSUN, PC, G_CGS, MSUN = 6.957e10, 3.0857e18, 6.674e-8, 1.989e33
@@ -152,7 +152,8 @@ def _phoebe():
     import phoebe
 
     logging.disable(logging.WARNING)
-    phoebe.progressbars_off() if hasattr(phoebe, "progressbars_off") else None
+    if hasattr(phoebe, "progressbars_off"):
+        phoebe.progressbars_off()
     return phoebe
 
 
@@ -368,8 +369,6 @@ def orbit_seds(p, contact, w, f10):
 
 def write_orbit(path, w, seds, time_days, attrs):
     """One cycle of SEDs (f_lambda at 10 pc) against time, in the RSP pulsators' format."""
-    import h5py
-
     path.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(path, "w") as f:
         f.attrs.update(**attrs, flux_units="erg s^-1 cm^-2 A^-1 (f_lambda at 10 pc)")
@@ -394,8 +393,6 @@ def contact_requiv(period, q, sma, fillout):
 def model_binary(target, out_dir, field_dm, ebv, mh=0.0):
     """Model one eclipsing binary; write out_dir/pulsation.h5. target: dict with veb (row as dict), nss (row as dict
     or None), teff_gsp, logg_gsp, G (Gaia mean G). Returns (ok, notes)."""
-    from .dust import redden
-
     veb, nss = target["veb"], target.get("nss")
     notes = {}
     period = 1 / float(veb["Freq"])
