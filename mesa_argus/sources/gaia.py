@@ -1,13 +1,14 @@
 """Real stars from Gaia DR3: one catalogued variable modelled as itself, or every star around a pointing as a set.
 
 Gaia variable: period and ephemeris from Gaia (ASAS-SN for HADS), distance (parallax or a period-luminosity relation),
-the E(B-V) along its sightline (only to get its luminosity from its measured G), composition and mass
+the E(B-V) in front of it (the 3D map at that distance; only to get its luminosity from its measured G), composition and mass
 (mesa_argus/gaia.py, physical()); then MESA RSP, or PHOEBE fitted to Gaia's eclipses. The stored SEDs are dust-free at
 10 pc like every star's; its sky position, ephemeris and sightline E(B-V) are kept (`real`) so an observation can put
 it where and when it really is.
 
-Gaia field: every Gaia DR3 source within 0.12 deg of a pointing, with Gaia's variability tables. Their magnitudes are
-as Gaia measured them, i.e. through their own dust.
+Gaia field: every Gaia DR3 source within 0.12 deg of a pointing, with Gaia's variability tables and distances
+(Bailer-Jones et al. 2021; GSP-Phot where they have none). Their magnitudes are as Gaia measured them, i.e. through
+their own dust; an observation takes that dust out (the 3D map at each star's distance) and puts its own in.
 
 Gaia queries are cached in data/gaia/<pointing>/ (committed), so stars can be rebuilt without the network.
 """
@@ -105,7 +106,8 @@ def make_variable(folder, k, name):
                 notes={key: str(v) for key, v in target["notes"].items()},
                 real=dict(source=int(target["source"]), ra=k["ra"], dec=k["dec"], kind=target["kind"],
                           period=target["period"], epoch_bjd=float(epoch), amp_G=float(target["amp_G"]),
-                          G=float(target["G"]), sightline_ebv=float(target["ebv"]), veb=target.get("veb"),
+                          G=float(target["G"]), sightline_ebv=float(target["ebv"]),
+                          distance_pc=float(target.get("distance_pc", 10 ** (target["dm"] / 5 + 1))), veb=target.get("veb"),
                           gaia_cache=k["cache"]))
 
 

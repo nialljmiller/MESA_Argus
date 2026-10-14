@@ -171,7 +171,7 @@ def make_dwarf_nova(out, d_pc, mdot_q, mdot_peak, t_rise, plateau, tau_decay, r_
     flux = np.array([disc_flux(WAVE, m * MSUN / YEAR, m_wd, r_in, r_out * RSUN, incl, d_pc) for m in mdot]) + white_dwarf
     rho_q, rho_p = rho_mag(WAVE, flux[0]), rho_mag(WAVE, flux[int(np.argmax(mdot))])
     attrs = dict(kind="dwarf nova", model="dwarf_nova", reference="Shakura & Sunyaev 1973; Nauenberg 1972",
-                 z=float("nan"), peak_days=float(t_rise),
+                 z=float("nan"), peak_days=float(t_rise), distance_pc=float(d_pc),  # observe.py: the dust in front of it
                  params=f"Mdot {mdot_q:g} -> {mdot_peak:g} Msun/yr (rise {t_rise:g} d, plateau {plateau:g} d, decay e-fold "
                         f"{tau_decay:g} d); M_wd {m_wd:g}, T_wd {t_wd:g} K, r_out {r_out:g} Rsun, i {incl:g} deg, "
                         f"d {d_pc:g} pc; rho {rho_q:.2f} quiescent, {rho_p:.2f} peak")

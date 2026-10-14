@@ -5,12 +5,14 @@ PHOEBE. Used by make_stars.py (Gaia variables, Gaia field sets).
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.table import Table
-from astroquery.ipac.irsa.irsa_dust import IrsaDust
 from astroquery.vizier import Vizier
 import numpy as np
 
+from . import dust
+
 RADIUS_DEG = 0.12  # Gaia query radius: covers the 8' x 8' simulated area
 Z_SUN = 0.0169
+RV_ = dust.RV  # A_V = R_V E(B-V) (CCM89)
 MIN_PLX_SNR = 3.0  # parallax S/N for a parallax distance; below it, a period-luminosity distance (pulsators) or dropped (binaries)
 # period-Wesenheit relations, Milky Way, W = G - 1.90 (BP - RP) (Ripepi et al. 2019, A&A 625, A14, eq. 2 and Table 3)
 PW_RELATIONS = {"DCEP F": (-2.701, -3.320), "DCEP 1O": (-2.976, -4.095), "T2CEP": (-1.194, -2.381)}
@@ -39,6 +41,9 @@ def fetch(ra, dec, data):
               # Gaia's physical eclipsing-binary solutions (non-single stars), when they exist
               "gaia_nss_eb.ecsv": ("I/357/tboeb", ["**"]),
               "gaia_nss_ebsb.ecsv": ("I/357/tboes", ["**"]),
+              # distances: Bailer-Jones et al. (2021) geometric; Gaia DR3 GSP-Phot where they have none
+              "bailer_jones.ecsv": ("I/352/gedr3dis", ["Source", "rgeo", "b_rgeo", "B_rgeo"]),
+              "gaia_gspphot.ecsv": ("I/355/paramp", ["Source", "Dist"]),
               # periods and classes for delta Scuti stars (Gaia DR3 gives none): ASAS-SN (Jayasinghe et al. 2018-2020)
               "asassn_variables.ecsv": ("II/366/catv2021", ["ASASSN-V", "Per", "Amp", "Type", "HJD", "Vmag", "GaiaDR3",
                                                             "RAJ2000", "DEJ2000"])}
@@ -51,10 +56,36 @@ def fetch(ra, dec, data):
         t.write(data / name, overwrite=True)
 
 
-def reddening(ra, dec):
-    """SFD E(B-V) (Schlafly & Finkbeiner 2011 recalibration) at ra, dec, from IRSA."""
-    t = IrsaDust.get_query_table(SkyCoord(ra * u.deg, dec * u.deg), section="ebv")
-    return float(t["ext SandF mean"][0])
+def distances(data, sources):
+    """Distance (pc) of each source: Bailer-Jones et al. (2021) geometric, else Gaia DR3 GSP-Phot, else nan; and which."""
+    def table(name, column):
+        t = Table.read(data / name)
+        return dict(zip(np.asarray(t["Source"]).astype(np.int64).tolist(), col(t, column))) if len(t) else {}
+
+    bailer_jones, gsp_phot = table("bailer_jones.ecsv", "rgeo"), table("gaia_gspphot.ecsv", "Dist")
+    d, how = np.full(len(sources), np.nan), np.full(len(sources), "none", dtype=object)
+    for k, s in enumerate(np.asarray(sources).astype(np.int64).tolist()):
+        if np.isfinite(bailer_jones.get(s, np.nan)):
+            d[k], how[k] = bailer_jones[s], "Bailer-Jones"
+        elif np.isfinite(gsp_phot.get(s, np.nan)):
+            d[k], how[k] = gsp_phot[s], "GSP-Phot"
+    return d, how
+
+
+def extinction_G(G, bp_rp, ebv):
+    """A_G of a star measured at G, BP-RP through E(B-V) ebv (mesa_argus.dust.deredden); with no BP-RP, that of a
+    BP-RP0 = 0.6 template (an F-type pulsator)."""
+    if np.isfinite(bp_rp):
+        return float(G - dust.deredden(G, bp_rp, ebv)[1][0])
+    return float(dust.redden_gaia(0.0, 0.6, ebv)[0][0])
+
+
+def sightline(ra, dec, distance_pc):
+    """E(B-V) in front of a star at distance_pc, and a note on where it came from."""
+    ebv, which = dust.ebv(ra, dec, distance_pc)
+    where = ("Bayestar19 (Green et al. 2019) at the star's distance" if which[0] == "bayestar19" else
+             "SFD (Schlegel et al. 1998), the whole column (outside Bayestar19)")
+    return float(ebv[0]), f"{where}, {distance_pc / 1000:.2f} kpc; E(B-V) = 0.884 x the map (mesa_argus/dust.py)"
 
 
 def inventory(data, ra, dec, block_n=3):
@@ -183,21 +214,22 @@ def show(rows, block_n=3):
 
 
 def physical(row, stars, ra, dec):
-    """The star's own distance, reddening, composition and mass, with where each came from (None if it cannot be
-    modelled, with the reason)."""
+    """The star's own distance, reddening (the 3D map at that distance), composition and mass, with where each came
+    from (None if it cannot be modelled, with the reason)."""
     k = int(np.nonzero(np.asarray(stars["Source"]).astype(np.int64) == row["source"])[0][0])
     plx, e_plx = col(stars, "Plx")[k], col(stars, "e_Plx")[k]
-    ebv = reddening(float(col(stars, "RA_ICRS")[k]), float(col(stars, "DE_ICRS")[k]))
+    star_ra, star_dec = float(col(stars, "RA_ICRS")[k]), float(col(stars, "DE_ICRS")[k])
     if row["kind"] == "EB":
         if not (np.isfinite(plx) and np.isfinite(e_plx) and plx / e_plx >= MIN_PLX_SNR):
             return None, f"parallax S/N {plx / e_plx:.1f} < {MIN_PLX_SNR:g}: no distance"
         ap = Vizier(columns=["Source", "Teff", "logg"]).query_constraints(catalog="I/355/paramp", Source=str(row["source"]))
         val = lambda c: float(ap[0][c][0]) if ap and len(ap[0]) and not np.ma.is_masked(ap[0][c][0]) else np.nan  # noqa: E731
         d_pc = 1000.0 / (plx + 0.017)
-        return dict(dm=round(float(5 * np.log10(d_pc) - 5), 3), ebv=round(ebv, 4), teff_gsp=val("Teff"), logg_gsp=val("logg"),
-                    z=Z_SUN, mass=np.nan, kap="gs98",
+        ebv, ebv_note = sightline(star_ra, star_dec, d_pc)
+        return dict(dm=round(float(5 * np.log10(d_pc) - 5), 3), ebv=round(ebv, 4), distance_pc=round(d_pc, 1),
+                    teff_gsp=val("Teff"), logg_gsp=val("logg"), z=Z_SUN, mass=np.nan, kap="gs98",
                     notes=dict(distance=f"parallax {plx:.3f} +/- {e_plx:.3f} mas (+0.017 zero point) -> {d_pc / 1000:.2f} kpc",
-                               ebv="Schlafly & Finkbeiner (2011), IRSA",
+                               ebv=ebv_note,
                                teff=f"Gaia DR3 GSP-Phot Teff {val('Teff'):.0f} K, log g {val('logg'):.2f} (system)",
                                z="assumed solar ([M/H] = 0) for the component atmospheres",
                                method=row["model"])), ""
@@ -217,6 +249,14 @@ def physical(row, stars, ra, dec):
             return None, "no Gaia [M/H]"
         mh = 0.0 if row["kind"].startswith("DCEP") else -1.5
         mh_note = f"Gaia gives no [M/H]: assumed {mh:+.1f} ({'young thin disk' if mh == 0 else 'old population'})"
+    # the colour that sets A_G: Gaia's intensity-mean BP-RP where it gives one, else the catalogue's
+    colour = row.get("BP_mean", np.nan) - row.get("RP_mean", np.nan)
+    colour = colour if np.isfinite(colour) else float(col(stars, "BP-RP")[k])
+
+    def dust_at(dm):  # E(B-V) and A_G in front of the star at distance modulus dm
+        ebv, _ = sightline(star_ra, star_dec, 10 ** (dm / 5 + 1))
+        return ebv, extinction_G(row["G_mean"], colour, ebv)
+
     if good_plx:
         d_pc = 1000.0 / (plx + 0.017)
         dm, how = 5 * np.log10(d_pc) - 5, f"parallax {plx:.3f} +/- {e_plx:.3f} mas (+0.017 zero point) -> {d_pc / 1000:.2f} kpc"
@@ -237,23 +277,30 @@ def physical(row, stars, ra, dec):
             return None, f"parallax S/N {snr:.1f} < {MIN_PLX_SNR:g} and no Gaia BP-RP for a P-L distance"
         m_v = -2.94 * np.log10(row["period"]) - 1.34
         g_v = -0.02704 + 0.01424 * bp_rp - 0.2156 * bp_rp ** 2 + 0.01426 * bp_rp ** 3
-        dm = row["G_mean"] - g_v - m_v - 3.1 * ebv
+        dm = 99.0  # the distance and the dust in front of it together: start beyond all the dust, iterate
+        for _ in range(5):
+            dm = row["G_mean"] - g_v - m_v - RV_ * dust_at(dm)[0]
         how = (f"parallax S/N {snr:.1f} < {MIN_PLX_SNR:g}: delta Scuti P-L relation M_V = -2.94 log P - 1.34 = {m_v:.2f} "
                f"(Ziaali et al. 2019, fundamental mode); V = G - ({g_v:+.3f}) from BP-RP {bp_rp:.2f} (Riello et al. 2021), "
-               f"A_V = 3.1 E(B-V) -> {10 ** (dm / 5 + 1) / 1000:.2f} kpc")
+               f"A_V = 3.1 E(B-V) at that distance -> {10 ** (dm / 5 + 1) / 1000:.2f} kpc")
     else:
         m_g = 0.32 * mh + 1.11
-        dm = row["G_mean"] - m_g - 2.74 * ebv
+        dm = 99.0  # as for HADS: iterate the distance and the dust in front of it
+        for _ in range(5):
+            dm = row["G_mean"] - m_g - dust_at(dm)[1]
         how = (f"parallax S/N {snr:.1f} < {MIN_PLX_SNR:g}: M_G = 0.32 [Fe/H] + 1.11 = {m_g:.2f} (Garofalo et al. 2022), "
-               f"A_G = 2.74 E(B-V) -> {10 ** (dm / 5 + 1) / 1000:.2f} kpc")
+               f"A_G at that distance -> {10 ** (dm / 5 + 1) / 1000:.2f} kpc")
+    d_pc = 10 ** (dm / 5 + 1)
+    ebv, ebv_note = sightline(star_ra, star_dec, d_pc)
+    a_G = extinction_G(row["G_mean"], colour, ebv)
     z = Z_SUN * 10 ** mh
     if row["kind"].startswith("DCEP"):
         x = 0.73
         y = 1.0 - x - z
-        log_l = (4.74 - (row["G_mean"] - dm - 2.74 * ebv)) / 2.5
+        log_l = (4.74 - (row["G_mean"] - dm - a_G)) / 2.5
         mass = 10 ** ((log_l - 0.72 - 1.36 * np.log10(y / 0.28) + 0.34 * np.log10(z / 0.02)) / 3.35)
         mass_note = (f"canonical mass-luminosity relation (Bono et al. 2000b; Caputo et al. 2005 eq. 2) at log L = "
-                     f"{log_l:.2f} (G, distance, A_G = 2.74 E(B-V), BC_G = 0), Y = {y:.3f}; overshooting would give "
+                     f"{log_l:.2f} (G, distance, A_G {a_G:.3f}, BC_G = 0), Y = {y:.3f}; overshooting would give "
                      f"~0.2 dex brighter at fixed mass")
     elif cepheid:
         x, mass, mass_note = 0.76, 0.55, "assumed: 0.55 Msun as MESA's rsp_Type_II_Cepheid"
@@ -281,8 +328,8 @@ def physical(row, stars, ra, dec):
         notes_extra["convection"] = ("RADIATIVE MODEL: convection off (RSP_alfa = 0). With RSP's turbulent convection "
                                      "HADS modes are only neutrally stable; the radiative model pulsates, but its amplitude "
                                      "is not limited by convection (less physical than the RR Lyrae / Cepheid models)")
-    return dict(dm=round(float(dm), 3), ebv=round(ebv, 4), z=round(z, 6), x=x, mass=round(float(mass), 3),
-                kap="a09" if mh < -1.0 else "gs98",
-                notes=dict(distance=how, ebv="Schlafly & Finkbeiner (2011), IRSA",
+    return dict(dm=round(float(dm), 3), ebv=round(ebv, 4), A_G=round(a_G, 4), distance_pc=round(float(d_pc), 1),
+                z=round(z, 6), x=x, mass=round(float(mass), 3), kap="a09" if mh < -1.0 else "gs98",
+                notes=dict(distance=how, ebv=f"{ebv_note}; A_G {a_G:.3f} (CCM89 through the star's MESA template)",
                            z=f"{mh_note} -> Z = {Z_SUN} x 10^[M/H]; X = {x}", mass=mass_note,
                            opacities="alpha-enhanced (a09)" if mh < -1.0 else "solar-scaled (gs98)", **notes_extra)), ""

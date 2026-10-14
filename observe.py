@@ -16,8 +16,8 @@ Stars must be built first (make_stars.py); an observation only names them. The o
     [measure]  how the exposures are measured (SExtractor settings)
     [output]   movie, bands, FITS, page; noise seed, stride, PSF and kernel options
 
-Everything about observing is added here: the pointing, the night (ArgusSim's schedule), the Milky Way dust (SFD
-E(B-V) at the pointing; a real star keeps its own sightline's), positions and timing. night_movie.py then simulates and
+Everything about observing is added here: the pointing, the night (ArgusSim's schedule), the Milky Way dust (the 3D map
+at each star's distance along its sightline, mesa_argus/dust.py), positions and timing. night_movie.py then simulates and
 measures the exposures from outputs/<name>/scene/.
 
 Outputs in outputs/<name>/: <name>_night_<band>.mp4 and .photometry.csv, fits/, observation.toml (the resolved file:
@@ -37,7 +37,7 @@ REPO = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO))
 STARS = REPO / "stars"
 
-from mesa_argus import runconfig  # noqa: E402
+from mesa_argus import dust, runconfig  # noqa: E402
 
 
 def read_observation():
@@ -93,57 +93,81 @@ def choose_night(f, n, window, real_stars, site, max_airmass):
 
 
 def write_background(scene_dir, s, star_set, ra, dec, rng):
-    """The background stars into the scene: the set's catalogue as it is (real), or its stars at random positions
-    within 0.12 deg of the pointing (synthetic). Returns a line for the summary."""
+    """The background stars into the scene: the set's catalogue at the stars' real positions, or at random positions
+    within 0.12 deg of the pointing (synthetic). Each star gets its distance and two E(B-V): in front of it where Gaia
+    measured it (ebv_own), and where it is observed (ebv); the engine takes the first out and puts the second in.
+    Returns a line for the summary."""
     import astropy.units as u
     from astropy.coordinates import SkyCoord
     from astropy.table import Table
 
-    from mesa_argus.gaia import RADIUS_DEG
+    from mesa_argus.gaia import RADIUS_DEG, col, distances
 
     catalogue = STARS / s["background"] / "catalogue"
+    gaia_stars = Table.read(catalogue / "gaia_dr3_core.ecsv")
+    n = len(gaia_stars)
+    distance, how = distances(catalogue, gaia_stars["Source"])
+    real_ra, real_dec = col(gaia_stars, "RA_ICRS"), col(gaia_stars, "DE_ICRS")
+    ebv_own, which = dust.ebv(real_ra, real_dec, distance)
+    counts = (f"distances: {int(np.sum(how == 'Bailer-Jones'))} Bailer-Jones, {int(np.sum(how == 'GSP-Phot'))} GSP-Phot, "
+              f"{int(np.sum(how == 'none'))} none (the whole column); dust from {'Bayestar19' if (which == 'bayestar19').all() else 'Bayestar19 and SFD'}")
     if s["layout"] == "real":
         offset = SkyCoord(ra * u.deg, dec * u.deg).separation(SkyCoord(*star_set["centre"], unit="deg")).deg
         if offset > 0.02:  # real positions only make sense at the set's own pointing
             raise SystemExit(f"background {s['background']} is centred {offset:.3f} deg from the pointing")
         for f in catalogue.glob("*.ecsv"):
             shutil.copy(f, scene_dir / f.name)
+        gaia_stars["distance_pc"], gaia_stars["ebv_own"], gaia_stars["ebv"] = distance, ebv_own, ebv_own
+        gaia_stars.write(scene_dir / "gaia_dr3_core.ecsv", overwrite=True)
         return (f"Background: `{s['background']}` ({star_set['params']}), at the stars' real positions; each constant at "
-                "its Gaia G and colour (colour-matched MESA SED).")
-    gaia_stars = Table.read(catalogue / "gaia_dr3_core.ecsv")
-    n = len(gaia_stars)
+                f"its Gaia G and colour (colour-matched MESA SED through the dust in front of it: {counts}).")
     radius, angle = RADIUS_DEG * np.sqrt(rng.random(n)), 2 * np.pi * rng.random(n)  # uniform over the circle
     pos = SkyCoord(ra * u.deg, dec * u.deg).spherical_offsets_by(radius * np.cos(angle) * u.deg,
                                                                  radius * np.sin(angle) * u.deg)
     synthetic = Table({"Source": np.arange(1, n + 1), "RA_ICRS": pos.ra.deg, "DE_ICRS": pos.dec.deg})
     for column in ("Gmag", "BPmag", "RPmag", "BP-RP"):
         synthetic[column] = gaia_stars[column]
+    synthetic["distance_pc"], synthetic["ebv_own"] = distance, ebv_own
+    synthetic["ebv"] = dust.ebv(pos.ra.deg, pos.dec.deg, distance)[0]
     synthetic.meta.update(dict(synthetic=True, parent=f"star set {s['background']}", seed=s["seed"],
-                               note="Gaia G, BP, RP of every source; positions uniform at random around the pointing"))
+                               note="Gaia G, BP, RP of every source (as Gaia measured them, through ebv_own); positions "
+                                    "uniform at random around the pointing, seen through ebv (the engine re-reddens)"))
     synthetic.write(scene_dir / "synthetic_stars.ecsv", overwrite=True)
-    return (f"Background: `{s['background']}` ({star_set['params']}): its {n} stars' G and colours at positions drawn "
-            f"uniformly at random within {RADIUS_DEG} deg of the pointing (seed {s['seed']}); every star constant.")
+    return (f"Background: `{s['background']}` ({star_set['params']}): its {n} stars at positions drawn uniformly at "
+            f"random within {RADIUS_DEG} deg of the pointing (seed {s['seed']}), at their own distances, each seen through "
+            f"the dust in front of it there ({counts}); every star constant.")
 
 
 def catalogue_entry(sed_file, ebv):
-    """Intensity-mean Gaia G, BP-RP and G amplitude of a periodic model through the field's dust: what a catalogue would
+    """Intensity-mean Gaia G, BP-RP and G amplitude of a periodic model through its dust: what a catalogue would
     list for it (the movie calibrates against these, as for a Gaia star)."""
     import h5py
 
     from mesa_argus.binary import vega_mag
-    from mesa_argus.dust import redden
 
     with h5py.File(sed_file) as h:
         wave, flux_10pc, t, dm = h["wavelength"][:], h["flux"][:], h["time_days"][:], float(h.attrs["distance_modulus"])
-    seen = redden(wave, flux_10pc * 10 ** (-0.4 * dm), ebv)
+    seen = dust.redden(wave, flux_10pc * 10 ** (-0.4 * dm), ebv)
     weight = np.gradient(t)  # the samples need not be evenly spaced in time
     mags = {band: np.array([vega_mag(wave, f, band) for f in seen]) for band in ("G", "Gbp", "Grp")}
     mean = {band: -2.5 * np.log10(np.sum(weight * 10 ** (-0.4 * m)) / np.sum(weight)) for band, m in mags.items()}
     return float(mean["G"]), float(mean["Gbp"] - mean["Grp"]), float(np.ptp(mags["G"]))
 
 
-def place_stars(placements, scene_dir, ebv, night_info, half_width, rng):
-    """One row per placed star for the engine (sources.json): its SED file, position, timing and dust; and the
+def placed_distance(folder, meta):
+    """A placed star's distance (pc): a periodic model's, from its file; a transient's if it has one (a dwarf nova);
+    none for a supernova or a microlensing source (they sit behind all the dust)."""
+    import h5py
+
+    if meta["timing"] == "periodic":
+        with h5py.File(folder / "sed.h5") as h:
+            return 10 ** (float(h.attrs["distance_modulus"]) / 5 + 1)
+    return meta.get("distance_pc", meta.get("d_pc"))
+
+
+def place_stars(placements, scene_dir, night_info, half_width, rng):
+    """One row per placed star for the engine (sources.json): its SED file, position, timing and dust (the 3D map at
+    its distance on the pointing's sightline; a real star, at its own position and distance); and the
     ephemerides of real HADS / binaries, which the Gaia SOS tables do not hold (extra_pulsators.json)."""
     import h5py
     from astropy.table import Table
@@ -176,7 +200,10 @@ def place_stars(placements, scene_dir, ebv, night_info, half_width, rng):
         count[timing] += 1
         label = ("T" if timing == "transient" else "P") + str(count[timing])
         dx, dy = (x / 100 - 0.5) * 2 * half_width, (y / 100 - 0.5) * 2 * half_width  # arcsec from the block centre
-        row.update(label=label, source=-i, x_percent=x, y_percent=y, dx=float(dx), dy=float(dy), ebv=ebv)
+        distance = placed_distance(folder, meta)
+        ebv = float(dust.ebv(ra, dec, distance)[0][0])
+        row.update(label=label, source=-i, x_percent=x, y_percent=y, dx=float(dx), dy=float(dy), ebv=ebv,
+                   distance_pc=float(distance) if distance else None)
         if timing == "transient":
             with h5py.File(folder / "sed.h5") as h:
                 first, last = float(h["time_days"][0]), float(h["time_days"][-1])
@@ -227,8 +254,6 @@ def main():
 
     import night_movie
     from mesa_argus import night
-    from mesa_argus.gaia import reddening
-
     obs, scene_only = read_observation()
     os.chdir(REPO)
     f, n, s = obs["field"], obs["night"], obs["stars"]
@@ -261,11 +286,11 @@ def main():
     tile_id, minipix = skymap_shim.radec_to_composite_id(np.array([ra]), np.array([dec]))
     tile, block = int(tile_id[0]), (int(minipix[0]) % 64, int(minipix[0]) // 64)
     night_movie.set_block(f["block"])
-    ebv = reddening(ra, dec)  # SFD E(B-V) at the pointing
+    ebv = float(dust.ebv(ra, dec)[0][0])  # the whole column at the pointing (for the summary)
     rng = np.random.default_rng(s["seed"])  # background positions first, then any random placements
     background_note = write_background(scene_dir, s, star_set, ra, dec, rng)
     night_info = (start, night_start_bjd, night_end_bjd, ra, dec, site)
-    rows, extra = place_stars(placements, scene_dir, ebv, night_info, night_movie.HALF, rng)
+    rows, extra = place_stars(placements, scene_dir, night_info, night_movie.HALF, rng)
     (scene_dir / "sources.json").write_text(json.dumps(rows, indent=1, default=float))
     (scene_dir / "extra_pulsators.json").write_text(json.dumps(extra, indent=1))
     field_json = dict(name="field" if s["layout"] == "real" else f"synthetic, seed {s['seed']}", centre=[ra, dec],
@@ -278,14 +303,16 @@ def main():
     resolved.write_text(runconfig.dumps(obs, f"observe.py: {name}, resolved (python observe.py "
                                              f"{resolved.relative_to(REPO)} makes it again)"))
     summary = [f"# {name}", "", f"RA {ra:.5f}, Dec {dec:+.5f}; night of {n['date']}; site {n['site']}; UT window "
-               f"{window[0] or 'dusk'}-{window[1] or 'dawn'}; Milky Way E(B-V) {ebv:.3f} (SFD at the pointing)", "",
+               f"{window[0] or 'dusk'}-{window[1] or 'dawn'}; Milky Way E(B-V) {ebv:.3f} (the whole column at the pointing; each "
+               "star sees the 3D map's dust in front of it, mesa_argus/dust.py)", "",
                background_note, "", "## Stars placed", ""]
     for r in rows:
         if r.get("real"):
-            where = f"at its real position, own ephemeris and sightline E(B-V) {r['ebv']}"
+            where = f"at its real position, own ephemeris and E(B-V) {r['ebv']:.3f} in front of it"
         else:
             when = f"t0 BJD {r['t0_bjd']:.5f}" if r["timing"] == "transient" else f"epoch BJD {r['epoch_bjd']:.5f}"
-            where = f"at {r['x_percent']:.1f}%, {r['y_percent']:.1f}% of the image; {when}"
+            far = f"{r['distance_pc']:.0f} pc" if r.get("distance_pc") else "behind all the dust"
+            where = f"at {r['x_percent']:.1f}%, {r['y_percent']:.1f}% of the image; {when}; E(B-V) {r['ebv']:.3f} ({far})"
         summary.append(f"- **{r['label'] or 'V'}** `{r['star']}`: {r['kind']} ({r['generator']}; {r['engine']}), {where}")
     summary += ["", "What each star is: stars/<name>/summary.md. Instrument, PSF, sky, noise, photometry: docs/ASSUMPTIONS.md."]
     (out / "summary.md").write_text("\n".join(summary) + "\n")

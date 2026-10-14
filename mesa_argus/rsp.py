@@ -153,8 +153,8 @@ def luminosity(target):
     (make_stars.py) may give L itself."""
     if "L" in target:
         return float(target["L"])
-    if "dm" in target:
-        return m_bol_to_lsun(target["G_mean"] - target["dm"] - A_G_PER_EBV * target["ebv"])
+    if "dm" in target:  # A_G: the star's own (mesa_argus/gaia.py physical()); older targets 2.74 E(B-V)
+        return m_bol_to_lsun(target["G_mean"] - target["dm"] - target.get("A_G", A_G_PER_EBV * target["ebv"]))
     if target["kind"].startswith("RR"):
         rr = Table.read(C.DATA / CLUSTER / "gaia_rrlyrae.ecsv")
         col = rr["Gmagavg"]

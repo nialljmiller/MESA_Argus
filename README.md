@@ -13,7 +13,8 @@ Both use the same MESA install and the same Argus throughputs, from ArgusSim.
 ## Setup
 
 Requirements: a working MESA install with `$MESA_DIR` set and its colors data, ArgusSim installed in the same
-Python (≥ 3.11), and `pip install -r requirements.txt`. The movies also need `ffmpeg`.
+Python (≥ 3.11), and `pip install -r requirements.txt`. The movies also need `ffmpeg`, and the dust maps
+`bash tools/fetch_dust.sh` (once per machine).
 
 ```bash
 $EDITOR config.toml               # machine settings: colors-data path, parallelism (usually only the path)
@@ -139,9 +140,11 @@ checked before any work starts. Outputs, in `outputs/<name>/` (`<name>`: `[field
 - `observation.toml`: the observation as made (every key, the night as used); running it makes the same data.
 - `summary.md`; `scene/`: exactly what the engine (`night_movie.py`) read.
 
-The dust is added here: SFD E(B−V) at the pointing for every placed star (a real Gaia star keeps its own sightline's).
-Network: Gaia queries the first time a pointing is used (then cached in `data/gaia/`), and the SFD dust map (IRSA)
-for each observation.
+The dust is added here: for every star, the E(B−V) in front of it at its distance along its sightline (the Bayestar19
+3D map, capped at SFD's whole column; `mesa_argus/dust.py`, docs/ASSUMPTIONS.md). Gaia's constant stars have their
+own measured dust taken out first with the same law. Network: Gaia queries the first time a pointing is used (then
+cached in `data/gaia/`). The dust maps are local: `bash tools/fetch_dust.sh` once per machine (~860 MB, into
+`~/dustmaps_data`).
 
 ### Real fields
 
@@ -151,11 +154,12 @@ python make_stars.py my_field.toml        # the field's stars as a set + each va
 python observe.py my_obs.toml             # layout "real"; each real variable placed by name only; date "auto"
 ```
 
-A real star (generator `Gaia variable`) is modelled from Gaia DR3: its period and ephemeris, distance, the E(B−V)
-along its sightline (used only to infer its luminosity), composition and mass, then MESA RSP or PHOEBE fitted to
-Gaia's eclipses. Its SEDs are dust-free like every star's; an observation puts it at its real position and
-ephemeris, seen through its own sightline's dust. Gaia's catalogue magnitudes already include each star's dust, so a
-Gaia field set's constant stars are used as measured. Gaia queries are cached in `data/gaia/<pointing>/`.
+A real star (generator `Gaia variable`) is modelled from Gaia DR3: its period and ephemeris, distance, the E(B−V) in
+front of it at that distance (used only to infer its luminosity), composition and mass, then MESA RSP or PHOEBE
+fitted to Gaia's eclipses. Its SEDs are dust-free like every star's; an observation puts it at its real position and
+ephemeris, seen through the same dust. A Gaia field set's constant stars carry their distances (Bailer-Jones et al.
+2021; GSP-Phot where they have none); an observation takes each one's measured dust out and puts the dust where it is
+observed back in. Gaia queries are cached in `data/gaia/<pointing>/`.
 
 ### Generators
 
@@ -292,7 +296,7 @@ night_movie.py          the engine observe.py runs: simulate and measure the exp
 plot_sed_observation.py one SED or one MESA track through Argus
 mesa_argus/             the Python package (python -m mesa_argus ...)
   argus.py                Argus bands, units and plot style shared by the movies
-  dust.py                 CCM89 extinction
+  dust.py                 dust: the 3D map (Bayestar19, SFD), CCM89, dereddening Gaia stars
   photometry.py           SExtractor (SEP) photometry and per-exposure calibration
   rsp.py                  MESA RSP pulsator models
   binary.py               PHOEBE eclipsing-binary models

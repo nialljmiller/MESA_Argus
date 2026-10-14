@@ -72,13 +72,22 @@ Items 1–5 are conditions ArgusSim's own survey simulation draws (Survey, Forwa
 ## 4. Astrophysics: modelled vs assumed
 
 Every source is an SED; ArgusSim turns it into electrons in each band at each exposure's airmass. Milky Way dust is
-CCM89 (`mesa_argus/dust.py`), added at observation: the SFD E(B−V) at the pointing for every placed star, and for a
-real Gaia variable the E(B−V) of its own sightline.
+CCM89 (R_V = 3.1; `mesa_argus/dust.py`), added at observation, with E(B−V) the dust in front of each star: Bayestar19
+(Green et al. 2019) at the star's distance along its sightline, never more than SFD's whole column (beyond a
+sightline's reliable distances Bayestar19 follows its prior); SFD where Bayestar19 has no data (dec < −30°) or the star
+has no distance (supernovae, microlensing sources: behind all the dust). E(B−V) = 0.884 × the map value (both maps are
+in SFD units; with CCM89 this gives Schlafly & Finkbeiner's 2011 A_V = 2.742 per SFD unit). Distances: real stars,
+Bailer-Jones et al. (2021) geometric, else Gaia GSP-Phot, else none (the whole column); Gaia variables, their own
+(parallax or period-luminosity, iterated with the dust); placed periodic stars and dwarf novae, their model's.
 
-- **Constant stars.** Brightness: Gaia DR3 G. SED: the MESA SED (the `argus_sim_seds` tracks: 0.8 M☉ [M/H] = −2;
-  1, 3, 5 and 10 M☉ solar) whose Gaia BP−RP is closest, scaled to G. Only colour is matched (not gravity, metallicity
-  or mass). Their fluxes include reddening through their observed Gaia magnitudes. Sources with no or blended BP−RP
-  take a median colour.
+- **Constant stars.** Gaia DR3 measured each through the dust in front of it; that dust is taken out with the same
+  law: the MESA SED (the `argus_sim_seds` tracks: 0.8 M☉ [M/H] = −2; 1, 3, 5 and 10 M☉ solar) whose BP−RP, seen
+  through that E(B−V), is the measured one gives the intrinsic colour, and its A_G the dust-free G. At observation that
+  SED, scaled to the dust-free G, is seen through the dust where the star is observed: at its real position, exactly as
+  Gaia measured it; in a synthetic field, through the new sightline. Only colour is matched (not gravity, metallicity
+  or mass). Above E(B−V) ≈ 0.9 neighbouring templates of other metallicities redden slightly differently (≤ 0.05 mag
+  in BP−RP at E(B−V) = 4); the inversion uses their running maximum. Sources with no or blended BP−RP take a median
+  colour.
 - **Pulsators** (`mesa_argus/rsp.py`): MESA RSP models whose linear period of the star's own mode is tuned to the
   Gaia (or ASAS-SN) period, run to the limit cycle, then one cycle with an SED every ≤ 25 s from MESA's colors module.
   Placed on the night with the catalogue period and epoch, so the timing of each maximum is a prediction with the
@@ -106,9 +115,9 @@ real Gaia variable the E(B−V) of its own sightline.
 - **Variables not modelled** (held constant at their Gaia mean): double-mode pulsators, non-radial pulsators,
   long-period, rotational, eruptive and stochastic variables, and any star whose model failed to reproduce its
   catalogue period or eclipses. `make_stars.py --gaia-list RA DEC` gives the reason per star.
-- **Synthetic fields** (`[stars] layout = "random"`): the G, BP and RP of every star of a Gaia field set, placed
-  uniformly at random within 0.12 deg of the pointing; every star constant; the pointing's night, sky and
-  reddening.
+- **Synthetic fields** (`[stars] layout = "random"`): every star of a Gaia field set, placed uniformly at random
+  within 0.12 deg of the pointing at its own distance, its own dust taken out and the dust in front of it at the new
+  position put in; every star constant; the pointing's night and sky.
 - **Positions.** Gaia DR3 (fine for one night). Gaia misses faint stars in crowded fields, so unresolved light is
   underestimated there.
 

@@ -191,7 +191,8 @@ def load_scene():
         if any(v["timing"] == "periodic" for v in placed):  # periodic: the catalogue G and colour of its mean; transient: none
             extra["Gmag"] = [v.get("G", np.nan) for v in placed]
             extra["BP-RP"] = [v.get("bp_rp", np.nan) for v in placed]
-        stars = vstack([stars[["Source", "RA_ICRS", "DE_ICRS", "Gmag", "BP-RP"]], extra])
+        keep = [c for c in ("Source", "RA_ICRS", "DE_ICRS", "Gmag", "BP-RP", "distance_pc", "ebv_own", "ebv") if c in stars.colnames]
+        stars = vstack([stars[keep], extra])
     dx, dy = block_offsets(column(stars, "RA_ICRS"), column(stars, "DE_ICRS"))
     if placed:
         dx[-len(placed):] = [v["dx"] for v in placed]
@@ -514,8 +515,12 @@ def difference_image(image, image_sat, reference, reference_sat, readnoise, half
 
 # ---------------------------------------------------------------- the steps of main
 def constant_star_rates(stars, pulsators, ab):
-    """Every star as a constant: the MESA template SED matched to its BP-RP, scaled to its G. Returns electrons/s on
-    AIRMASS_GRID and above-atmosphere magnitudes, per band; the templates; each star's colour as used."""
+    """Every star as a constant. Its Gaia G and BP-RP were measured through the dust in front of it (column ebv_own):
+    that dust is taken out (mesa_argus.dust.deredden: the MESA template whose reddened colour is the measured one, and
+    the dust-free G), and the dust where it is observed (column ebv) put back into the template's SED (CCM89). At its
+    real position the two are the same, and the star is as Gaia measured it; scattered (a synthetic field), its G and
+    BP-RP become those seen through the new sightline. Returns electrons/s on AIRMASS_GRID and above-atmosphere
+    magnitudes, per band; the templates; each star's colour as measured (filled where Gaia has none)."""
     templates = Templates()
     G = column(stars, "Gmag")
     colour = column(stars, "BP-RP")
@@ -543,18 +548,42 @@ def constant_star_rates(stars, pulsators, ab):
             low, high, typical = 0.3, 1.3, 0.7
         colour[k] = mean_colour if np.isfinite(mean_colour) and low <= mean_colour <= high else typical
     print(f"{int(missing.sum())} sources without usable BP-RP take the median colour, at their G, of stars > 2.5' from the centre")
+
+    # the dust: in front of the star where Gaia measured it, and where it is observed (none in hand-made fields)
+    ebv_own = np.nan_to_num(column(stars, "ebv_own")) if "ebv_own" in stars.colnames else np.zeros(len(stars))
+    ebv = np.nan_to_num(column(stars, "ebv")) if "ebv" in stars.colnames else np.zeros(len(stars))
+    intrinsic, G0 = colour.copy(), G.copy()
+    dusty = ebv_own > 0
+    intrinsic[dusty], G0[dusty] = dust.deredden(G[dusty], colour[dusty], ebv_own[dusty])
+    moved = ebv != ebv_own  # a synthetic field: seen through other dust than Gaia saw it through
+    if moved.any():
+        seen_G, seen_colour = dust.redden_gaia(G0[moved], intrinsic[moved], ebv[moved])
+        stars["Gmag"][moved], stars["BP-RP"][moved] = seen_G, seen_colour
+    print(f"dust: E(B-V) {np.min(ebv):.3f}-{np.max(ebv):.3f} where observed (median {np.median(ebv):.3f}); "
+          f"{int(moved.sum())} stars seen through other dust than Gaia saw them through", flush=True)
+
     print("ArgusSim photometry of every star …", flush=True)
     rate = {b: np.zeros((len(stars), len(AIRMASS_GRID))) for b in BANDS}
     mag = {b: np.zeros(len(stars)) for b in BANDS}
-    template = np.array([templates.index(c) for c in colour])
-    scale = 10 ** (-0.4 * (G - templates.g[template]))
-    for t in np.unique(template):  # ArgusSim once per template, then scaled to each star
-        sed = templates.flux[t] * FLAM
+    template = np.array([templates.index(c) for c in intrinsic])
+    scale = 10 ** (-0.4 * (G0 - templates.g[template]))
+    step = 0.05  # ArgusSim once per template at E(B-V) on this grid, linear in between (in magnitudes)
+    for t in np.unique(template):
         these = template == t
+        e = ebv[these]
+        nodes = np.arange(np.floor(e.min() / step), np.ceil(e.max() / step) + 0.5) * step  # covers every star's E(B-V)
         for b, band in BANDS.items():
-            rate[b][these] = np.outer(scale[these], [ab.electrons_from_sed(band, templates.wave, sed, airmass=x).value
-                                                     for x in AIRMASS_GRID])
-            mag[b][these] = float(ab.mag_from_sed(band, templates.wave, sed)) - 2.5 * np.log10(scale[these])
+            node_mag = np.array([float(ab.mag_from_sed(band, templates.wave, dust.redden(templates.wave.value, templates.flux[t], x) * FLAM))
+                                 for x in nodes])
+            node_rate = np.array([[ab.electrons_from_sed(band, templates.wave, dust.redden(templates.wave.value, templates.flux[t], x) * FLAM,
+                                                         airmass=a).value for a in AIRMASS_GRID] for x in nodes])
+            if len(nodes) == 1:
+                rate[b][these] = np.outer(scale[these], node_rate[0])
+                mag[b][these] = node_mag[0] - 2.5 * np.log10(scale[these])
+                continue
+            log_rate = np.array([np.interp(e, nodes, np.log(node_rate[:, i])) for i in range(len(AIRMASS_GRID))]).T
+            rate[b][these] = scale[these, None] * np.exp(log_rate)
+            mag[b][these] = np.interp(e, nodes, node_mag) - 2.5 * np.log10(scale[these])
     return rate, mag, templates, colour
 
 
@@ -736,6 +765,7 @@ def main(argv=None):
 
     # 3. constant stars
     static_rate, static_mag, templates, _ = constant_star_rates(stars, pulsators, ab)
+    G = column(stars, "Gmag")  # as seen where observed (a synthetic field: through its own sightline)
 
     # 4. followed stars: real variables and placed stars from their model files, with the observation's dust
     from mesa_argus import rsp

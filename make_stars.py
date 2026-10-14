@@ -4,7 +4,7 @@
     python make_stars.py examples/stars/variables.toml                  # build every star in the file
     python make_stars.py examples/stars/f294_field.toml examples/stars/transients.toml   # several files
     python make_stars.py examples/stars/variables.toml --only wuma_035
-    python make_stars.py examples/stars/variables.toml --rebuild wuma_035  # after changing its definition
+    python make_stars.py examples/stars/variables.toml --rebuild wuma_035  # build again (e.g. after changing its definition)
     python make_stars.py --gaia-list 294.7844 -11.6235 --write my_field.toml --write-observation my_obs.toml
     python make_stars.py --gaia-list 294.78 -11.62 --gaia-list 273.04 -20.71 --write s.toml --write-batch b.toml
     python make_stars.py --list                                          # every built star
@@ -98,7 +98,7 @@ def build(paths, only, rebuild):
         name = definition["name"]
         if only and name not in only:
             continue
-        if is_built(kind, definition):
+        if is_built(kind, definition) and name not in rebuild:
             print(f"  {name}: built already")
             continue
         if (STARS / name / "star.toml").exists() and name not in rebuild:
