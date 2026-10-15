@@ -213,6 +213,13 @@ def show(rows, block_n=3):
         print(f"  {i:>2}  {r['source']:>19}  {r['kind']:<17} {r['G']:6.2f} {amp:>7} {per:>9}  {r['model'] or r['why']}")
 
 
+def rr_lyrae_recipe(mh):
+    """An RR Lyrae's dust-free M_G (Garofalo et al. 2022), mass (assumed from [M/H]: 0.75 at -2.1, 0.68 at -1.5, 0.55 at
+    0.0), X, Z and opacities from its [M/H]."""
+    return dict(M_G=0.32 * mh + 1.11, mass=float(np.interp(mh, [-2.1, -1.5, 0.0], [0.75, 0.68, 0.55])), x=0.75,
+                z=Z_SUN * 10 ** mh, kap="a09" if mh < -1.0 else "gs98")
+
+
 def physical(row, stars, ra, dec):
     """The star's own distance, reddening (the 3D map at that distance), composition and mass, with where each came
     from (None if it cannot be modelled, with the reason)."""
@@ -284,7 +291,7 @@ def physical(row, stars, ra, dec):
                f"(Ziaali et al. 2019, fundamental mode); V = G - ({g_v:+.3f}) from BP-RP {bp_rp:.2f} (Riello et al. 2021), "
                f"A_V = 3.1 E(B-V) at that distance -> {10 ** (dm / 5 + 1) / 1000:.2f} kpc")
     else:
-        m_g = 0.32 * mh + 1.11
+        m_g = rr_lyrae_recipe(mh)["M_G"]
         dm = 99.0  # as for HADS: iterate the distance and the dust in front of it
         for _ in range(5):
             dm = row["G_mean"] - m_g - dust_at(dm)[1]
@@ -321,7 +328,7 @@ def physical(row, stars, ra, dec):
         else:
             return None, "no Gaia DR3 FLAME mass or GSP-Phot Teff"
     else:
-        x, mass = 0.75, float(np.interp(mh, [-2.1, -1.5, 0.0], [0.75, 0.68, 0.55]))
+        x, mass = rr_lyrae_recipe(mh)["x"], rr_lyrae_recipe(mh)["mass"]
         mass_note = "assumed from [M/H] (0.75 at -2.1, 0.68 at -1.5, 0.55 at 0.0)"
     notes_extra = {}
     if hads:

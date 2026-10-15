@@ -25,3 +25,7 @@ demo/argus_demo.html
 
 # built stars (make_stars.py): rebuilt from the star files
 /stars/
+
+# newton job queue (tools/newton_queue.sh) and the Gaia catalogues the library grid is drawn from
+/queue/
+data/library/
