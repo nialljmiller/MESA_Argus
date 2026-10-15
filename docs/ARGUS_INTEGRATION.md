@@ -9,9 +9,11 @@ Clones of the other repos: `~/argus_repos/` (synthref, hdps, argus_alert_sim). A
 ## Checklist
 
 ### argus_alert_sim (Hank's simulated alert stream; uses MESA_Argus through `plugins/mesa_argus`)
-- [ ] Update the plugin to current MESA_Argus (PR; see the log). It pinned MESA_Argus at 12031c7 and called
-      `sources.get`, `sources.validate`, `sources.Field` and the `GRB` generator, none of which exist now.
-- [ ] Decide what happens to `GRB_AFTERGLOW` (the GRB generator was removed from MESA_Argus).
+- [x] Update the plugin to current MESA_Argus: PR https://github.com/argus-hdps/argus_alert_sim/pull/1 (open).
+      It pinned MESA_Argus at 12031c7 and called `sources.get`, `sources.validate`, `sources.Field` and the `GRB`
+      generator, none of which exist now.
+- [x] `GRB_AFTERGLOW` dropped from the plugin; the forecast's ORPHAN_AFTERGLOW has no model for now.
+- [ ] Re-add the GRB afterglow to MESA_Argus's transient models, then register it in the plugin again.
 - [ ] Follow-ups: microlensing and supernova classes; one image/stamp implementation instead of two
       (`argus_alert_sim/stamps.py` is a port of `night_movie.Scene` and `difference_image`); CV_OUTBURSTS uses
       E(B-V) 0 (MESA_Argus files now record `distance_pc`, so sightline dust could be applied); `PeriodicCurve`
@@ -56,3 +58,5 @@ Each of these changes measurements: decide one at a time.
   CV_OUTBURSTS; `aas check` not run (needs Hank's visit store). Library loads 49 templates from `stars/`, 31 from
   `runs/`. Waiting on: port the GRB afterglow into argus_alert_sim, or leave ORPHAN_AFTERGLOW without a class.
   Also fixed: the README's separate plugin install fails in uv; installing both packages in one command works.
+- 2026-10-15: PR argus-hdps/argus_alert_sim#1 opened (branch `mesa-argus-current`). User's call: drop
+  GRB_AFTERGLOW and leave the gap; the afterglow comes back later in MESA_Argus's transients.
