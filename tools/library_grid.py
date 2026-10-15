@@ -8,7 +8,9 @@ RR Lyrae: Gaia DR3's RR Lyrae (vari_rrlyrae, I/358/vrrlyr) with a photometric [M
 tolerance a model's period may differ from a star's) and [M/H] (0.25 dex), RRab (fundamental period only) and RRc
 (first overtone only) apart; double-mode stars are left out. One model per cell with at least --min-stars stars, at
 the cell's centre, with L, mass, X, Z and opacities from the recipe the Gaia variables use (gaia.rr_lyrae_recipe).
-Cells are written most-populated first, so the stars most needed are built first.
+A pilot (queue/rr_lyrae_000.toml) comes first: for each mode the cells nearest the corners, edge middles and centre of
+the grid in period and [M/H], so failures anywhere in the grid show early. Then the rest, most-populated first, so the
+stars most needed are built first.
 
 Library stars are intrinsic: their distance is a label (10 pc); an observation gives them a distance and dust.
 """
@@ -63,6 +65,29 @@ def rr_lyrae_grid(min_stars):
     return sorted(cells, key=lambda c: -c[0])
 
 
+def pilot(cells):
+    """For each mode, the cells nearest the 9 points (2%, 50%, 98% quantiles of log period) x (same of [M/H])."""
+    chosen = []
+    for mode in ("RRab", "RRc"):
+        mine = [c for c in cells if c[1] == mode]
+        log_p, mh = np.log([c[2] for c in mine]), np.array([c[3] for c in mine])
+        for qp in (2, 50, 98):
+            for qm in (2, 50, 98):
+                d = (((log_p - np.percentile(log_p, qp)) / np.ptp(log_p)) ** 2
+                     + ((mh - np.percentile(mh, qm)) / np.ptp(mh)) ** 2)
+                cell = mine[int(np.argmin(d))]
+                if cell not in chosen:
+                    chosen.append(cell)
+    return chosen
+
+
+def write(path, cells, what):
+    lines = [f"# star library: RR Lyrae grid (tools/library_grid.py), {what}; '# n' is the cell's Gaia DR3 star count", ""]
+    for n, mode, period, mh in cells:
+        lines += [f"# n {n}"] + table("[[star]]", rr_lyrae_star(mode, period, mh))
+    path.write_text("\n".join(lines))
+
+
 def rr_lyrae_star(mode, period, mh):
     r = gaia.rr_lyrae_recipe(mh)
     name = f"lib_{mode.lower()}_p{period:.4f}_mh{mh:+.2f}".replace(".", "").replace("+", "p").replace("-", "m")
@@ -85,17 +110,17 @@ def main():
           f"with >= {a.min_stars} Gaia stars each, holding {n_stars} stars")
     for n, mode, period, mh in cells[:10]:
         print(f"  {n:6d}  {mode:4s} P {period:.4f} d  [M/H] {mh:+.2f}")
+    first = pilot(cells)
+    print(f"pilot: {len(first)} cells across the grid: " + ", ".join(f"{m} {p:.3f} d {h:+.2f}" for _, m, p, h in first))
     if a.check:
         return
     a.out.mkdir(parents=True, exist_ok=True)
-    for f in range(0, len(cells), PER_FILE):
-        lines = [f"# star library: RR Lyrae grid (tools/library_grid.py), cells {f + 1}-{min(f + PER_FILE, len(cells))} "
-                 f"of {len(cells)}, most-populated first; '# n' is the cell's Gaia DR3 star count", ""]
-        for n, mode, period, mh in cells[f:f + PER_FILE]:
-            lines += [f"# n {n}"] + table("[[star]]", rr_lyrae_star(mode, period, mh))
-        path = a.out / f"rr_lyrae_{f // PER_FILE + 1:03d}.toml"
-        path.write_text("\n".join(lines))
-    print(f"wrote {(len(cells) + PER_FILE - 1) // PER_FILE} star files to {a.out}")
+    write(a.out / "rr_lyrae_000.toml", first, f"the pilot: {len(first)} cells across the grid")
+    rest = [c for c in cells if c not in first]
+    for f in range(0, len(rest), PER_FILE):
+        write(a.out / f"rr_lyrae_{f // PER_FILE + 1:03d}.toml", rest[f:f + PER_FILE],
+              f"cells {f + 1}-{min(f + PER_FILE, len(rest))} of the {len(rest)} after the pilot, most-populated first")
+    print(f"wrote the pilot and {(len(rest) + PER_FILE - 1) // PER_FILE} star files to {a.out}")
 
 
 if __name__ == "__main__":
