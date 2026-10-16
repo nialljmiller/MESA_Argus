@@ -3,7 +3,7 @@
     python tools/stage_batch.py batches/example_sweep.toml --check     # expand and validate every run; run nothing
     python tools/stage_batch.py batches/example_sweep.toml             # run (detach with nohup / setsid on a node)
     python tools/stage_batch.py batches/example_sweep.toml --status    # progress table
-    python tools/stage_batch.py batches/overnight.toml --jobs 4 --after 12345   # 4 at once, after PID 12345 exits
+    python tools/stage_batch.py batches/example_sweep.toml --jobs 4 --after 12345   # 4 at once, after PID 12345 exits
 
 Observation batches (base: an observation file, observe.py). Each run is the base with one combination of [vary]
 values; it is written out in full as outputs/batch_<batch>/runs/<name>.toml and made with `python observe.py <that

@@ -16,7 +16,7 @@ __pycache__/
 # archived runs/outputs of past experiments (large)
 archive/
 
-# rendered media at the repo root (plot_sed_observation.py output)
+# rendered media at the repo root
 /*.mp4
 /*.png
 

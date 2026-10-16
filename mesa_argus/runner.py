@@ -29,14 +29,14 @@ def render_inlist(track, mag_system="Vega"):
     tpl = (C.INLISTS / "physics.inlist").read_text()
     return tpl.format(
         mass=f"{track['mass']:.5f}d0", z=f"{track['Z']:.6e}", y=f"{track['Y']:.6f}d0",
-        # 10 digits: staged runs stop on windows of ~1e-4 of the age (mesa_argus.m67)
+        # 10 digits: staged runs stop on windows of ~1e-4 of the age
         alpha=f"{track['alpha']:.4f}d0", max_age=f"{track.get('max_age', DEFAULT_MAX_AGE):.10e}",
         history_columns=C.INLISTS / "history_columns.list", instrument=C.INSTRUMENT,
         stellar_atm=C.colors_path("stellar_atm"), vega_sed=C.colors_path("vega_sed"),
         mag_system=mag_system,
         make_csv=".true." if track.get("save_seds") else ".false.",
         extra_controls="".join(f"      {ln}\n" for ln in track.get("extra_controls", [])),
-        # staged runs (mesa_argus.m67): save the final model, or start from a saved one
+        # staged runs: save the final model, or start from a saved one
         create_pms=".false." if track.get("load_model") else ".true.",
         save_model=".true." if track.get("save_model") else ".false.",
         star_job_extra="".join(f"      {ln}\n" for ln in (

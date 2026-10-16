@@ -231,9 +231,7 @@ An observation batch only names stars, so build them first (`example_sweep.toml`
 rerun on its own with `observe.py`; a rerun of the batch skips observations already done.
 
 `make_stars.py --gaia-list RA DEC [--gaia-list RA DEC ...] --write stars.toml --write-batch batch.toml` writes the
-star file and the observation batch for any number of real fields: `batches/overnight.toml` is the 16-field newton
-batch made this way. `tools/find_rich_field.py` searches Gaia for the windows with the most kinds of modellable
-variable.
+star file and the observation batch for any number of real fields.
 
 ### Interactive page
 
@@ -276,15 +274,7 @@ core He depletion or 13.5 Gyr (25 Gyr for the stencils).
 **Caveats.** Scaled-solar models (for α-enhanced halo stars read [M/H] ≈ [Fe/H] + 0.3); no extinction in the Fisher
 analysis; atmospheres outside the grid (Teff < 3500 K giants, hot low-g corners) are clamped by MESA and excluded.
 
-### Looking at one MESA model through Argus
-
-`plot_sed_observation.py` shows one SED (or a whole track as a movie) as an Argus CMD point, light curve, synthetic
-exposure and spectrum:
-
-```bash
-python plot_sed_observation.py runs/<track>/SED/beta_SED_00000010.csv --distance-pc 2000
-python plot_sed_observation.py runs/<track> --distance-pc 2000      # movie of the track
-```
+### MESA SEDs
 
 `grids/argus_sim_seds.py` tracks write the SED at every model; `python -m mesa_argus seds GRID` packs them into
 `runs/<track>/seds.h5` (wavelength, f_λ at 10 pc per model, model properties, magnitudes).
@@ -295,7 +285,6 @@ python plot_sed_observation.py runs/<track> --distance-pc 2000      # movie of t
 make_stars.py           simulate stars (star files) -> stars/<name>/
 observe.py              observe built stars (observation files) -> outputs/<category>/<name>/
 night_movie.py          the engine observe.py runs: simulate and measure the exposures, draw the movie
-plot_sed_observation.py one SED or one MESA track through Argus
 mesa_argus/             the Python package (python -m mesa_argus ...)
   argus.py                Argus bands, units and plot style shared by the movies
   dust.py                 dust: the 3D map (Bayestar19, SFD), CCM89, dereddening Gaia stars
@@ -312,18 +301,16 @@ mesa_argus/             the Python package (python -m mesa_argus ...)
   history.py, eep.py      history reading, phases, equivalent evolutionary points
   cmd3d.py, fisher.py     the 3D CMD page; Fisher matrices and figures
   calibrate.py, zeropoints.py, filters.py, composition.py, config.py
-  m67.py                  the M67 experiment (below)
 grids/                  MESA grid definitions, one file per grid
 inlists/                the single MESA physics template
 mesa_work/              MESA work directory (make -C mesa_work)
 data/                   committed inputs: Gaia query caches (data/gaia/<pointing>/), calibrations, filter curves
 batches/                batch files for tools/stage_batch.py
 examples/               star files (examples/stars/) and observation files (examples/observations/, template.toml)
-tools/                  batch runner, field finder, one-off migrations
+tools/                  batch runner, star-library grid, newton job queue, dust-map download
 studies/                characterisation studies (the photometric offset study)
 demo/                   the interactive HTML page and its validation
 docs/ASSUMPTIONS.md     what the night movies model and assume
-experiments/            finished early experiments (the M67 1 Myr minipix movie)
 config.toml             machine settings          analysis.toml   Fisher-analysis inputs
 templates/, vendor/     the 3D CMD page's template and its bundled plotly
 stars/                  built stars (not in git; rebuilt from the star files)
@@ -331,5 +318,4 @@ runs/, outputs/         generated (not in git): MESA / PHOEBE working runs; obse
 ```
 
 The hand-made fields `m3`, `m15`, `rr308108` and `rr416445` are the first movies, from before the star /
-observation split (run with `night_movie.py --field m3`). `data/sparse/` is the search that found the two RR Lyrae fields;
-`data/rich_fields*.ecsv` is the output of `tools/find_rich_field.py`.
+observation split (run with `night_movie.py --field m3`). `data/sparse/` is the search that found the two RR Lyrae fields.
