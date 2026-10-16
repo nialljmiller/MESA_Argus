@@ -3,7 +3,7 @@
     [field]  [night]  [stars]  [[place]] (any number)  [measure]  [output]
 
 An observation is the file's values over these defaults, with command-line overrides over both. observe.py writes
-the resolved observation to outputs/<name>/observation.toml, so the same data can be made again.
+the resolved observation to observation.toml in its folder (output_folder), so the same data can be made again.
 """
 import copy
 import tomllib
@@ -48,6 +48,24 @@ def resolve(observation):
     if unknown:
         raise SystemExit(f"unknown sections {sorted(unknown)}")
     return out
+
+
+def output_folder(name, layout):
+    """Where an observation's outputs go: outputs/fully_synthetic/<name> (its stars at random positions) or
+    outputs/pseudo_real/<name> (real Gaia stars where they are, with any placed stars)."""
+    from mesa_argus.config import OUTPUTS
+
+    return OUTPUTS / ("fully_synthetic" if layout == "random" else "pseudo_real") / name
+
+
+def find_output(name):
+    """An existing observation's folder, in either category."""
+    from mesa_argus.config import OUTPUTS
+
+    for category in ("pseudo_real", "fully_synthetic"):
+        if (OUTPUTS / category / name).is_dir():
+            return OUTPUTS / category / name
+    raise SystemExit(f"no observation {name!r} in outputs/pseudo_real/ or outputs/fully_synthetic/")
 
 
 def load(path):

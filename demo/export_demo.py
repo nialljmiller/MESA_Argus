@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Export one field's precomputed physics for the interactive Argus page (demo/argus_demo.html).
 
-    python observe.py examples/observations/f294.toml       # writes the scene (outputs/f294/scene/)
+    python observe.py examples/observations/f294.toml       # writes the scene (outputs/pseudo_real/f294/scene/)
     python demo/export_demo.py                               # -> demo/build/f294.json
-    python demo/export_demo.py --scene outputs/<name>/scene  # another observation's scene
+    python demo/export_demo.py --scene outputs/<category>/<name>/scene  # another observation's scene
 
 Everything here is the movie's own physics (night_movie.py, ArgusSim), evaluated once:
 - every Gaia star: position, catalogue colour, template electron rates per band on AIRMASS_GRID (as the movie);
@@ -36,7 +36,7 @@ from argus_sim import c as ARGUS_CONFIG  # noqa: E402
 from argus_sim.observatory import Observatory, seasonal_seeing_params, seeing_at_airmass  # noqa: E402
 from mesa_argus.argus import BANDS, FLAM, system_response  # noqa: E402
 
-SCENE = REPO / "outputs" / "f294" / "scene"  # an observation's scene (observe.py); --scene sets another
+SCENE = REPO / "outputs" / "pseudo_real" / "f294" / "scene"  # an observation's scene (observe.py); --scene sets another
 FIELD = SCENE.parent.name
 N_SED_PHASE = 100  # SED panel: this many of the model's steps per cycle
 SEEING_GRID = np.round(np.arange(0.60, 3.001, 0.05), 2)  # arcsec FWHM: the page snaps to it, as the movie does

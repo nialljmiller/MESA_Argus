@@ -32,7 +32,7 @@ Two scripts, two kinds of file you write:
 | Step | Command | Reads | Writes |
 |---|---|---|---|
 | simulate stars | `python make_stars.py <star file> [...]` | a **star file**: `[[star]]` and `[[set]]` entries | `stars/<name>/`, one folder per star |
-| observe them | `python observe.py <observation file>` | an **observation file**: pointing, night, stars placed, measurement, output | `outputs/<name>/`: movie, photometry, FITS |
+| observe them | `python observe.py <observation file>` | an **observation file**: pointing, night, stars placed, measurement, output | `outputs/pseudo_real/<name>/` or `outputs/fully_synthetic/<name>/`: movie, photometry, FITS |
 
 A star knows nothing about observing: no dust, no position in an image, no night, no instrument. An observation never
 simulates a star: it names stars that are already built and adds everything about observing.
@@ -132,7 +132,9 @@ epoch = "start+0.05"         # periodic: a primary eclipse / maximum; transients
 [`examples/observations/template.toml`](examples/observations/template.toml) lists every key with its default and
 meaning. Anything can be overridden on the command line: `--set section.key=value`, `--place '{star = "...", ...}'`
 (replaces the file's placements), `--date`, `--start`, `--end`, `--ra`, `--dec`, `--name`, `--bands`. Everything is
-checked before any work starts. Outputs, in `outputs/<name>/` (`<name>`: `[field] name`, else the file's name):
+checked before any work starts. Outputs, in `outputs/pseudo_real/<name>/` (real Gaia stars where they are, `layout = "real"`)
+or `outputs/fully_synthetic/<name>/` (stars at random positions, `layout = "random"`); `<name>`: `[field] name`, else the
+file's name:
 
 - `<name>_night_<band>.mp4`: the movie (CMD, β/ρ colour exposure, difference image, light curves, SEDs).
 - `<name>_night_<band>.photometry.csv`: every measurement, with the true model magnitude beside it.
@@ -189,7 +191,7 @@ missing required key, stops the run with the names.
 ```
 make_stars.py star file          → stars/<name>/   (generators in mesa_argus/sources/: MESA RSP, PHOEBE, sncosmo,
                                                      parametric transients, Gaia)
-observe.py observation file      → outputs/<name>/scene/  (field, background stars, placed stars with their file,
+observe.py observation file      → outputs/<category>/<name>/scene/  (field, background stars, placed stars with their file,
                                                             position, timing and dust)
   └─ night_movie.py --scene      → the night's exposures: ArgusSim PSF, sky, airmass and noise → images
                                    → SExtractor (SEP) photometry, calibrated per exposure → movie, CSV, FITS
@@ -240,7 +242,7 @@ simulating and measuring the exposures in the browser (`output.page = true`, or 
 
 ```bash
 python observe.py examples/observations/f294.toml --scene-only
-python demo/export_demo.py --scene outputs/f294/scene && python demo/build_html.py f294   # -> demo/argus_demo.html
+python demo/export_demo.py --scene outputs/pseudo_real/f294/scene && python demo/build_html.py f294   # -> demo/argus_demo.html
 ```
 
 `demo/validate/` checks the page's simulator and SExtractor port against the Python ones.
@@ -291,7 +293,7 @@ python plot_sed_observation.py runs/<track> --distance-pc 2000      # movie of t
 
 ```
 make_stars.py           simulate stars (star files) -> stars/<name>/
-observe.py              observe built stars (observation files) -> outputs/<name>/
+observe.py              observe built stars (observation files) -> outputs/<category>/<name>/
 night_movie.py          the engine observe.py runs: simulate and measure the exposures, draw the movie
 plot_sed_observation.py one SED or one MESA track through Argus
 mesa_argus/             the Python package (python -m mesa_argus ...)

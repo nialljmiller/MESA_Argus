@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Movie: a 3x3 HDPS-minipix block of M67's core observed by Argus across 1 Myr of evolution.
 
-    python experiments/m67_minipix_movie.py                       # -> outputs/m67/m67_minipix.mp4
+    python experiments/m67_minipix_movie.py                       # -> outputs/pseudo_real/m67/m67_minipix.mp4
     python experiments/m67_minipix_movie.py --frames 60 -o test.mp4
 
 A finished early experiment, kept as it was; the night movies (night_movie.py) grew out of it.
@@ -368,7 +368,7 @@ scene_ab = None
 def main(argv=None):
     global scene_ab
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("-o", "--output", type=Path, default=Path("outputs/m67/m67_minipix.mp4"))
+    p.add_argument("-o", "--output", type=Path, default=Path("outputs/pseudo_real/m67/m67_minipix.mp4"))
     p.add_argument("--frames", type=int, default=240)
     p.add_argument("--fps", type=float, default=24)
     p.add_argument("--dpi", type=int, default=100)

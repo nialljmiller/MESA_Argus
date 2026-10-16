@@ -2,7 +2,7 @@
 """The engine: one night of Argus 60 s exposures of a scene, simulated and measured; the movie (CMD, colour exposure,
 difference image, light curves, SEDs) and the photometry CSV. observe.py writes the scene and runs this, once per band.
 
-    python night_movie.py --scene outputs/f294/scene --band rho -o outputs/f294/test.mp4 --stride 10   # by hand
+    python night_movie.py --scene outputs/pseudo_real/f294/scene --band rho --stride 10   # by hand
     python night_movie.py --field m3                                                                    # a hand-made field
 
 The night, step by step (main):
@@ -724,7 +724,8 @@ def parser():
     p.add_argument("--measure", default="{}", help="photometry settings as JSON (mesa_argus.photometry.SETTINGS)")
     p.add_argument("--fits", type=Path, help="also write every measured exposure (both bands) as FITS here")
     p.add_argument("--no-render", action="store_true", help="measure (and write FITS) but draw no movie")
-    p.add_argument("-o", "--output", type=Path, help="default outputs/<field>/<field>_night_<band>.mp4")
+    p.add_argument("-o", "--output", type=Path,
+                   help="default: next to the scene; a hand-made field: outputs/pseudo_real/<field>/<field>_night_<band>.mp4")
     p.add_argument("--date", help="local date the night starts (default: the field's own)")
     p.add_argument("--max-airmass", type=float, default=None, help="a further airmass limit (the array's minimum altitude always applies)")
     p.add_argument("--start", help="UT HH:MM to start (default: when the field is first observable)")
@@ -756,7 +757,8 @@ def main(argv=None):
     if args.fits is not None and not args.fits.is_absolute():
         args.fits = Path.cwd() / args.fits
     if args.output is None:
-        args.output = _REPO / "outputs" / args.field / f"{args.field}_night_{args.band}.mp4"
+        folder = args.scene.parent if args.scene is not None else _REPO / "outputs" / "pseudo_real" / args.field
+        args.output = folder / f"{args.field}_night_{args.band}.mp4"
     if not args.output.is_absolute():
         args.output = Path.cwd() / args.output
     os.chdir(_REPO)

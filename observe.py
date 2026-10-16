@@ -20,9 +20,10 @@ Stars must be built first (make_stars.py); an observation only names them. The o
 
 Everything about observing is added here: the pointing, the night (ArgusSim's schedule), the Milky Way dust (the 3D map
 at each star's distance along its sightline, mesa_argus/dust.py), positions and timing. night_movie.py then simulates and
-measures the exposures from outputs/<name>/scene/.
+measures the exposures from its scene/.
 
-Outputs in outputs/<name>/: <name>_night_<band>.mp4 and .photometry.csv, fits/, observation.toml (the resolved file:
+Outputs in outputs/pseudo_real/<name>/ (real Gaia stars where they are) or outputs/fully_synthetic/<name>/
+(layout random): <name>_night_<band>.mp4 and .photometry.csv, fits/, observation.toml (the resolved file:
 running it makes the same data), summary.md, scene/.
 """
 import argparse
@@ -269,7 +270,7 @@ def main():
     f, n, s = obs["field"], obs["night"], obs["stars"]
     name, ra, dec = f["name"], f["ra"], f["dec"]
     window = (n["start"] or None, n["end"] or None)  # UT HH:MM, or the whole dark night
-    out = REPO / "outputs" / name
+    out = runconfig.output_folder(name, s["layout"])
     scene_dir = out / "scene"
     shutil.rmtree(scene_dir, ignore_errors=True)
     scene_dir.mkdir(parents=True)

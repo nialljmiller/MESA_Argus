@@ -138,7 +138,7 @@ def expand(batch_path):
 
 
 def finished(name, run):
-    out = REPO / "outputs" / name
+    out = runconfig.output_folder(name, run["stars"]["layout"])
     files = [f"{name}_night_{b}.{'mp4' if run['output']['movie'] else 'photometry.csv'}" for b in run["output"]["bands"]]
     return all((out / f).exists() for f in files)
 

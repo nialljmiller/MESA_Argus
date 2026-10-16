@@ -1,14 +1,15 @@
 # Every key of an observation file, with its default. Copy it, delete what you don't need (anything left out takes
 # the default shown), and run:   python observe.py my_observation.toml
 # Any key can be overridden on the command line:   python observe.py my_observation.toml --set output.stride=10
-# The observation as made (every key, the night as used) is written to outputs/<name>/observation.toml.
+# The observation as made (every key, the night as used) is written to observation.toml in
+# outputs/pseudo_real/<name>/ (layout real) or outputs/fully_synthetic/<name>/ (layout random).
 # Stars are built first, by make_stars.py; an observation only names them.
 
 [field]
 ra = 294.7844             # deg, ICRS (required)
 dec = -11.6235            # deg, ICRS (required)
 block = 3                 # minipixes across the block shown: odd, 1-9 (3 = 84", 9 = 253")
-name = ""                 # outputs/<name>/; default: this file's name
+name = ""                 # the output folder's name; default: this file's name
 
 [night]
 date = ""                 # local date the night starts, YYYY-MM-DD (default today; the nearest night the field is up
@@ -69,7 +70,7 @@ clip_sigma = 3.0          # zero-point fit rejection
 [output]
 movie = true              # render the movie (false: photometry and any FITS only)
 bands = ["beta", "rho"]   # one movie and photometry CSV per band
-fits = false              # every measured exposure, both bands, as FITS (outputs/<name>/fits/)
+fits = false              # every measured exposure, both bands, as FITS (fits/ in the output folder)
 page = false              # the interactive page (real Gaia stars only, for now)
 stride = 1                # render and measure every Nth exposure
 seed = 3                  # noise
