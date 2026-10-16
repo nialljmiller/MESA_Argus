@@ -4,6 +4,11 @@ Goal: a synthetic Argus catalogue and data stream that runs through hdps, so the
 data whose truth is known. MESA_Argus moves into the argus-hdps organisation, under a better name, with the work it
 duplicates removed.
 
+**Main goal (2026-10-16):** a repository of simulated Argus data lasting at least a month, as close to real as possible:
+the night sky tiled as Argus sees it (minipixes, with the survey's gaps) for a whole month, from a leave-N-out
+simulation of the minipixes; then alerts from it. Everything below serves that. First: proper source extraction on
+the direct images, then real DIA (reference, subtraction, detection and photometry on the difference image).
+
 Clones of the other repos: `~/argus_repos/` (synthref, hdps, argus_alert_sim). ArgusSim: `~/ArgusSim`.
 
 ## Checklist
@@ -60,3 +65,9 @@ Each of these changes measurements: decide one at a time.
   Also fixed: the README's separate plugin install fails in uv; installing both packages in one command works.
 - 2026-10-15: PR argus-hdps/argus_alert_sim#1 opened (branch `mesa-argus-current`). User's call: drop
   GRB_AFTERGLOW and leave the gap; the afterglow comes back later in MESA_Argus's transients.
+
+- 2026-10-16: difference panel was display-only and drawn on a linear scale set by the brightest variable (looked
+  blank); now asinh (cfac795). Source extraction bug found: `week_f325`'s V2 (G 13.9) measured ~18 mag in 16% of
+  exposures. Cause: SEP windowed centroids (XWIN/YWIN, window from the reference FWHM 4.34 px) of a G 18.5 neighbour
+  8.5 px away migrate onto V2's centre; the nearest-neighbour cross-match then takes the faint detection. Detection
+  itself is fine. Also: `--start`/`--end` are ignored in survey mode (night_movie.py).
