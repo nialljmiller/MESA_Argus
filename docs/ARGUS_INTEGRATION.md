@@ -78,4 +78,12 @@ Each of these changes measurements: decide one at a time.
   difference detection and alert vetting. Step 1 done: every hdps package imports without CuPy (4 files edited);
   hdps tests on CPU: astrometry 157, diffimg 140, skymap 171 passed (GPU-marked tests skipped).
   Next: photometry/background_cpu.py + source_detection_cpu.py mirroring background.py, source_detection.py, .cu.
+- 2026-10-16: hdps branch `cpu-mirror` commit ecd73320: `photometry/source_detection_cpu.py` (CPUSourceDetector:
+  the 4 CUDA kernels of source_detection.cu as numba loops, host steps copied). `hdps.photometry.SourceDetector`
+  resolves to GPUSourceDetector on a CUDA host, else CPUSourceDetector (`HDPS_FORCE_CPU=1` forces CPU);
+  SourceDetectionTask and DiffDetectionTask construct SourceDetector. CPU copies of hdps's detector tests: 96 pass
+  (aperture sum vs hdps's CPU reference, sub-pixel phase, centroid iteration, error model, determinism,
+  per-pixel-variance detection, de-duplication). On week_f325 exposure 18 (the SEP failure) it finds V2 at 0.21 px
+  with 43519 e and keeps the G 18.5 neighbour separate (0.37 px, 846 e). Not yet compared with the GPU code on a
+  GPU (none available).
 
