@@ -312,6 +312,7 @@ def main():
     (scene_dir / "field.json").write_text(json.dumps(field_json, indent=1))
     if n["observing"] == "survey":
         coverage.write(scene_dir / "exposures.ecsv", overwrite=True)  # the engine observes exactly these
+    dust.maps.cache_clear()  # the 3D map (~6 GB) is not needed while the engine runs
 
     # what was done, for reading and for making it again
     resolved = out / "observation.toml"

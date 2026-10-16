@@ -924,6 +924,12 @@ def main(argv=None):
 
 
 # ---------------------------------------------------------------- the movie
+def model_hours(ut):
+    """Where the light-curve panel draws the models: 800 points over a night; every 3 minutes over a longer span."""
+    n = 800 if ut[-1] - ut[0] <= 24 else int((ut[-1] - ut[0]) * 20)
+    return np.linspace(ut[0], ut[-1], n)
+
+
 def movie_data(args, stars, scene, follow, transient, models, follow_sed, follow_rate, follow_cycle, ref_rate, static_mag,
                rates_at, true_mag, measured, frames, times, bjd, ut, airmass, seeing, G, in_block, ab, ref_frames):
     """Everything draw() needs that stays fixed through the movie: models, display limits, colours, each star's
@@ -932,7 +938,7 @@ def movie_data(args, stars, scene, follow, transient, models, follow_sed, follow
     # transients' model light curves on the light-curve panel's time grid (periodic models are drawn from their cycle)
     model_curve = {}
     for k in transient:
-        when = bjd[0] + (np.linspace(ut[0], ut[-1], 800) - ut[0]) / 24.0
+        when = bjd[0] + (model_hours(ut) - ut[0]) / 24.0
         model_curve[k] = np.array([float(ab.mag_from_sed(BANDS[B], models[k].wave, f * FLAM)) if f.any() else np.nan
                                    for f in (models[k].sed_at(b) for b in when)])
     j_best = int(np.argmin(airmass))
@@ -958,7 +964,9 @@ def movie_data(args, stars, scene, follow, transient, models, follow_sed, follow
     if transient:  # a transient has no light (nan) before its model starts
         lit = np.isfinite(cmd_c) & np.isfinite(cmd_m)
         cmd_c, cmd_m = cmd_c[lit], cmd_m[lit]
-    # each star's mean over the night: the measurements' own, and the model's (a transient: where it is lit)
+    # each star's mean over the night: the measurements' own, and the model's (a transient: where it is lit); the
+    # light-curve axes cover 99.5% of the measurements (a rare bad cross-match must not flatten the rest; it is drawn
+    # at the edge)
     rel = {}
     for k in follow:
         meas = np.array([f[k][0] for f in measured], float)
@@ -966,9 +974,11 @@ def movie_data(args, stars, scene, follow, transient, models, follow_sed, follow
         if k in transient:
             model = np.where(np.isfinite(model), model, np.nan)
         mean = np.nanmean if k in transient else np.mean
-        meas_rel = meas - np.nanmean(meas) if np.isfinite(meas).any() else []
-        rel[k] = dict(measured=float(np.nanmean(meas)) if np.isfinite(meas).any() else np.nan, model=float(mean(model)),
-                      span=(np.nanmin(np.r_[meas_rel, model - mean(model)]), np.nanmax(np.r_[meas_rel, model - mean(model)])))
+        lit = np.isfinite(meas).any()
+        meas_rel = np.nanpercentile(meas - np.nanmean(meas), [0.25, 99.75]) if lit else []
+        rel[k] = dict(measured=float(np.nanmean(meas)) if lit else np.nan, model=float(mean(model)),
+                      span=(np.nanmin(np.r_[meas_rel, model - mean(model)]), np.nanmax(np.r_[meas_rel, model - mean(model)])),
+                      resid=float(np.nanpercentile(np.abs(meas - model), 99.75)) if lit else np.nan)
     # the SED axis: every followed star's SED (300-1000 nm) over the night
     sed_values = np.concatenate([follow_sed[k][:, (models[k].wave.to_value(u.nm) >= 300) & (models[k].wave.to_value(u.nm) <= 1000)].ravel()
                                  for k in follow]) if follow else np.array([1e-16, 1e-14])
@@ -1052,8 +1062,9 @@ def draw(fig, args, exposures, j, d):
 
     # light curves: measured (MAG_AUTO) points and the model behind, each relative to its own mean over the night
     ut = d["ut"]
-    model_t = np.linspace(ut[0], ut[-1], 800)
+    model_t = model_hours(ut)
     model_bjd = d["bjd"][0] + (model_t - ut[0]) / 24.0
+    shown_m, shown_r = {}, {}  # what is drawn, to mark points beyond the axes
     for k in follow:
         h = d["history"][k]
         t = np.array(h["t"])
@@ -1071,11 +1082,13 @@ def draw(fig, args, exposures, j, d):
         else:
             label = f"{labels[k]} {v['kind']} {v['period']:.3f} d"
         lc.errorbar(t[ok], m[ok] - d["rel"][k]["measured"], yerr=e[ok], fmt="o", ms=2.5, lw=0.5, color=colour_of[k], label=label)
+        shown_m[k] = (t[ok], m[ok] - d["rel"][k]["measured"])
         resid = np.array(h["m"]) - np.array(h["true"])
         if d["survey"] is not None:  # not across the gaps between ratchets
             gap = np.r_[False, np.diff(t) > 0.1]
             t, resid = np.insert(t, np.nonzero(gap)[0], np.nan), np.insert(resid, np.nonzero(gap)[0], np.nan)
         resid_ax.plot(t, resid, color=colour_of[k], lw=0.8)
+        shown_r[k] = (t, resid)
     engines = [engine_of(pulsators[int(source[k])]) for k in follow]
     model_name = " / ".join([e for e in ("MESA RSP", "PHOEBE") if e in engines]
                             + list(dict.fromkeys(e for e in engines if e not in ("MESA RSP", "PHOEBE"))))
@@ -1090,6 +1103,13 @@ def draw(fig, args, exposures, j, d):
         lo, hi = -0.5, 0.5
     pad = 0.08 * max(hi - lo, 0.05)
     lc.set(ylim=(hi + pad, lo - 2.5 * pad), ylabel=rf"$\Delta m_{{\{B}}}$ (mag)")
+    resid_lim = max(0.05, 1.3 * np.nanmax([d["rel"][k]["resid"] for k in follow] + [0.0]))
+    resid_ax.set_ylim(-resid_lim, resid_lim)
+    for k in follow:  # points beyond the axes: a triangle at the edge
+        for ax, (t, y), lo_edge, hi_edge in ((lc, shown_m[k], lo - 2.5 * pad, hi + pad), (resid_ax, shown_r[k], -resid_lim, resid_lim)):
+            for beyond, edge, marker in ((y > hi_edge, hi_edge, "v"), (y < lo_edge, lo_edge, "^")):
+                if np.any(beyond):
+                    ax.plot(t[beyond], np.full(int(np.sum(beyond)), edge), marker, ms=6, mfc="none", color=colour_of[k], clip_on=False)
     lc.legend(loc="upper left", ncol=4, fontsize=7.5, frameon=True, framealpha=0.85, edgecolor="none", columnspacing=0.8,
               handletextpad=0.3)
     lc.set_title("Light curves (SExtractor MAG_AUTO)", loc="left", weight="bold")
@@ -1097,7 +1117,9 @@ def draw(fig, args, exposures, j, d):
                  fontsize=11, color="#3c5262")
     plt.setp(lc.get_xticklabels(), visible=False)
     resid_ax.axhline(0, color="0.5", lw=0.6, ls=":")
-    resid_ax.set(xlabel=f"UT hours ({args.date} night)", ylabel="measured − true\n(mag)")
+    span_days = (d["times"][-1].jd - d["times"][0].jd) > 1
+    resid_ax.set(xlabel=f"UT hours since {d['times'][0].iso[:10]} 0h" if span_days else f"UT hours ({args.date} night)",
+                 ylabel="measured − true\n(mag)")
     lc.yaxis.set_label_coords(-0.075, 0.5)
     resid_ax.yaxis.set_label_coords(-0.075, 0.5)
     resid_ax.invert_yaxis()
