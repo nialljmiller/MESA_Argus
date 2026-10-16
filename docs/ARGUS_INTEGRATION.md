@@ -71,3 +71,11 @@ Each of these changes measurements: decide one at a time.
   exposures. Cause: SEP windowed centroids (XWIN/YWIN, window from the reference FWHM 4.34 px) of a G 18.5 neighbour
   8.5 px away migrate onto V2's centre; the nearest-neighbour cross-match then takes the faint detection. Detection
   itself is fine. Also: `--start`/`--end` are ignored in survey mode (night_movie.py).
+- 2026-10-16: plan: use hdps for extraction and DIA, with CPU mirrors of its GPU files (same classes and outputs)
+  where no NVIDIA GPU exists (the Mac's Apple M5 GPU runs Metal, not CUDA). hdps is edited locally only, branch
+  `cpu-mirror` in ~/argus_repos/hdps, no PRs. The simulator will write calibrated sensor frames (hdps
+  `FullFrameImage`) so hdps runs detection, WCS solving, reprojection to tiles (`TANSegmentList`), subtraction,
+  difference detection and alert vetting. Step 1 done: every hdps package imports without CuPy (4 files edited);
+  hdps tests on CPU: astrometry 157, diffimg 140, skymap 171 passed (GPU-marked tests skipped).
+  Next: photometry/background_cpu.py + source_detection_cpu.py mirroring background.py, source_detection.py, .cu.
+
