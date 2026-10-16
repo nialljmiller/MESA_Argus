@@ -1173,8 +1173,10 @@ def draw(fig, args, exposures, j, d):
     # the difference image (saturated pixels grey)
     diverging = plt.get_cmap("RdBu_r").copy()
     diverging.set_bad("#bfbfbf")
+    # asinh stretch, linear out to the sky noise: the noise, faint residuals and the large variables all show
+    dnorm = AsinhNorm(linear_width=d["rgb"]["lw"], vmin=-d["dlim"], vmax=d["dlim"])
     diff = diff_ax.imshow(exposures[B]["difference"], origin="lower", interpolation="nearest", cmap=diverging,
-                          vmin=-d["dlim"], vmax=d["dlim"], extent=extent)
+                          norm=dnorm, extent=extent)
     for k in follow:
         diff_ax.add_patch(Circle((stars["dx"][k], stars["dy"][k]), 3.0, fill=False, ec=colour_of[k], lw=1.0))
         diff_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold")
@@ -1186,6 +1188,9 @@ def draw(fig, args, exposures, j, d):
     plt.setp(diff_ax.get_yticklabels(), visible=False)
     dbar = fig.colorbar(diff, ax=diff_ax, orientation="horizontal", fraction=0.05, pad=0.13,
                         label="difference (electrons / pixel)")
+    ticks = [v for v in (10, 100, 1000, 10000) if v <= d["dlim"]]
+    dbar.set_ticks([-v for v in ticks[::-1]] + [0] + ticks)
+    dbar.ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:,.0f}"))
     dbar.ax.tick_params(labelsize=7)
 
     # SEDs of the followed stars now, and as each Argus band records them (x filter x optics x QE x atmosphere^airmass)
