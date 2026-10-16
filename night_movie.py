@@ -307,17 +307,17 @@ def choose_followed(stars, pulsators, n):
 
 class RSPStar:
     """One cycle of a periodic model (MESA RSP limit cycle, or a PHOEBE orbit), phased so phase 0 is maximum light in
-    rho (binaries: the primary eclipse). The file's SEDs are at 10 pc; they are seen at the file's distance modulus,
-    through E(B-V) `ebv` (the observation's; the file's own if not given)."""
+    rho (binaries: the primary eclipse). The file's SEDs are at 10 pc; they are seen at `distance` (pc; the file's
+    distance modulus if not given), through E(B-V) `ebv` (the observation's; the file's own if not given)."""
 
-    def __init__(self, path, ab, ebv=None):
+    def __init__(self, path, ab, ebv=None, distance=None):
         with h5py.File(path) as f:
             self.attrs = dict(f.attrs)
             wave, flux_10pc, t = f["wavelength"][:], f["flux"][:], f["time_days"][:]
         self.wave = wave * u.AA
-        dm = float(self.attrs["distance_modulus"])
+        distance = 10 ** (float(self.attrs["distance_modulus"]) / 5 + 1) if distance is None else distance
         ebv = float(self.attrs["ebv"]) if ebv is None else ebv
-        seen = dust.redden(wave, flux_10pc * (10.0 / 10 ** (dm / 5 + 1)) ** 2, ebv)
+        seen = dust.redden(wave, flux_10pc * (10.0 / distance) ** 2, ebv)
         rho = np.array([float(ab.mag_from_sed("rho", self.wave, f * FLAM)) for f in seen])
         # one full cycle ending at the last maximum, with the model's own period (RRab have a bump, so local maxima
         # alone would mislead)
@@ -605,7 +605,7 @@ def constant_star_rates(stars, pulsators, ab):
     return rate, mag, templates, colour
 
 
-def followed_star_light(k, v, args, ab, bjd, airmass, model_file, model_ebv):
+def followed_star_light(k, v, args, ab, bjd, airmass, model_file, model_ebv, model_distance):
     """A followed star's model and its SED, electrons/s and magnitude at every exposure, and its cycle (or, for a
     transient, its track over the night) for the CMD."""
     if "transient" in v:
@@ -616,7 +616,7 @@ def followed_star_light(k, v, args, ab, bjd, airmass, model_file, model_ebv):
                for b, band in BANDS.items()}
         cycle = {b: np.where(np.isfinite(mag[b]), mag[b], np.nan) for b in BANDS}
     else:
-        model = RSPStar(model_file, ab, model_ebv)
+        model = RSPStar(model_file, ab, model_ebv, model_distance)
         seds = np.array([model.sed(ph) for ph in phases_at(v, bjd)])
         mag = {b: np.array([float(ab.mag_from_sed(band, model.wave, f * FLAM)) for f in seds]) for b, band in BANDS.items()}
         grid = np.linspace(0, 1, 120, endpoint=False)
@@ -815,12 +815,14 @@ def main(argv=None):
                   for name, v in load_followed().items()}
     model_file.update({v["source"]: _REPO / v["file"] for v in load_placed() if v["timing"] == "periodic"})
     model_ebv = {v["source"]: v["ebv"] for v in load_placed() if v["timing"] == "periodic"}
+    model_distance = {v["source"]: v.get("distance_pc") for v in load_placed() if v["timing"] == "periodic"}
     models, follow_sed, follow_rate, follow_mag, follow_cycle = {}, {}, {}, {}, {}
     transient = {k for k in follow if "transient" in pulsators[int(source[k])]}
     for k in follow:
         v = pulsators[int(source[k])]
         models[k], follow_sed[k], follow_rate[k], follow_mag[k], follow_cycle[k] = followed_star_light(
-            k, v, args, ab, bjd, airmass, model_file.get(int(source[k])), model_ebv.get(int(source[k])))
+            k, v, args, ab, bjd, airmass, model_file.get(int(source[k])), model_ebv.get(int(source[k])),
+            model_distance.get(int(source[k])))
         cyc = follow_cycle[k]["rho"]
         if k in transient:
             tr = v["transient"]

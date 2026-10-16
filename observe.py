@@ -140,31 +140,39 @@ def write_background(scene_dir, s, star_set, ra, dec, rng):
             f"the dust in front of it there ({counts}); every star constant.")
 
 
-def catalogue_entry(sed_file, ebv):
-    """Intensity-mean Gaia G, BP-RP and G amplitude of a periodic model through its dust: what a catalogue would
-    list for it (the movie calibrates against these, as for a Gaia star)."""
+def catalogue_entry(sed_file, ebv, distance):
+    """Intensity-mean Gaia G, BP-RP and G amplitude of a periodic model at `distance` (pc) through its dust: what a
+    catalogue would list for it (the movie calibrates against these, as for a Gaia star)."""
     import h5py
 
     from mesa_argus.binary import vega_mag
 
     with h5py.File(sed_file) as h:
-        wave, flux_10pc, t, dm = h["wavelength"][:], h["flux"][:], h["time_days"][:], float(h.attrs["distance_modulus"])
-    seen = dust.redden(wave, flux_10pc * 10 ** (-0.4 * dm), ebv)
+        wave, flux_10pc, t = h["wavelength"][:], h["flux"][:], h["time_days"][:]
+    seen = dust.redden(wave, flux_10pc * (10.0 / distance) ** 2, ebv)
     weight = np.gradient(t)  # the samples need not be evenly spaced in time
     mags = {band: np.array([vega_mag(wave, f, band) for f in seen]) for band in ("G", "Gbp", "Grp")}
     mean = {band: -2.5 * np.log10(np.sum(weight * 10 ** (-0.4 * m)) / np.sum(weight)) for band, m in mags.items()}
     return float(mean["G"]), float(mean["Gbp"] - mean["Grp"]), float(np.ptp(mags["G"]))
 
 
-def placed_distance(folder, meta):
-    """A placed star's distance (pc): a periodic model's, from its file; a transient's if it has one (a dwarf nova);
-    none for a supernova or a microlensing source (they sit behind all the dust)."""
+def placed_distance(p, folder, meta):
+    """A placed star's distance (pc): a periodic model's is [[place]] distance, else its file's (an intrinsic model,
+    stored at 10 pc, needs one); a transient's is its model's if it has one (a dwarf nova); none for a supernova or a
+    microlensing source (they sit behind all the dust)."""
     import h5py
 
-    if meta["timing"] == "periodic":
-        with h5py.File(folder / "sed.h5") as h:
-            return 10 ** (float(h.attrs["distance_modulus"]) / 5 + 1)
-    return meta.get("distance_pc", meta.get("d_pc"))
+    if meta["timing"] != "periodic":
+        if p["distance"] is not None:
+            raise SystemExit(f"{p['star']}: a transient's distance is its model's; [[place]] distance is for periodic stars")
+        return meta.get("distance_pc", meta.get("d_pc"))
+    if p["distance"] is not None:
+        return float(p["distance"])
+    with h5py.File(folder / "sed.h5") as h:
+        dm = float(h.attrs["distance_modulus"])
+    if dm == 0:
+        raise SystemExit(f"{p['star']} is an intrinsic model (10 pc): give its distance (pc) in [[place]]")
+    return 10 ** (dm / 5 + 1)
 
 
 def place_stars(placements, scene_dir, night_info, half_width, rng):
@@ -202,7 +210,7 @@ def place_stars(placements, scene_dir, night_info, half_width, rng):
         count[timing] += 1
         label = ("T" if timing == "transient" else "P") + str(count[timing])
         dx, dy = (x / 100 - 0.5) * 2 * half_width, (y / 100 - 0.5) * 2 * half_width  # arcsec from the block centre
-        distance = placed_distance(folder, meta)
+        distance = placed_distance(p, folder, meta)
         ebv = float(dust.ebv(ra, dec, distance)[0][0])
         row.update(label=label, source=-i, x_percent=x, y_percent=y, dx=float(dx), dy=float(dy), ebv=ebv,
                    distance_pc=float(distance) if distance else None)
@@ -213,7 +221,7 @@ def place_stars(placements, scene_dir, night_info, half_width, rng):
                 raise SystemExit(f"{p['star']}: the night runs outside its model ({first:.2f} to {last:.2f} d from t0)")
             row.update(t0_bjd=when, z=float(meta.get("z", np.nan)), peak_days=float(meta.get("peak_days", np.nan)))
         else:
-            G, bp_rp, amplitude = catalogue_entry(folder / "sed.h5", ebv)
+            G, bp_rp, amplitude = catalogue_entry(folder / "sed.h5", ebv, distance)
             row.update(period=meta["period"], epoch_bjd=when, G=G, bp_rp=bp_rp, amp_G=amplitude)
         rows.append(row)
     return rows, extra

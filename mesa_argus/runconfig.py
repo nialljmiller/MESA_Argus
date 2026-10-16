@@ -28,7 +28,7 @@ def defaults():
     )
 
 
-PLACE = dict(star=REQUIRED, x=50.0, y=50.0, t0=None, epoch=None)
+PLACE = dict(star=REQUIRED, x=50.0, y=50.0, t0=None, epoch=None, distance=None)
 
 
 def fill(where, given, keys):

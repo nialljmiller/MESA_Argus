@@ -33,9 +33,18 @@ missing = "stop"          # a placed star that is not built: "stop", or "skip" i
 # Built stars put in the field, any number. Real Gaia stars (generator "Gaia variable") sit where they are, with
 # their own ephemeris: give only star =. Others: x, y (percent of the image from its lower left; default 50, 50;
 # -1 random) and t0 (transients) or epoch (periodic: a maximum / primary eclipse): ISO UTC "2026-07-20T05:30",
-# "start+0.1" days from the night's (or the UT window's) start, or a BJD_TDB number.
+# "start+0.1" days from the night's (or the UT window's) start, or a BJD_TDB number. distance (pc, periodic stars):
+# where the star is put, seen through the 3D map's dust at that distance on the field's sightline; default the
+# model's own distance (a library star is stored at 10 pc and needs one).
 [[place]]
 star = "gaia_4186921728614505856"
+
+[[place]]
+star = "lib_rrab_p05521_mhm100"
+distance = 8000
+epoch = "start+0.1"
+x = 60
+y = 40
 
 [[place]]
 star = "sn_ia_z002"
