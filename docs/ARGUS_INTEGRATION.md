@@ -99,4 +99,7 @@ Each of these changes measurements: decide one at a time.
   and drop the star. f325 exposure 40: V1 real 55258 e (S/N 184) dropped, fake 30999 e (S/N 3.4) kept. Also: hdps
   saturation is 0.9999 x 65534 (16-bit ADC units); simulated images are electrons with a 21657 e full well.
   Survey fields Dec < -22 (f244, f276, f279) never reach 3 h above the array's 32.84 deg minimum altitude.
+- 2026-10-19: hdps branch pushed as `hdps_full_cpu` (argus-hdps/hdps, at ecd73320, local branch `cpu-mirror` tracks
+  it). No PR. So far it holds the CUDA-free imports and the CPU source detector; ZOGY, the reprojector and the
+  difference-detection kernel are not mirrored yet.
 
