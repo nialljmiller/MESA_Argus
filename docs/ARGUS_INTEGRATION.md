@@ -102,4 +102,11 @@ Each of these changes measurements: decide one at a time.
 - 2026-10-19: hdps branch pushed as `hdps_full_cpu` (argus-hdps/hdps, at ecd73320, local branch `cpu-mirror` tracks
   it). No PR. So far it holds the CUDA-free imports and the CPU source detector; ZOGY, the reprojector and the
   difference-detection kernel are not mirrored yet.
+- 2026-10-19: hdps PR #471 (user; walked_off in source_detection.cu) merged into hdps_full_cpu with the CPU mirror
+  change (0678cd5b). MESA_Argus f4393b5: exposures made on the sensor grid, resampled onto the hdps tile grid by
+  Catmull-Rom (as hdps's reprojector). 701f88a: measurement pipeline as stages (mesa_argus/pipeline/: frames,
+  extraction, calibration, truth), chosen by name from [pipeline]; calibration against ATLAS-Refcat2 with hdps's zero
+  point (no simulation truth). f294 survey night, rho, 154 frames: plane zero point in every frame (25.786 +/- 0.021),
+  V1 +0.053 / 0.031 mag, V2 +0.024 / 0.026, no outliers. Refcat2 at ~/atlas_refcat2 (linked from
+  ~/.rico_cache/atlas_refcat2), still downloading (26 of 82 GB on 2026-10-19).
 
