@@ -417,15 +417,44 @@ def phases_at(var, bjd):
 
 
 # ---------------------------------------------------------------- the detector
+def catmull_rom_matrix(n_out, n_in, start, step):
+    """Resampling matrix (n_out x n_in): output pixel i is the Catmull-Rom interpolation of the input at
+    start + i * step (input pixel coordinates), normalised to unit sum, as hdps's reprojector (tan_reprojection.cu,
+    flux_weight 0) resamples sensor pixels onto a tile."""
+    u = start + np.arange(n_out) * step
+    j0 = np.floor(u).astype(int)
+    t = u - j0
+    weights = np.stack([-0.5 * t**3 + t**2 - 0.5 * t, 1.5 * t**3 - 2.5 * t**2 + 1.0,
+                        -1.5 * t**3 + 2.0 * t**2 + 0.5 * t, 0.5 * t**3 - 0.5 * t**2], axis=1)
+    m = np.zeros((n_out, n_in))
+    for k in range(4):
+        cols = np.clip(j0 - 1 + k, 0, n_in - 1)
+        np.add.at(m, (np.arange(n_out), cols), weights[:, k])
+    return m / m.sum(axis=1, keepdims=True)
+
+
 class Scene:
-    """Every star's ArgusSim PSF on one pixel grid, for each PSF set (a seeing, at a field angle: --field-angle unless
-    given per set); sky and dark per exposure; observe() makes an exposure."""
+    """Every star's ArgusSim PSF, for each PSF set (a seeing, at a field angle: --field-angle unless given per set);
+    sky and dark per exposure; observe() makes an exposure.
+
+    An exposure is made on the sensor's pixel grid (ArgusSim's PSF is in sensor pixels, 1.007"), then resampled onto the
+    hdps sky-tile grid (0.879") by Catmull-Rom interpolation, as hdps's reprojector does. Everything outside the class
+    sees the tile: n, plate, centre and the stars' x, y are tile pixels; native_* are the sensor grid."""
 
     def __init__(self, stars, args, cfg, ab, seeings, field_angles=None):
-        self.plate = cfg.telescope.plate_scale
-        self.n = int(np.ceil(2 * AREA_HALF / self.plate)) + 30
+        self.native_plate = cfg.telescope.plate_scale
+        self.native_n = int(np.ceil(2 * AREA_HALF / self.native_plate)) + 30
+        self.native_n += self.native_n % 2
+        self.native_centre = self.native_n / 2.0
+        self.plate = SKY_PX
+        self.n = int(np.ceil(2 * AREA_HALF / self.plate))
         self.n += self.n % 2
         self.centre = self.n / 2.0
+        self.x = self.centre + np.asarray(stars["dx"]) / self.plate
+        self.y = self.centre + np.asarray(stars["dy"]) / self.plate
+        step = self.plate / self.native_plate  # tile pixel i is at native_centre + (i - centre) * step
+        self.resample = catmull_rom_matrix(self.n, self.native_n, self.native_centre - self.centre * step, step)
+        self.touches = self.resample != 0
         psf_model = ZemaxPSF.from_config(cfg)
         self.seeings = list(seeings)
         self.field_angles = list(field_angles) if field_angles is not None else [args.field_angle] * len(self.seeings)
@@ -441,20 +470,18 @@ class Scene:
         p0 = self.lookup["rho", 0, 0, 0]
         yy, xx = np.indices(p0.shape)
         self.c0 = ((p0 * yy).sum(), (p0 * xx).sum())  # the stamp's centroid
-        self.x = self.centre + np.asarray(stars["dx"]) / self.plate
-        self.y = self.centre + np.asarray(stars["dy"]) / self.plate
+        native_x = self.native_centre + np.asarray(stars["dx"]) / self.native_plate
+        native_y = self.native_centre + np.asarray(stars["dy"]) / self.native_plate
         # each star's stamp origin and sub-pixel phase (the stamp centroid moves by -phase)
-        self.oy = np.ceil(self.y - self.c0[0]).astype(int)
-        self.ox = np.ceil(self.x - self.c0[1]).astype(int)
-        self.py = np.clip(np.round((self.oy + self.c0[0] - self.y) * PSF_PHASES).astype(int), 0, PSF_PHASES - 1)
-        self.px = np.clip(np.round((self.ox + self.c0[1] - self.x) * PSF_PHASES).astype(int), 0, PSF_PHASES - 1)
+        self.oy = np.ceil(native_y - self.c0[0]).astype(int)
+        self.ox = np.ceil(native_x - self.c0[1]).astype(int)
+        self.py = np.clip(np.round((self.oy + self.c0[0] - native_y) * PSF_PHASES).astype(int), 0, PSF_PHASES - 1)
+        self.px = np.clip(np.round((self.ox + self.c0[1] - native_x) * PSF_PHASES).astype(int), 0, PSF_PHASES - 1)
         self._designs = {}  # (band, seeing index) -> PSF matrix, built on demand, the last few kept
         self.seeing_index = None  # per exposure (set_seeing)
         self.sky = None  # electrons/s/pixel per band per exposure (set_sky)
         self.dark, self.readnoise, self.fullwell = cfg.telescope.dark_current, cfg.telescope.readnoise, cfg.telescope.fullwell
         self.exptime = args.exptime
-        yy, xx = np.indices((self.n, self.n))
-        self.yy, self.xx = yy.ravel(), xx.ravel()
 
     def _design(self, name, si):
         """Sparse (pixels x stars) matrix of unit-flux PSFs at seeing self.seeings[si]."""
@@ -463,10 +490,10 @@ class Scene:
         yy, xx = np.indices(p.shape[1:])
         y = yy[None] + self.oy[:, None, None]
         x = xx[None] + self.ox[:, None, None]
-        on = (y >= 0) & (y < self.n) & (x >= 0) & (x < self.n) & (p > 0)
+        n = self.native_n
+        on = (y >= 0) & (y < n) & (x >= 0) & (x < n) & (p > 0)
         cols = np.broadcast_to(np.arange(len(self.x))[:, None, None], p.shape)
-        return sparse.csc_matrix((p[on].astype(np.float32), ((y * self.n + x)[on], cols[on])),
-                                 shape=(self.n * self.n, len(self.x)))
+        return sparse.csc_matrix((p[on].astype(np.float32), ((y * n + x)[on], cols[on])), shape=(n * n, len(self.x)))
 
     def design(self, name, si):
         key = (name, int(si))
@@ -490,15 +517,23 @@ class Scene:
         """Sky + dark electrons per pixel in exposure j."""
         return (self.sky[name][j] + self.dark) * self.exptime
 
+    def to_tile(self, native):
+        """A sensor-grid image resampled onto the tile grid."""
+        return self.resample @ native.reshape(self.native_n, self.native_n) @ self.resample.T
+
+    def model(self, name, rates, j):
+        """Exposure j without noise, on the tile grid (sky + dark + stars, electrons per pixel)."""
+        return self.to_tile(self.background(name, j) + self.design_at(name, j) @ (rates * self.exptime))
+
     def observe(self, name, rates, j, rng):
-        """One exposure: Poisson draw of sky + dark + stars per pixel, clipped at full well, plus read noise."""
-        A = self.design_at(name, j)
+        """One exposure: Poisson draw of sky + dark + stars per sensor pixel, clipped at full well, plus read noise;
+        resampled onto the tile grid. A tile pixel is full when any sensor pixel it interpolates is."""
         bg = self.background(name, j)
-        mean = bg + A @ (rates * self.exptime)
+        mean = bg + self.design_at(name, j) @ (rates * self.exptime)
         charge = np.minimum(rng.poisson(mean), self.fullwell)
         image = charge + rng.normal(0.0, self.readnoise, mean.shape)
-        return dict(image=image.reshape(self.n, self.n), full=(charge >= self.fullwell).reshape(self.n, self.n),
-                    mean=mean, background=bg)
+        full = (charge >= self.fullwell).reshape(self.native_n, self.native_n).astype(float)
+        return dict(image=self.to_tile(image), full=(self.touches @ full @ self.touches.T) > 0, background=bg)
 
 
 def difference_image(image, image_sat, reference, reference_sat, readnoise, half=3, clip=3.0, fit_pixels=None):
@@ -662,7 +697,7 @@ def conditions(times, airmass, alt, az, args, stars, cfg, ab, survey=None):
         sky = SpectralSky(ab.tp, ab, band)
         sky_rate[name] = np.asarray(sky.sky_electrons(component["airglow_s10"], component["zodiacal_s10"],
                                                       component["starlight_s10"], component["moon_s10"],
-                                                      component["artif_s10"], transparency=1.0)) * scene.plate**2
+                                                      component["artif_s10"], transparency=1.0)) * scene.native_plate**2
     scene.set_sky(sky_rate)
     print(f"sky (ArgusSim): V {np.min(component['v_mag']):.2f}-{np.max(component['v_mag']):.2f} mag/arcsec2; Moon "
           f"{np.mean(component['illum_frac']) * 100:.0f}% illuminated, altitude {np.min(component['moon_alt']):.0f} to "
@@ -951,14 +986,14 @@ def movie_data(args, stars, scene, follow, transient, models, follow_sed, follow
         model_curve[k] = np.array([float(ab.mag_from_sed(BANDS[B], models[k].wave, f * FLAM)) if f.any() else np.nan
                                    for f in (models[k].sed_at(b) for b in when)])
     j_best = int(np.argmin(airmass))
-    shown_px = ((np.abs(scene.xx - scene.centre) * scene.plate <= HALF + 2) & (np.abs(scene.yy - scene.centre) * scene.plate <= HALF + 2))
+    yy, xx = np.indices((scene.n, scene.n))
+    shown_px = (np.abs(xx - scene.centre) * scene.plate <= HALF + 2) & (np.abs(yy - scene.centre) * scene.plate <= HALF + 2)
     # the colour exposure (display only): sky-subtracted rho -> red, beta -> blue, their mean -> green; beta scaled so
     # the field's median star is grey; brightness = the shown band's electrons above sky on an asinh stretch (Lupton et
     # al. 2004); limits: the best-airmass exposure's peak and the sky noise
     ratio = rates_at("rho", j_best) / np.where(rates_at("beta", j_best) > 0, rates_at("beta", j_best), np.nan)
     balance = np.isfinite(ratio) & (G > 12) & (G < 17) & ~np.isin(np.arange(len(stars)), follow)
-    best = np.minimum(scene.background(B, j_best) + scene.design_at(B, j_best) @ (rates_at(B, j_best) * args.exptime),
-                      scene.fullwell)
+    best = np.minimum(scene.model(B, rates_at(B, j_best), j_best), scene.fullwell)
     rgb = dict(w_beta=float(np.median(ratio[balance])),
                vmax=float((best - scene.background(B, j_best))[shown_px].max()),
                lw=float(np.sqrt(np.median([scene.background(B, j) for j in range(len(times))]) + scene.readnoise**2)))
