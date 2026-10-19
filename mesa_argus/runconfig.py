@@ -1,6 +1,6 @@
 """Observation files: their sections, keys and defaults (examples/observations/template.toml explains every key).
 
-    [field]  [night]  [stars]  [[place]] (any number)  [measure]  [output]
+    [field]  [night]  [stars]  [[place]] (any number)  [pipeline]  [measure]  [output]
 
 An observation is the file's values over these defaults, with command-line overrides over both. observe.py writes
 the resolved observation to observation.toml in its folder (output_folder), so the same data can be made again.
@@ -14,7 +14,7 @@ REQUIRED = "required"
 
 def defaults():
     import night_movie
-    from mesa_argus.photometry import SETTINGS
+    from mesa_argus import pipeline
 
     output = dict(movie=True, bands=["beta", "rho"], fits=False, catalogues=True, page=False)
     engine = {a.dest: a.default for a in night_movie.parser()._actions}  # the engine's own defaults
@@ -23,7 +23,8 @@ def defaults():
         field=dict(ra=REQUIRED, dec=REQUIRED, block=3, name=""),
         night=dict(date="", start="", end="", site="argus", max_airmass=0.0, observing="ideal", nights=1, survey_seed=0),
         stars=dict(background=REQUIRED, layout="real", seed=1, missing="stop"),
-        measure=dict(SETTINGS),
+        pipeline=dict(pipeline.DEFAULTS),  # which implementation runs each stage (mesa_argus/pipeline/)
+        measure=dict(pipeline.SETTINGS),
         output=output,
     )
 
@@ -96,7 +97,7 @@ def dumps(observation, header):
     from mesa_argus.tomlfile import table
 
     lines = [f"# {header}", ""]
-    for section in ("field", "night", "stars", "measure", "output"):
+    for section in ("field", "night", "stars", "pipeline", "measure", "output"):
         lines += table(f"[{section}]", observation[section])
     for p in observation["place"]:
         lines += table("[[place]]", p)

@@ -15,7 +15,8 @@ Stars must be built first (make_stars.py); an observation only names them. The o
     [stars]    the background: a built star set, at its real positions or scattered at random (a synthetic field)
     [[place]]  each star: where (x, y in percent of the image; real Gaia stars sit where they are) and when (t0 for
                transients, epoch for periodic stars; real stars keep their own ephemeris)
-    [measure]  how the exposures are measured (hdps source detector settings)
+    [pipeline] which implementation runs each measurement stage (mesa_argus/pipeline/)
+    [measure]  the stages' settings
     [output]   movie, bands, FITS, page; noise seed, stride, PSF and kernel options
 
 Everything about observing is added here: the pointing, the night (ArgusSim's schedule), the Milky Way dust (the 3D map
@@ -252,7 +253,7 @@ def run_engine(obs, out, window, n_placed):
         print(f"observing {band} -> {mp4.relative_to(REPO)} (log {mp4.with_suffix('.log').relative_to(REPO)})", flush=True)
         with open(mp4.with_suffix(".log"), "w") as log:
             subprocess.run([sys.executable, "night_movie.py", "--scene", str(out / "scene"), "--field", name, "--band", band,
-                            "-o", str(mp4), "--measure", json.dumps(obs["measure"]), "--highlight", str(n_placed), *options],
+                            "-o", str(mp4), "--measure", json.dumps({**obs["measure"], **obs["pipeline"]}), "--highlight", str(n_placed), *options],
                            stdout=log, stderr=subprocess.STDOUT, check=True)
     if o["page"]:
         subprocess.run([sys.executable, "demo/export_demo.py", "--scene", str(out / "scene")], check=True)

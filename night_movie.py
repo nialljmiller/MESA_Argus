@@ -14,7 +14,7 @@ The night, step by step (main):
   5. conditions per exposure (ArgusSim): seeing (seasonal median x airmass^0.6), Zemax PSF with that seeing, sky
   6. the difference-image reference: the median of the best-seeing exposures
   7. every exposure: PSFs + sky -> Poisson, full well, read noise -> hdps source detector, matched to the simulated
-     stars, per-exposure zero point (mesa_argus.photometry)
+     stars, per-exposure zero point (mesa_argus.pipeline)
   8. the movie, frame by frame (the same exposures again, from the same seeds)
 
 Assumptions (field angle, coverage, seeing, transparency, ...): docs/ASSUMPTIONS.md.
@@ -450,10 +450,12 @@ class Scene:
         self.n = int(np.ceil(2 * AREA_HALF / self.plate))
         self.n += self.n % 2
         self.centre = self.n / 2.0
-        self.x = self.centre + np.asarray(stars["dx"]) / self.plate
-        self.y = self.centre + np.asarray(stars["dy"]) / self.plate
-        step = self.plate / self.native_plate  # tile pixel i is at native_centre + (i - centre) * step
-        self.resample = catmull_rom_matrix(self.n, self.native_n, self.native_centre - self.centre * step, step)
+        # tile pixels on the hdps tile grid (astropy convention, pixel centres at integers): ArgusSim's tile code puts
+        # them at i + 0.5, so the tile coordinate is half a pixel less than the block offsets give
+        self.x = self.centre + np.asarray(stars["dx"]) / self.plate - 0.5
+        self.y = self.centre + np.asarray(stars["dy"]) / self.plate - 0.5
+        step = self.plate / self.native_plate  # tile pixel i is at native_centre + (i + 0.5 - centre) * step
+        self.resample = catmull_rom_matrix(self.n, self.native_n, self.native_centre + (0.5 - self.centre) * step, step)
         self.touches = self.resample != 0
         psf_model = ZemaxPSF.from_config(cfg)
         self.seeings = list(seeings)
@@ -730,22 +732,16 @@ def difference_reference(scene, seeing, rates_at, seeds, band, args, bands):
     return ref_frames, ref_image, ref_full, stamps
 
 
-def write_fits(folder, j, exposures, s, args):
-    """Exposure j in each band it is taken in as FITS, with what made it in the header."""
-    from astropy.io import fits
-
-    folder.mkdir(parents=True, exist_ok=True)
-    for band, exposure in exposures.items():
-        header = fits.Header()
-        header.update(dict(FIELD=FIELD, BAND=band, EXPOSURE=int(j), EXPTIME=args.exptime, DATE_OBS=s.times[j].isot,
-                           BJD_TDB=float(s.bjd[j]), AIRMASS=float(s.airmass[j]), SEEING=float(s.seeing[j]),
-                           SKY_E=float(s.scene.background(band, j)), FULLWELL=float(s.scene.fullwell),
-                           RDNOISE=float(s.scene.readnoise), PLATESCL=float(s.scene.plate), RA_CEN=CENTRE.ra.deg,
-                           DEC_CEN=CENTRE.dec.deg, BUNIT="electron", ORIGIN="MESA_ARGUS night_movie.py"))
-        if s.survey is not None:  # which telescope took it, and where in its field the block fell
-            header.update(dict(TEL_ID=int(s.survey["tel_id"][j]), RATCHET=int(s.survey["ratchet"][j]),
-                               FIELDANG=float(s.survey["field_angle"][j])))
-        fits.writeto(folder / f"{FIELD}_{band}_{j:04d}.fits", exposure["image"].astype(np.float32), header, overwrite=True)
+def frame_metadata(j, band, s, args):
+    """What made exposure j, for the frame's header: what a pipeline knows about an exposure (no truth)."""
+    meta = dict(field=FIELD, band=band, exposure=int(j), exptime=args.exptime, date_obs=s.times[j].isot,
+                bjd_tdb=float(s.bjd[j]), airmass=float(s.airmass[j]), seeing=float(s.seeing[j]),
+                fullwell=float(s.scene.fullwell), satlevel=0.98 * float(s.scene.fullwell), rdnoise=float(s.scene.readnoise),
+                bunit="electron", origin="MESA_ARGUS night_movie.py")
+    if s.survey is not None:  # which telescope took it, and where in its field the block fell
+        meta.update(tel_id=int(s.survey["tel_id"][j]), ratchet=int(s.survey["ratchet"][j]),
+                    fieldang=float(s.survey["field_angle"][j]))
+    return meta
 
 
 # ---------------------------------------------------------------- main
@@ -758,7 +754,7 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--scene", type=Path, help="a scene folder written by observe.py")
     p.add_argument("--field", help="a hand-made field (m3, m15, rr308108, rr416445); with --scene, its name")
-    p.add_argument("--measure", default="{}", help="extraction settings as JSON (mesa_argus.photometry.SETTINGS)")
+    p.add_argument("--measure", default="{}", help="pipeline stages and settings as JSON (mesa_argus.pipeline)")
     p.add_argument("--fits", type=Path, help="also write every measured exposure (both bands) as FITS here")
     p.add_argument("--catalogues", type=Path, help="also write every measured exposure's detections (parquet) here")
     p.add_argument("--no-render", action="store_true", help="measure (and write FITS) but draw no movie")
@@ -910,41 +906,48 @@ def main(argv=None):
         rng = np.random.default_rng(seeds[j])
         return {b: scene.observe(b, rates_at(b, j), j, rng) for b in bands}
 
-    # 7. every exposure, measured. The catalogue a pipeline calibrates against: every star's magnitude (periodic
-    # stars: their intensity mean; transients: not in it); the expected fluxes pick the calibration stars.
-    from mesa_argus.photometry import Photometry
+    # 7. every exposure, measured as a real image by the pipeline stages (mesa_argus.pipeline): the exposure as an
+    # hdps tile, every source extracted, the zero point against ATLAS-Refcat2. Then, for scoring only, each detection
+    # labelled with the simulated star it is (truth: the stars' tile positions and expected fluxes).
+    from mesa_argus import pipeline
+    from mesa_argus.pipeline import truth
 
-    cat_mag = static_mag[B].copy()
-    cat_flux = static_rate[B][:, 0] * args.exptime
+    cfg = json.loads(args.measure)
+    extract, calibrate = pipeline.stage("extraction", cfg.get("extraction")), pipeline.stage("calibration", cfg.get("calibration"))
+    origin = ((BLOCK[0] + 0.5) * MINIPIX_PX - scene.centre, (BLOCK[1] + 0.5) * MINIPIX_PX - scene.centre)
+    tile = pipeline.frames.tile_wcs(TILE, CENTRE.ra.deg, CENTRE.dec.deg, *origin)
+    expected_flux = static_rate[B][:, 0] * args.exptime
     for k in follow:
-        if k in transient:
-            cat_mag[k], cat_flux[k] = np.nan, 0.0
-        else:
-            cat_mag[k] = -2.5 * np.log10(np.mean(10 ** (-0.4 * follow_cycle[k][B])))
-            cat_flux[k] = np.mean(ref_rate[k][B]) * args.exptime
-    phot = Photometry(scene.x, scene.y, cat_mag, cat_flux, scene.n, scene.fullwell, follow,
-                      colour=column(stars, "BP-RP"), cfg=json.loads(args.measure))
+        expected_flux[k] = 0.0 if k in transient else np.mean(ref_rate[k][B]) * args.exptime
     frames = range(0, len(times), args.stride)
-    s = SimpleNamespace(times=times, bjd=bjd, airmass=airmass, seeing=seeing, scene=scene, survey=survey)  # for write_fits
+    s = SimpleNamespace(times=times, bjd=bjd, airmass=airmass, seeing=seeing, scene=scene, survey=survey)
     print(f"observing and rendering {len(frames)} frames ({len(times)} exposures) -> {args.output}", flush=True)
     rows, measured = [], []
     for n, j in enumerate(frames):
         exposures = exposure(j)
+        frame = {b: pipeline.frames.make_frame(e["image"], tile, TILE, frame_metadata(j, b, s, args)) for b, e in exposures.items()}
         if args.fits is not None:
-            write_fits(args.fits, j, exposures, s, args)
-        r = phot.measure(exposures[B]["image"])
-        if args.catalogues is not None:  # every detection, with the simulated star it was matched to (-1: none)
+            args.fits.mkdir(parents=True, exist_ok=True)
+            for b, f in frame.items():
+                pipeline.frames.write(f, args.fits / f"{FIELD}_{b}_{j:04d}.fits")
+        catalogue = extract(frame[B], cfg)
+        zp = calibrate(catalogue, frame[B], cfg)
+        star_of = truth.label(catalogue, scene.x, scene.y, expected_flux, cfg)
+        if args.catalogues is not None:  # every detection, calibrated, with the simulated star it is (-1: none)
             args.catalogues.mkdir(parents=True, exist_ok=True)
-            r["catalogue"].meta.update(exposure=int(j), band=B, zp_a=r["zeropoint"][0], zp_b=r["zeropoint"][1])
-            r["catalogue"].write(args.catalogues / f"{FIELD}_{B}_{j:04d}.parquet", overwrite=True)
+            meta = {**frame[B].metadata, **{f"zp_{key}": value for key, value in (zp or {}).items()}}
+            catalogue.meta = {key: value for key, value in meta.items() if np.isscalar(value) or value is None}
+            catalogue.write(args.catalogues / f"{FIELD}_{B}_{j:04d}.parquet", overwrite=True)
         this_frame = {}
-        for i, k in enumerate(follow):
-            ok = np.isfinite(r["mag"][i]) and r["flux"][i] / r["sigma"][i] >= 5  # S/N >= 5
-            this_frame[k] = (r["mag"][i] if ok else np.nan, r["mag_err"][i] if ok else np.nan)
+        for k in follow:
+            d = int(star_of[k])
+            ok = d >= 0 and np.isfinite(catalogue["mag"][d]) and catalogue["snr"][d] >= 5  # S/N >= 5
+            mag, err = (float(catalogue["mag"][d]), float(catalogue["mag_err"][d])) if ok else (np.nan, np.nan)
+            this_frame[k] = (mag, err)
             rows.append(dict(exposure=j, ut_hours=ut[j], airmass=airmass[j], seeing=seeing[j],
                              seeing_model=scene.seeings[int(scene.seeing_index[j])], star=labels[k],
-                             true_mag=true_mag(B, k, j), saturated=bool(r["saturated"][i]),
-                             measured_mag=r["mag"][i], measured_err=r["mag_err"][i]))
+                             true_mag=true_mag(B, k, j), saturated=bool(d >= 0 and catalogue["saturated"][d]),
+                             measured_mag=mag, measured_err=err))
             if survey is not None:
                 rows[-1].update(band=B, tel_id=int(survey["tel_id"][j]), ratchet=int(survey["ratchet"][j]),
                                 field_angle=float(survey["field_angle"][j]), time_utc=survey["time"][j])
