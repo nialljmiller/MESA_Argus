@@ -86,4 +86,17 @@ Each of these changes measurements: decide one at a time.
   per-pixel-variance detection, de-duplication). On week_f325 exposure 18 (the SEP failure) it finds V2 at 0.21 px
   with 43519 e and keeps the G 18.5 neighbour separate (0.37 px, 846 e). Not yet compared with the GPU code on a
   GPU (none available).
+- 2026-10-19: hdps packages installed into the system Python (pip --user -e; no existing package versions changed).
+  MESA_Argus extraction is now hdps's own detector (78b0d94): production settings of SourceDetectionTask, one-to-one
+  association with the simulated stars, calibrators need S/N >= 50, per-exposure catalogues (parquet). f325 survey
+  night (210 rho exposures): V1 median -0.013, robust scatter 0.020 mag, 4 off by >0.5 mag; V2 +0.023, 0.016, 1 off
+  (SEP had V2 off in 16% of exposures). The SEP code is kept as sep_photometry.py for the demo and the offset study
+  (the offset study's capture of the engine's photometry object no longer applies; it needs rewriting or retiring).
+- 2026-10-19: hdps detector defect found (same on GPU and CPU; the mirror reproduces the kernels): noise peaks ~6 px
+  from a bright star (S/N ~3) pass detection; the 3-pass centroid iteration (window up to the 6 px matched-filter
+  half-width) moves them onto the bright star; their re-centred apertures take part of its light; the de-dup grid pass
+  (keep rule: a later source replaces the kept one if brighter than the previously visited one) can then keep a fake
+  and drop the star. f325 exposure 40: V1 real 55258 e (S/N 184) dropped, fake 30999 e (S/N 3.4) kept. Also: hdps
+  saturation is 0.9999 x 65534 (16-bit ADC units); simulated images are electrons with a 21657 e full well.
+  Survey fields Dec < -22 (f244, f276, f279) never reach 3 h above the array's 32.84 deg minimum altitude.
 
