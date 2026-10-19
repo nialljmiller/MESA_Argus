@@ -1,0 +1,3 @@
+text:#0A0F30
+red_dots:#D61A22
+blue_dots:#4FA1D6
