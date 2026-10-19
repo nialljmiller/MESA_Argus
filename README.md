@@ -4,7 +4,9 @@ Stellar models from MESA, seen through the **Argus Array**. The repo does two th
 
 1. **Night movies of Argus fields.** One simulated night of Argus 60 s exposures on any pointing: every star an SED
    (MESA pulsation models, PHOEBE eclipsing binaries, supernovae and other transients), turned into images with
-   ArgusSim's instrument, sky and noise, and measured with SExtractor. The output is a movie and a photometry CSV.
+   ArgusSim's instrument, sky and noise, as hdps sky tiles, then put through the Argus pipeline (hdps) as if real:
+   source detection and photometry of every star in every frame, calibration against ATLAS-Refcat2, difference
+   imaging against a reference, and alert packets. The outputs: photometry, alerts, and a movie.
 2. **How much stellar physics Argus photometry can recover**, compared with Gaia and SDSS: MESA tracks with synthetic
    photometry in all three systems, an interactive 3D CMD, and a Fisher-information analysis.
 
@@ -14,7 +16,9 @@ Both use the same MESA install and the same Argus throughputs, from ArgusSim.
 
 Requirements: a working MESA install with `$MESA_DIR` set and its colors data, ArgusSim installed in the same
 Python (≥ 3.11), and `pip install -r requirements.txt`. The movies also need `ffmpeg`, and the dust maps
-`bash tools/fetch_dust.sh` (once per machine).
+`bash tools/fetch_dust.sh` (once per machine). The pipeline needs hdps (argus-hdps/hdps; without a GPU, branch
+`hdps_full_cpu`) with its photometry, astrometry, diffimg and alerts packages installed editable in the same Python,
+and ATLAS-Refcat2 at `~/.rico_cache/atlas_refcat2` (~83 GB).
 
 ```bash
 $EDITOR config.toml               # machine settings: colors-data path, parallelism (usually only the path)
@@ -32,7 +36,7 @@ Two scripts, two kinds of file you write:
 | Step | Command | Reads | Writes |
 |---|---|---|---|
 | simulate stars | `python make_stars.py <star file> [...]` | a **star file**: `[[star]]` and `[[set]]` entries | `stars/<name>/`, one folder per star |
-| observe them | `python observe.py <observation file>` | an **observation file**: pointing, night, stars placed, measurement, output | `outputs/pseudo_real/<name>/` or `outputs/fully_synthetic/<name>/`: movie, photometry, FITS |
+| observe them | `python observe.py <observation file>` | an **observation file**: pointing, night, stars placed, measurement, output | `outputs/pseudo_real/<name>/` or `outputs/fully_synthetic/<name>/`: photometry, alerts, movie, FITS |
 
 A star knows nothing about observing: no dust, no position in an image, no night, no instrument. An observation never
 simulates a star: it names stars that are already built and adds everything about observing.
@@ -125,8 +129,9 @@ y = 30
 epoch = "start+0.05"         # periodic: a primary eclipse / maximum; transients: t0 = ...
                              # ISO UTC, "start+D" days from the start of the night (or the UT window), or BJD_TDB
 
-[measure]                    # how the exposures are measured (hdps source detector; production settings)
-[output]                     # movie, bands, fits, catalogues, page; stride, noise seed, exposure time, PSF and kernel options
+[pipeline]                   # which implementation runs each pipeline stage (mesa_argus/pipeline/), by name
+[measure]                    # the stages' settings (hdps production values where hdps has them)
+[output]                     # movie, bands, fits, catalogues, alerts, page; stride, noise seed, exposure time, PSF options
 ```
 
 [`examples/observations/template.toml`](examples/observations/template.toml) lists every key with its default and
@@ -136,9 +141,15 @@ checked before any work starts. Outputs, in `outputs/pseudo_real/<name>/` (real 
 or `outputs/fully_synthetic/<name>/` (stars at random positions, `layout = "random"`); `<name>`: `[field] name`, else the
 file's name:
 
+- `catalogues/`: every exposure's detections (`<name>_<band>_NNNN.parquet`: position, RA/Dec, flux, calibrated
+  magnitude, the simulated star each one is) and difference-image candidates (`..._candidates.parquet`, with `truth`:
+  the placed star it is, `star` for another simulated star, empty for nothing).
+- `alerts/` (`output.alerts = true`): alert packets, hdps schema 3.0, one JSON line per alert, one file per exposure.
+- `reference/`: the reference images (`*_tile_NNNNNN_<band>.fits`, hdps's reference format) and the sacrificial night
+  they are made from.
+- `<name>_night_<band>.photometry.csv`: the placed stars' measurements, with the true model magnitude beside it.
 - `<name>_night_<band>.mp4`: the movie (CMD, β/ρ colour exposure, difference image, light curves, SEDs).
-- `<name>_night_<band>.photometry.csv`: every measurement, with the true model magnitude beside it.
-- `fits/` (`output.fits = true`): every measured exposure in both bands, with what made it in the header.
+- `fits/` (`output.fits = true`): every exposure in both bands as an hdps sky tile, with what made it in the header.
 - `observation.toml`: the observation as made (every key, the night as used); running it makes the same data.
 - `summary.md`; `scene/`: exactly what the engine (`night_movie.py`) read.
 
@@ -193,8 +204,11 @@ make_stars.py star file          → stars/<name>/   (generators in mesa_argus/s
                                                      parametric transients, Gaia)
 observe.py observation file      → outputs/<category>/<name>/scene/  (field, background stars, placed stars with their file,
                                                             position, timing and dust)
-  └─ night_movie.py --scene      → the night's exposures: ArgusSim PSF, sky, airmass and noise → images
-                                   → SExtractor (SEP) photometry, calibrated per exposure → movie, CSV, FITS
+  ├─ the sacrificial night      → the night before, same stars, no transients → its median: the reference
+  └─ night_movie.py --scene      → the night's exposures: ArgusSim PSF, sky, airmass and noise → hdps sky tiles
+                                   → the pipeline (mesa_argus/pipeline/, one module per stage, hdps underneath):
+                                     extraction → calibration (Refcat2) → PSF → ZOGY difference → candidates → alerts
+                                   → catalogues, alerts, photometry CSV, movie, FITS
 ```
 
 Every assumption (what comes from ArgusSim, what is written here, what is assumed) is in
@@ -288,7 +302,9 @@ night_movie.py          the engine observe.py runs: simulate and measure the exp
 mesa_argus/             the Python package (python -m mesa_argus ...)
   argus.py                Argus bands, units and plot style shared by the movies
   dust.py                 dust: the 3D map (Bayestar19, SFD), CCM89, dereddening Gaia stars
-  photometry.py           SExtractor (SEP) photometry and per-exposure calibration
+  pipeline/               the Argus pipeline run on every exposure, one module per stage (frames, extraction,
+                          calibration, psf, reference, dia, alerts; truth for scoring only), hdps underneath
+  sep_photometry.py       the earlier SExtractor (SEP) photometry (the demo's validation, the offset study)
   rsp.py                  MESA RSP pulsator models
   binary.py               PHOEBE eclipsing-binary models
   sources/                the star generators (one module per family; python -m mesa_argus.sources)

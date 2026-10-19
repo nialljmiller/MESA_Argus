@@ -229,7 +229,7 @@ def place_stars(placements, scene_dir, night_info, half_width, rng):
     return rows, extra
 
 
-def run_engine(obs, out, window, n_placed):
+def run_engine(obs, out, window, n_placed, extra=()):
     import night_movie
 
     name, n, o = obs["field"]["name"], obs["night"], obs["output"]
@@ -248,7 +248,9 @@ def run_engine(obs, out, window, n_placed):
         options += ["--fits", str(out / "fits")]
     if o["catalogues"]:
         options += ["--catalogues", str(out / "catalogues")]
-    for band in o["bands"]:
+    options += list(extra)
+    bands = o["bands"][:1] if "--no-measure" in extra else o["bands"]  # frames hold every band taken: one run makes them
+    for band in bands:
         mp4 = out / f"{name}_night_{band}.mp4"
         print(f"observing {band} -> {mp4.relative_to(REPO)} (log {mp4.with_suffix('.log').relative_to(REPO)})", flush=True)
         with open(mp4.with_suffix(".log"), "w") as log:
@@ -263,17 +265,51 @@ def run_engine(obs, out, window, n_placed):
 def main():
     import os
 
+    obs, scene_only = read_observation()
+    os.chdir(REPO)
+    observe(obs, runconfig.output_folder(obs["field"]["name"], obs["stars"]["layout"]), scene_only)
+
+
+def make_reference(obs, out, placements):
+    """The reference images: observe the sacrificial night (the same field and stars, without the transients, on
+    [pipeline] reference_date, else the night before), keep its tiles, and make each band's reference from them with
+    the reference stage. Returns the folder they are in."""
+    import copy
+    from datetime import date as Date, timedelta
+
+    from mesa_argus import pipeline
+
+    reference = copy.deepcopy(obs)
+    p = obs["pipeline"]
+    reference["night"].update(date=p["reference_date"] or (Date.fromisoformat(obs["night"]["date"]) - timedelta(days=1)).isoformat(),
+                              nights=1)
+    reference["place"] = [place for place, folder, meta in placements if meta["timing"] != "transient"]
+    reference["output"].update(movie=False, catalogues=False, fits=False, alerts=False, page=False)
+    ref_out = out / "reference"
+    print(f"sacrificial night {reference['night']['date']} for the reference -> {ref_out.relative_to(REPO)}/", flush=True)
+    observe(reference, ref_out, engine_options=["--no-measure", "--fits", str(ref_out / "frames")])
+    cfg = {**obs["measure"], **p}
+    build = pipeline.stage("reference", p["reference"])
+    stages = {name: pipeline.stage(name, p[name]) for name in ("extraction", "calibration", "psf")}
+    for band in obs["output"]["bands"]:
+        files = sorted((ref_out / "frames").glob(f"*_{band}_*.fits"))
+        path = build(files, ref_out, obs["field"]["name"], band, stages, cfg)
+        print(f"reference {band}: median of {len(files)} exposures -> {path.relative_to(REPO)}", flush=True)
+    return ref_out
+
+
+def observe(obs, out, scene_only=False, engine_options=None):
+    """Write the observation's scene into `out`, then run the engine on it (engine_options: extra engine arguments;
+    None for a full observation, which makes the reference first if alerts are asked for)."""
     from argus_sim import skymap_shim
     from astropy.time import Time
 
     import night_movie
     from mesa_argus import night
-    obs, scene_only = read_observation()
-    os.chdir(REPO)
+
     f, n, s = obs["field"], obs["night"], obs["stars"]
     name, ra, dec = f["name"], f["ra"], f["dec"]
     window = (n["start"] or None, n["end"] or None)  # UT HH:MM, or the whole dark night
-    out = runconfig.output_folder(name, s["layout"])
     scene_dir = out / "scene"
     shutil.rmtree(scene_dir, ignore_errors=True)
     scene_dir.mkdir(parents=True)
@@ -352,7 +388,13 @@ def main():
     if scene_only:
         print(f"scene: {scene_dir.relative_to(REPO)}/")
         return
-    run_engine(obs, out, window, len(rows))
+    if engine_options is None:
+        engine_options = []
+        if obs["output"]["alerts"]:
+            reference_dir = make_reference(obs, out, placements)
+            shutil.rmtree(out / "alerts", ignore_errors=True)
+            engine_options += ["--reference", str(reference_dir), "--alerts", str(out / "alerts")]
+    run_engine(obs, out, window, len(rows), engine_options)
     print(f"done: {out.relative_to(REPO)}/")
 
 

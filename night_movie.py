@@ -757,6 +757,9 @@ def parser():
     p.add_argument("--measure", default="{}", help="pipeline stages and settings as JSON (mesa_argus.pipeline)")
     p.add_argument("--fits", type=Path, help="also write every measured exposure (both bands) as FITS here")
     p.add_argument("--catalogues", type=Path, help="also write every measured exposure's detections (parquet) here")
+    p.add_argument("--no-measure", action="store_true", help="make the exposures (with --fits) and stop: no pipeline")
+    p.add_argument("--reference", type=Path, help="reference images (pipeline.reference): run difference imaging")
+    p.add_argument("--alerts", type=Path, help="with --reference: write alert packets here")
     p.add_argument("--no-render", action="store_true", help="measure (and write FITS) but draw no movie")
     p.add_argument("-o", "--output", type=Path,
                    help="default: next to the scene; a hand-made field: outputs/pseudo_real/<field>/<field>_night_<band>.mp4")
@@ -790,8 +793,9 @@ def main(argv=None):
         args.field = args.field or args.scene.resolve().parent.name
     if args.fits is not None and not args.fits.is_absolute():
         args.fits = Path.cwd() / args.fits
-    if args.catalogues is not None and not args.catalogues.is_absolute():
-        args.catalogues = Path.cwd() / args.catalogues
+    for key in ("catalogues", "reference", "alerts"):
+        if getattr(args, key) is not None and not getattr(args, key).is_absolute():
+            setattr(args, key, Path.cwd() / getattr(args, key))
     if args.output is None:
         folder = args.scene.parent if args.scene is not None else _REPO / "outputs" / "pseudo_real" / args.field
         args.output = folder / f"{args.field}_night_{args.band}.mp4"
@@ -914,6 +918,11 @@ def main(argv=None):
 
     cfg = json.loads(args.measure)
     extract, calibrate = pipeline.stage("extraction", cfg.get("extraction")), pipeline.stage("calibration", cfg.get("calibration"))
+    difference, alert = pipeline.stage("dia", cfg.get("dia")), pipeline.stage("alerts", cfg.get("alerts"))
+    fit_psf = pipeline.stage("psf", cfg.get("psf"))
+    reference = pipeline.reference.load(args.reference, TILE, B) if args.reference is not None else None
+    if args.reference is not None and reference is None:
+        raise SystemExit(f"no reference for tile {TILE} band {B} in {args.reference}")
     origin = ((BLOCK[0] + 0.5) * MINIPIX_PX - scene.centre, (BLOCK[1] + 0.5) * MINIPIX_PX - scene.centre)
     tile = pipeline.frames.tile_wcs(TILE, CENTRE.ra.deg, CENTRE.dec.deg, *origin)
     expected_flux = static_rate[B][:, 0] * args.exptime
@@ -922,7 +931,7 @@ def main(argv=None):
     frames = range(0, len(times), args.stride)
     s = SimpleNamespace(times=times, bjd=bjd, airmass=airmass, seeing=seeing, scene=scene, survey=survey)
     print(f"observing and rendering {len(frames)} frames ({len(times)} exposures) -> {args.output}", flush=True)
-    rows, measured = [], []
+    rows, measured, n_alerts, n_skipped = [], [], 0, 0
     for n, j in enumerate(frames):
         exposures = exposure(j)
         frame = {b: pipeline.frames.make_frame(e["image"], tile, TILE, frame_metadata(j, b, s, args)) for b, e in exposures.items()}
@@ -930,9 +939,22 @@ def main(argv=None):
             args.fits.mkdir(parents=True, exist_ok=True)
             for b, f in frame.items():
                 pipeline.frames.write(f, args.fits / f"{FIELD}_{b}_{j:04d}.fits")
+        if args.no_measure:
+            continue
         catalogue = extract(frame[B], cfg)
         zp = calibrate(catalogue, frame[B], cfg)
         star_of = truth.label(catalogue, scene.x, scene.y, expected_flux, cfg)
+        if reference is not None:  # difference imaging, candidates, alerts; then, for scoring, what each candidate is
+            frame[B].metadata["magzp"] = zp["zp"] if zp else np.nan
+            candidates, difference_image = difference(frame[B], reference, frame[B].metadata["magzp"], fit_psf, cfg)
+            n_skipped += difference_image is None
+            candidates["alert_id"] = alert(candidates, frame[B], reference, args.alerts) if args.alerts is not None else ""
+            truth.label_candidates(candidates, scene.x, scene.y, expected_flux, follow, labels, cfg)
+            n_alerts += int(np.sum(candidates["alert_id"] != ""))
+            if args.catalogues is not None:
+                args.catalogues.mkdir(parents=True, exist_ok=True)
+                candidates.meta = {key: value for key, value in frame[B].metadata.items() if np.isscalar(value)}
+                candidates.write(args.catalogues / f"{FIELD}_{B}_{j:04d}_candidates.parquet", overwrite=True)
         if args.catalogues is not None:  # every detection, calibrated, with the simulated star it is (-1: none)
             args.catalogues.mkdir(parents=True, exist_ok=True)
             meta = {**frame[B].metadata, **{f"zp_{key}": value for key, value in (zp or {}).items()}}
@@ -954,6 +976,12 @@ def main(argv=None):
         measured.append(this_frame)
         if (n + 1) % max(1, len(frames) // 10) == 0:
             print(f"  measured {n + 1}/{len(frames)}", flush=True)
+    if args.no_measure:
+        print(f"made {len(frames)} exposures -> {args.fits}")
+        return
+    if reference is not None:
+        print(f"difference imaging: {n_alerts} alerts from {len(frames)} frames ({n_skipped} skipped: too few PSF stars)",
+              flush=True)
     with open(args.output.with_suffix(".photometry.csv"), "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
         writer.writeheader()

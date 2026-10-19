@@ -32,3 +32,17 @@ def label(catalogue, star_x, star_y, star_flux, cfg):
     star[star_of[star_of >= 0]] = np.nonzero(star_of >= 0)[0]
     catalogue["star"] = star
     return star_of
+
+
+def label_candidates(candidates, star_x, star_y, star_flux, followed, labels, cfg):
+    """Adds `star` (the nearest simulated star within match_radius, -1 for none) and `truth` (its label if it is a
+    followed star: a variable or transient; 'star' for another simulated star; '' for nothing) to the candidates."""
+    radius = cfg.get("match_radius", SETTINGS["match_radius"])
+    x, y = np.asarray(candidates["x"], float), np.asarray(candidates["y"], float)
+    star = np.full(len(candidates), -1)
+    for i in range(len(candidates)):
+        d = np.hypot(star_x - x[i], star_y - y[i]) - 1e-9 * np.nan_to_num(star_flux)  # ties: the brighter
+        k = int(np.argmin(d))
+        star[i] = k if d[k] <= radius else -1
+    candidates["star"] = star
+    candidates["truth"] = [labels[k] if k in followed else ("star" if k >= 0 else "") for k in star]

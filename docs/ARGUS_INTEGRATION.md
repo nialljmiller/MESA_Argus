@@ -110,3 +110,25 @@ Each of these changes measurements: decide one at a time.
   V1 +0.053 / 0.031 mag, V2 +0.024 / 0.026, no outliers. Refcat2 at ~/atlas_refcat2 (linked from
   ~/.rico_cache/atlas_refcat2), still downloading (26 of 82 GB on 2026-10-19).
 
+- 2026-10-19: Refcat2 download complete (83 GB, 192 files).
+- 2026-10-19: difference imaging and alerts (mesa_argus/pipeline/: psf, reference, dia, alerts). observe.py first
+  observes a sacrificial night (the night before, same stars, no transients); its per-pixel median is the reference,
+  written in hdps's CoaddReferenceProvider format with hdps's PSF commissioning products (EPSF, PMERRKER, PMERRCAT).
+  ZOGY: hdps's CPU subtractor; PSFs are hdps's Moffat field fit (select_stars + FramePSFBuilder, as TilePSFTask), not
+  the stacked ePSF: hdps's own ZOGY task keeps prefer_measured_epsf off, and here the stacked ePSF carried a pedestal
+  (17% of its flux at 12-20 px, true stars 2.5%) that left ~85 false alerts per frame around bright stars. The
+  reference's PSF-model-error plane enters S_corr as in hdps's GPU path. hdps branch cpu-mirror ac88d60b (local, not
+  pushed): ZOGYReferenceSubtractor takes extra_var_r / extra_var_n, as ZOGYGPUSubtractor. Departures, for want of a
+  real/bogus model: threshold 8 sigma; no candidates within 10 px of saturation or 20 px of the edge (FFT wrap-around).
+  Alerts: hdps Alert schema 3.0, orjson of to_dict(), JSON lines per frame. f294 survey night, rho, 154 frames, dwarf
+  nova placed: 89 alerts, all the dwarf nova, no false alerts; it is alerted in 28/28 frames brighter than 17.5,
+  51/63 at 17.5-18, 10/63 at 18-18.3. Reference 5 sigma depth 20.8 (rho).
+- 2026-10-19: full observation, f294 survey night, beta and rho, movie on (outputs/pseudo_real/test_alerts_f294/).
+  psf_min_stars 8 (FramePSFBuilder's floor; hdps TilePSFTask 12 per full tile): the cut-out is ~1/14 of a tile and
+  the beta one has 10 clean PSF stars. No frame skipped. rho: 93 alerts, 89 the dwarf nova, 4 false (one frame).
+  beta: 151 alerts, 79 the dwarf nova (14/14 frames brighter than 17.5, 51/58 at 17.5-18, 14/68 fainter); 72 false,
+  all 3-6 px to the same side of two bright unsaturated stars (90k and 41k e-) in 58 and 14 frames: an asymmetric
+  beta PSF the symmetric Moffat does not follow. The reference-side PSF-model-error plane covers them (V_err ~2e4
+  there) but not enough; production uses the reference side only too (tasks.py extra_var_rs), with real/bogus
+  vetting after it. Open: science-side V_err (the GPU seam extra_var_ns exists, unused in production), or the
+  measured PSF asymmetry.

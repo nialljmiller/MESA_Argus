@@ -56,6 +56,11 @@ y = 70
 [pipeline]                # which implementation runs each measurement stage (mesa_argus/pipeline/)
 extraction = "hdps"       # hdps's source detector (GPU, or its CPU mirror)
 calibration = "atlas_refcat2"  # zero point against ATLAS-Refcat2 (hdps zeropoint; ~/.rico_cache/atlas_refcat2)
+psf = "hdps_moffat"       # PSF: hdps's Moffat field fit to Refcat2 stars (as TilePSFTask), difference imaging's filter
+reference = "sacrificial_night"  # reference: median of a night observed first (same stars, no transients)
+dia = "hdps_zogy"         # difference imaging: hdps ZOGY, candidates from its calibrated S_corr
+alerts = "hdps_v3"        # alert packets: hdps alert schema 3.0, JSON lines (alerts/)
+reference_date = ""       # the sacrificial night (YYYY-MM-DD; "": the night before the observation)
 
 [measure]                 # the stages' settings (hdps production values for the detector)
 detect_sigma = 3.0        # detection threshold (sigma)
@@ -68,12 +73,26 @@ match_arcsec = 1.5        # calibration: match to Refcat2 (arcsec)
 min_snr = 20.0            # calibration: a star counts only if measured at S/N >= this
 refcat_radius_deg = 0.12  # calibration: Refcat2 cone (deg)
 refcat_max_mag = 19.0     # calibration: faintest Refcat2 star read (g)
-match_radius = 2.0        # truth labelling only: detection to simulated star (pixels)
+psf_mag_bright = 12.0     # psf: Refcat2 magnitude window of the PSF stars (hdps TilePSFTask: 12-17)
+psf_mag_faint = 17.0
+psf_select_stamp = 25     # psf: stamp (pixels) a PSF star must have clean and to itself
+psf_max_stars = 200       # psf: at most this many PSF stars (the brightest)
+psf_min_stars = 8         # psf: fewer and the frame is skipped (as hdps skips the tile; hdps: 12 per full tile)
+psf_stamp = 41            # psf: the PSF image ZOGY takes (pixels)
+dia_threshold = 8.0       # dia: candidate threshold (sigma; hdps 5, with a real/bogus classifier after it)
+dia_region_size = 256     # dia: region (pixels) for S_corr's robust scale
+dia_min_separation = 4    # dia: candidates at least this far apart (pixels)
+astrometric_sigma = 0.032 # dia: ZOGY's astrometric noise (pixels; hdps's value)
+dia_saturation_px = 10    # dia: no candidates this close (pixels) to a saturated pixel
+dia_edge_px = 20          # dia: no candidates this close (pixels) to the edge (ZOGY's FFT wrap-around)
+match_radius = 2.0        # truth: a detection or candidate is a simulated star within this (pixels); scoring only
 [output]
 movie = true              # render the movie (false: photometry and any FITS only)
 bands = ["beta", "rho"]   # one movie and photometry CSV per band
 fits = false              # every measured exposure, both bands, as FITS (fits/ in the output folder)
-catalogues = true         # every measured exposure's detections and their simulated stars (catalogues/, parquet)
+catalogues = true         # every measured exposure's detections and their simulated stars (catalogues/, parquet);
+                          # with alerts, also each exposure's difference-image candidates (*_candidates.parquet)
+alerts = true             # difference imaging and alert packets (alerts/); makes the reference first (reference/)
 page = false              # the interactive page (real Gaia stars only, for now)
 stride = 1                # render and measure every Nth exposure
 seed = 3                  # noise

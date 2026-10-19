@@ -16,14 +16,15 @@ def defaults():
     import night_movie
     from mesa_argus import pipeline
 
-    output = dict(movie=True, bands=["beta", "rho"], fits=False, catalogues=True, page=False)
+    output = dict(movie=True, bands=["beta", "rho"], fits=False, catalogues=True, alerts=True, page=False)
     engine = {a.dest: a.default for a in night_movie.parser()._actions}  # the engine's own defaults
     output.update({k: engine[k] for k in night_movie.MOVIE_OPTIONS if k != "max_airmass"})
     return dict(
         field=dict(ra=REQUIRED, dec=REQUIRED, block=3, name=""),
         night=dict(date="", start="", end="", site="argus", max_airmass=0.0, observing="ideal", nights=1, survey_seed=0),
         stars=dict(background=REQUIRED, layout="real", seed=1, missing="stop"),
-        pipeline=dict(pipeline.DEFAULTS),  # which implementation runs each stage (mesa_argus/pipeline/)
+        pipeline=dict(pipeline.DEFAULTS, reference_date=""),  # each stage's implementation (mesa_argus/pipeline/);
+        # reference_date: the sacrificial night the reference is made from ("": the night before the observation)
         measure=dict(pipeline.SETTINGS),
         output=output,
     )
