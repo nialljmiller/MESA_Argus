@@ -16,7 +16,7 @@ def defaults():
     import night_movie
     from mesa_argus.photometry import SETTINGS
 
-    output = dict(movie=True, bands=["beta", "rho"], fits=False, page=False)
+    output = dict(movie=True, bands=["beta", "rho"], fits=False, catalogues=True, page=False)
     engine = {a.dest: a.default for a in night_movie.parser()._actions}  # the engine's own defaults
     output.update({k: engine[k] for k in night_movie.MOVIE_OPTIONS if k != "max_airmass"})
     return dict(

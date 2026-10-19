@@ -13,7 +13,8 @@ The night, step by step (main):
      dust -> electrons/s
   5. conditions per exposure (ArgusSim): seeing (seasonal median x airmass^0.6), Zemax PSF with that seeing, sky
   6. the difference-image reference: the median of the best-seeing exposures
-  7. every exposure: PSFs + sky -> Poisson, full well, read noise -> SExtractor photometry (mesa_argus.photometry)
+  7. every exposure: PSFs + sky -> Poisson, full well, read noise -> hdps source detector, matched to the simulated
+     stars, per-exposure zero point (mesa_argus.photometry)
   8. the movie, frame by frame (the same exposures again, from the same seeds)
 
 Assumptions (field angle, coverage, seeing, transparency, ...): docs/ASSUMPTIONS.md.
@@ -52,6 +53,7 @@ from mesa_argus.argus import BANDS, COLORS, FLAM, SYMBOLS, apply_style, system_r
 from mesa_argus.seds import Templates  # noqa: E402
 
 iers.conf.auto_download = False
+iers.conf.auto_max_age = None  # the bundled Earth-orientation table at any age: sub-second UT1, sub-arcsec polar motion
 _REPO = Path(__file__).resolve().parent  # data/, runs/, outputs/ are in the repo, wherever this is run from
 
 # hand-made fields (before observe.py): Gaia data in data/<field>/, centre, HDPS tile and block centre, default night,
@@ -721,8 +723,9 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--scene", type=Path, help="a scene folder written by observe.py")
     p.add_argument("--field", help="a hand-made field (m3, m15, rr308108, rr416445); with --scene, its name")
-    p.add_argument("--measure", default="{}", help="photometry settings as JSON (mesa_argus.photometry.SETTINGS)")
+    p.add_argument("--measure", default="{}", help="extraction settings as JSON (mesa_argus.photometry.SETTINGS)")
     p.add_argument("--fits", type=Path, help="also write every measured exposure (both bands) as FITS here")
+    p.add_argument("--catalogues", type=Path, help="also write every measured exposure's detections (parquet) here")
     p.add_argument("--no-render", action="store_true", help="measure (and write FITS) but draw no movie")
     p.add_argument("-o", "--output", type=Path,
                    help="default: next to the scene; a hand-made field: outputs/pseudo_real/<field>/<field>_night_<band>.mp4")
@@ -756,6 +759,8 @@ def main(argv=None):
         args.field = args.field or args.scene.resolve().parent.name
     if args.fits is not None and not args.fits.is_absolute():
         args.fits = Path.cwd() / args.fits
+    if args.catalogues is not None and not args.catalogues.is_absolute():
+        args.catalogues = Path.cwd() / args.catalogues
     if args.output is None:
         folder = args.scene.parent if args.scene is not None else _REPO / "outputs" / "pseudo_real" / args.field
         args.output = folder / f"{args.field}_night_{args.band}.mp4"
@@ -872,7 +877,7 @@ def main(argv=None):
 
     # 7. every exposure, measured. The catalogue a pipeline calibrates against: every star's magnitude (periodic
     # stars: their intensity mean; transients: not in it); the expected fluxes pick the calibration stars.
-    from mesa_argus.photometry import SExtractorPhotometry
+    from mesa_argus.photometry import Photometry
 
     cat_mag = static_mag[B].copy()
     cat_flux = static_rate[B][:, 0] * args.exptime
@@ -882,12 +887,8 @@ def main(argv=None):
         else:
             cat_mag[k] = -2.5 * np.log10(np.mean(10 ** (-0.4 * follow_cycle[k][B])))
             cat_flux[k] = np.mean(ref_rate[k][B]) * args.exptime
-    psf = scene.lookup[B, int(scene.seeing_index[ref_frames[0]]), 0, 0]
-    yy, xx = np.indices(psf.shape)
-    cy, cx = (psf * yy).sum(), (psf * xx).sum()
-    ref_fwhm = 2.3548 * np.sqrt(0.5 * (psf * ((yy - cy) ** 2 + (xx - cx) ** 2)).sum())
-    phot = SExtractorPhotometry(scene.x, scene.y, cat_mag, cat_flux, scene.n, scene.fullwell, follow,
-                                colour=column(stars, "BP-RP"), fwhm=ref_fwhm, cfg=json.loads(args.measure))
+    phot = Photometry(scene.x, scene.y, cat_mag, cat_flux, scene.n, scene.fullwell, follow,
+                      colour=column(stars, "BP-RP"), cfg=json.loads(args.measure))
     frames = range(0, len(times), args.stride)
     s = SimpleNamespace(times=times, bjd=bjd, airmass=airmass, seeing=seeing, scene=scene, survey=survey)  # for write_fits
     print(f"observing and rendering {len(frames)} frames ({len(times)} exposures) -> {args.output}", flush=True)
@@ -897,6 +898,10 @@ def main(argv=None):
         if args.fits is not None:
             write_fits(args.fits, j, exposures, s, args)
         r = phot.measure(exposures[B]["image"])
+        if args.catalogues is not None:  # every detection, with the simulated star it was matched to (-1: none)
+            args.catalogues.mkdir(parents=True, exist_ok=True)
+            r["catalogue"].meta.update(exposure=int(j), band=B, zp_a=r["zeropoint"][0], zp_b=r["zeropoint"][1])
+            r["catalogue"].write(args.catalogues / f"{FIELD}_{B}_{j:04d}.parquet", overwrite=True)
         this_frame = {}
         for i, k in enumerate(follow):
             ok = np.isfinite(r["mag"][i]) and r["flux"][i] / r["sigma"][i] >= 5  # S/N >= 5
@@ -904,7 +909,7 @@ def main(argv=None):
             rows.append(dict(exposure=j, ut_hours=ut[j], airmass=airmass[j], seeing=seeing[j],
                              seeing_model=scene.seeings[int(scene.seeing_index[j])], star=labels[k],
                              true_mag=true_mag(B, k, j), saturated=bool(r["saturated"][i]),
-                             sextractor_mag=r["mag"][i], sextractor_err=r["mag_err"][i]))
+                             measured_mag=r["mag"][i], measured_err=r["mag_err"][i]))
             if survey is not None:
                 rows[-1].update(band=B, tel_id=int(survey["tel_id"][j]), ratchet=int(survey["ratchet"][j]),
                                 field_angle=float(survey["field_angle"][j]), time_utc=survey["time"][j])
@@ -1064,7 +1069,7 @@ def draw(fig, args, exposures, j, d):
     cmd.legend(loc="lower left", fontsize=9, framealpha=0.85, edgecolor="none").set_zorder(2)
     cmd.grid(alpha=0.15)
 
-    # light curves: measured (MAG_AUTO) points and the model behind, each relative to its own mean over the night
+    # light curves: measured points (hdps source detector, 4 px aperture) and the model behind, each relative to its own mean over the night
     ut = d["ut"]
     model_t = model_hours(ut)
     model_bjd = d["bjd"][0] + (model_t - ut[0]) / 24.0
@@ -1116,7 +1121,7 @@ def draw(fig, args, exposures, j, d):
                     ax.plot(t[beyond], np.full(int(np.sum(beyond)), edge), marker, ms=6, mfc="none", color=colour_of[k], clip_on=False)
     lc.legend(loc="upper left", ncol=4, fontsize=7.5, frameon=True, framealpha=0.85, edgecolor="none", columnspacing=0.8,
               handletextpad=0.3)
-    lc.set_title("Light curves (SExtractor MAG_AUTO)", loc="left", weight="bold")
+    lc.set_title("Light curves (hdps source detector)", loc="left", weight="bold")
     lc.set_title(f"UT {d['times'][j].iso[11:16]} · airmass {d['airmass'][j]:.2f} · seeing {d['seeing'][j]:.2f}″", loc="right",
                  fontsize=11, color="#3c5262")
     plt.setp(lc.get_xticklabels(), visible=False)

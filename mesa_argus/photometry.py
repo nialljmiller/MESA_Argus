@@ -1,43 +1,46 @@
-"""SExtractor photometry of the synthetic Argus exposures (night_movie.py).
+"""Source extraction and photometry of the simulated exposures (night_movie.py), with hdps's own source detector.
 
-SEP (Barbary 2016; SExtractor's algorithms, Bertin & Arnouts 1996) on every exposure, with SExtractor's defaults:
-- background: mesh 64 x 64 px, 3 x 3 median filter (BACK_SIZE 64, BACK_FILTERSIZE 3);
-- detection: 1.5 sigma above background over >= 5 connected pixels after the default 3 x 3 convolution
-  (DETECT_THRESH 1.5, DETECT_MINAREA 5), deblending 32 thresholds / 0.005 contrast;
-- neighbours: other objects' pixels masked from each Kron radius and aperture via the segmentation map (as
-  SExtractor's MASK_TYPE does for MAG_AUTO);
-- positions: windowed centroids (XWIN_IMAGE / YWIN_IMAGE);
-- photometry: MAG_AUTO, a Kron elliptical aperture of 2.5 Kron radii, at least 3.5 (PHOT_AUTOPARAMS 2.5, 3.5).
-Saturated pixels are not masked (SExtractor keeps saturated stars; they are flagged).
+Each exposure, in three steps:
 
-Each exposure is calibrated on its own: catalogue stars (least-blended, unsaturated, with Gaia colours) matched to
-their detections give the zero point with a linear colour term in BP-RP (3-sigma clipped). Catalogue stars
-(variables included) are cross-matched to the nearest detection within 0.5 FWHM; none: no measurement in that
-exposure.
+1. extraction: hdps.photometry.SourceDetector (GPUSourceDetector on a CUDA host, its CPU mirror otherwise) with the
+   settings hdps's SourceDetectionTask runs in production: background in 64 px regions, local maxima above 3 sigma
+   confirmed by a matched filter (4 px FWHM), cosmic-ray test, iterated centroid, flux in a 4 px radius circular
+   aperture around it (sub-pixel rim weights) minus a 15-25 px annulus background, detections within 6 px merged
+   (the brightest kept). The result is the exposure's full catalogue of detections.
+2. association with the simulated stars: the stars in order of expected flux, brightest first, each take the nearest
+   detection not yet taken within match_radius pixels. One detection belongs to at most one star; a star with no
+   detection (too faint, or merged into a brighter neighbour's detection) is unmeasured in that exposure.
+3. zero point: catalogue stars (the least blended of the bright ones, unsaturated, with Gaia colours, measured at
+   S/N >= min_cal_snr) give
+   mag + 2.5 log10(flux) = a + b (BP-RP), clipped at clip_sigma (MAD) and refitted.
+
+Saturation: a star is flagged when the brightest pixel within 2 px of its detection is at 98% of the full well.
+(hdps flags saturation at 0.9999 x 65534, a 16-bit ADC level; these images are in electrons with a smaller full well.)
 """
+import time
 
 import numpy as np
-import sep
 
-# every setting an observation can change ([measure] in observe.py's file); these defaults are SExtractor's own
+# every setting an observation can change ([measure] in observe.py's file); the detector's are hdps's production values
 SETTINGS = dict(
-    back_size=64,          # BACK_SIZE: background mesh (pixels)
-    back_filtersize=3,     # BACK_FILTERSIZE: median filter of the mesh
-    detect_thresh=1.5,     # DETECT_THRESH (sigma above the background rms)
-    detect_minarea=5,      # DETECT_MINAREA (pixels)
-    deblend_nthresh=32,    # DEBLEND_NTHRESH
-    deblend_cont=0.005,    # DEBLEND_MINCONT
-    kron_fact=2.5,         # PHOT_AUTOPARAMS: aperture = max(kron_fact x Kron radius, min_radius) in units of (a, b)
-    min_radius=3.5,
-    match_fwhm=0.5,        # cross-match radius (FWHM) between catalogue stars and detections
-    n_calibrators=300,     # calibration stars per exposure (the least blended of the brightest 4x this many)
-    colour_term=True,      # zero point a + b (BP-RP); false: a only
-    clip_sigma=3.0,        # zero-point fit: reject calibrators beyond this many (MAD) sigma, refit
+    detect_sigma=3.0,          # detection threshold (sigma)
+    bg_region_size=64,         # background region (pixels)
+    flux_radius=4.0,           # aperture radius (pixels)
+    matched_filter_width=4.0,  # matched filter FWHM (pixels)
+    de_dup_radius=6.0,         # detections closer than this (pixels) are merged, the brightest kept
+    cr_detect_contrast=0.25,   # cosmic-ray test: neighbours below this fraction of the peak
+    match_radius=2.0,          # association with the simulated stars (pixels)
+    n_calibrators=300,         # calibration stars per exposure (the least blended of the brightest 4x this many)
+    min_cal_snr=50.0,          # a calibration star counts only if measured at least this well (flux / error)
+    colour_term=True,          # zero point a + b (BP-RP); false: a only
+    clip_sigma=3.0,            # zero-point fit: reject calibrators beyond this many (MAD) sigma, refit
 )
+DETECTOR_KEYS = ("detect_sigma", "bg_region_size", "flux_radius", "matched_filter_width", "de_dup_radius",
+                 "cr_detect_contrast")
 
 
 def settings(given=None):
-    """SETTINGS with `given` applied; unknown keys refused."""
+    """SETTINGS with `given` applied; unknown keys stop the run."""
     given = dict(given or {})
     bad = sorted(set(given) - set(SETTINGS))
     if bad:
@@ -46,13 +49,10 @@ def settings(given=None):
 
 
 def calibration_stars(x, y, cat_flux, n, k=300, edge=16, radius=8.0):
-    """The k bright stars least contaminated by neighbours, away from the edge.
-
-    Contamination of a star: catalogue flux of its neighbours, Gaussian-weighted by distance (sigma = radius/2
-    pixels), over its own flux.
-    """
+    """The k bright stars least contaminated by neighbours, away from the edge. Contamination of a star: catalogue
+    flux of its neighbours, Gaussian-weighted by distance (sigma = radius/2 pixels), over its own flux."""
     candidates = np.nonzero((x > edge) & (x < n - edge) & (y > edge) & (y < n - edge) & np.isfinite(cat_flux))[0]
-    candidates = candidates[np.argsort(-cat_flux[candidates])][: 4 * k]  # the brightest
+    candidates = candidates[np.argsort(-cat_flux[candidates])][: 4 * k]
     contamination = []
     for i in candidates:
         d = np.hypot(x - x[i], y - y[i])
@@ -61,61 +61,68 @@ def calibration_stars(x, y, cat_flux, n, k=300, edge=16, radius=8.0):
     return candidates[np.argsort(contamination)[:k]]
 
 
-def extract(image, fwhm, cfg=None):
-    """SExtractor's defaults with MAG_AUTO as SExtractor measures it (see the module docstring); cfg: settings().
+def extract(image, cfg):
+    """hdps's source detector on one exposure (electrons): its catalogue as an astropy Table."""
+    from hdps.core.images import FullFrameImage
+    from hdps.core.telemetry import Telemetry
+    from hdps.photometry import SourceDetector
 
-    Returns x, y (windowed), flux, flux error and peak of every detection."""
-    c = cfg or SETTINGS
-    data = np.ascontiguousarray(image, dtype=np.float64)
-    bkg = sep.Background(data, bw=c["back_size"], bh=c["back_size"], fw=c["back_filtersize"], fh=c["back_filtersize"])
-    sub = data - bkg.back()
-    sep.set_extract_pixstack(10_000_000)
-    sep.set_sub_object_limit(8192)
-    obj, seg = sep.extract(sub, c["detect_thresh"], err=bkg.globalrms, minarea=c["detect_minarea"],
-                           deblend_nthresh=c["deblend_nthresh"], deblend_cont=c["deblend_cont"], segmentation_map=True)
-    ids = np.arange(1, len(obj) + 1, dtype=np.int32)
-    x, y = np.asarray(obj["x"], float), np.asarray(obj["y"], float)
-    xw, yw, fl = sep.winpos(sub, x, y, fwhm / 2.3548)
-    good = fl == 0
-    a, b, th = np.asarray(obj["a"], float), np.asarray(obj["b"], float), np.asarray(obj["theta"], float)
-    th = np.clip(th, -np.pi / 2, np.pi / 2)
-    kr, kf = sep.kron_radius(sub, x, y, a, b, th, 6.0, seg_id=ids, segmap=seg)
-    # PHOT_AUTOPARAMS 2.5, 3.5: the elliptical aperture is max(2.5 x Kron radius, 3.5) in units of (a, b)
-    r = np.maximum(c["kron_fact"] * np.nan_to_num(kr, nan=0.0), c["min_radius"])
-    flux, ferr, ff = sep.sum_ellipse(sub, x, y, a, b, th, r, err=bkg.globalrms, subpix=1, seg_id=ids, segmap=seg)
-    return np.where(good, xw, x), np.where(good, yw, y), np.asarray(flux, float), np.asarray(ferr, float), obj["peak"]
+    detector = SourceDetector(**{k: cfg[k] for k in DETECTOR_KEYS})
+    frame = FullFrameImage(data=np.asarray(image, np.float32), metadata={}, timestamp=time.time(),
+                           telemetry=Telemetry(output_enabled=False))
+    return detector.detect_sources(frame).sources.table
 
 
-class SExtractorPhotometry:
-    """measure(image) -> the targets' flux, sigma, mag, mag_err (nan where not detected) and saturation flags."""
+def associate(det_x, det_y, star_x, star_y, star_flux, radius):
+    """For each star, the index of its detection, or -1: stars brightest first, each taking the nearest detection
+    not yet taken within `radius`."""
+    match = np.full(len(star_x), -1)
+    taken = np.zeros(len(det_x), bool)
+    for i in np.argsort(-np.nan_to_num(star_flux, nan=0.0), kind="stable"):
+        d = np.hypot(det_x - star_x[i], det_y - star_y[i])
+        d[taken] = np.inf
+        j = int(np.argmin(d)) if len(d) else -1
+        if j >= 0 and d[j] <= radius:
+            match[i] = j
+            taken[j] = True
+    return match
 
-    def __init__(self, x, y, cat_mag, cat_flux, n, fullwell, targets, colour, fwhm, cfg=None):
+
+class Photometry:
+    """measure(image) -> the targets' flux, sigma, mag, mag_err (nan where not detected), saturation flags, and the
+    exposure's full catalogue (every detection, with the simulated star it was matched to, or -1)."""
+
+    def __init__(self, x, y, cat_mag, cat_flux, n, fullwell, targets, colour, cfg=None):
         self.cfg = settings(cfg)
         self.x, self.y = np.asarray(x, float), np.asarray(y, float)
-        self.cat_mag, self.colour = np.asarray(cat_mag, float), np.asarray(colour, float)
-        self.fullwell, self.targets, self.fwhm = fullwell, list(targets), fwhm
-        picks = calibration_stars(self.x, self.y, np.asarray(cat_flux, float), n, k=self.cfg["n_calibrators"])
+        self.cat_mag, self.cat_flux = np.asarray(cat_mag, float), np.asarray(cat_flux, float)
+        self.colour = np.asarray(colour, float)
+        self.fullwell, self.targets = fullwell, list(targets)
+        picks = calibration_stars(self.x, self.y, self.cat_flux, n, k=self.cfg["n_calibrators"])
         self.cal = np.setdiff1d(picks[np.isfinite(self.colour[picks])], self.targets)
 
     def measure(self, image):
-        x, y, flux, ferr, peak = extract(image, self.fwhm, self.cfg)
-        sat_level = 0.98 * self.fullwell
+        table = extract(image, self.cfg)
+        dx, dy = np.asarray(table["xcentroid"], float), np.asarray(table["ycentroid"], float)
+        flux, ferr = np.asarray(table["flux"], float), np.asarray(table["flux_err"], float)
+        star_of = associate(dx, dy, self.x, self.y, self.cat_flux, self.cfg["match_radius"])
+        if len(dx) == 0:  # nothing detected
+            nan = np.full(len(self.targets), np.nan)
+            return dict(flux=nan, sigma=nan, mag=nan, mag_err=nan, saturated=np.zeros(len(self.targets), bool),
+                        catalogue=table, zeropoint=(np.nan, np.nan))
+        ny, nx = image.shape
+        peak = np.array([image[max(int(round(b)) - 2, 0):min(int(round(b)) + 3, ny),
+                               max(int(round(a)) - 2, 0):min(int(round(a)) + 3, nx)].max() for a, b in zip(dx, dy)])
+        saturated = peak >= 0.98 * self.fullwell
 
-        def nearest(i):  # standard cross-match: the nearest detection within match_fwhm x FWHM
-            d = np.hypot(x - self.x[i], y - self.y[i])
-            j = int(np.argmin(d))
-            return j if d[j] <= self.cfg["match_fwhm"] * self.fwhm else -1
-
-        # zero point with a colour term: mag + 2.5 log10(flux) = a + b (BP-RP), 3-sigma clipped
-        cal_y, cal_c = [], []
-        for i in self.cal:
-            j = nearest(i)
-            if j >= 0 and flux[j] > 0 and peak[j] < sat_level:
-                cal_y.append(self.cat_mag[i] + 2.5 * np.log10(flux[j]))
-                cal_c.append(self.colour[i])
-        cal_y, cal_c = np.array(cal_y), np.array(cal_c)
+        # zero point with a colour term: mag + 2.5 log10(flux) = a + b (BP-RP), clipped
+        j = star_of[self.cal]
+        use_cal = (j >= 0)
+        use_cal[use_cal] &= (flux[j[use_cal]] >= self.cfg["min_cal_snr"] * ferr[j[use_cal]]) & ~saturated[j[use_cal]]
+        cal_y = self.cat_mag[self.cal][use_cal] + 2.5 * np.log10(flux[j[use_cal]])
+        cal_c = self.colour[self.cal][use_cal]
         use = np.ones(cal_y.size, bool)
-        a, b = np.median(cal_y), 0.0  # fewer than 5 calibration stars: no colour term
+        a, b = (np.median(cal_y) if cal_y.size else np.nan), 0.0  # fewer than 5 calibration stars: no colour term
         for _ in range(10):
             if use.sum() < 5:
                 break
@@ -129,10 +136,15 @@ class SExtractorPhotometry:
                 break
             use = new
         c_t = self.colour[self.targets]
-        zp = a + b * np.where(np.isfinite(c_t), c_t, np.median(cal_c[use]))
+        zp = a + b * np.where(np.isfinite(c_t), c_t, np.median(cal_c[use]) if use.any() else 0.0)
 
-        j = np.array([nearest(t) for t in self.targets])
-        f = np.where((j >= 0) & (flux[j] > 0), flux[j], np.nan)
-        s = np.where(j >= 0, ferr[j], np.nan)
+        jt = star_of[self.targets]
+        found = jt >= 0
+        f = np.where(found & (flux[jt] > 0), flux[jt], np.nan)
+        s = np.where(found, ferr[jt], np.nan)
+        star = np.full(len(dx), -1)
+        star[star_of[star_of >= 0]] = np.nonzero(star_of >= 0)[0]
+        table["star"], table["saturated"] = star, saturated
+        table["mag"] = a + b * np.where(star >= 0, self.colour[np.maximum(star, 0)], np.nan) - 2.5 * np.log10(flux)
         return dict(flux=f, sigma=s, mag=zp - 2.5 * np.log10(f), mag_err=2.5 / np.log(10) * s / f,
-                    saturated=(j >= 0) & (peak[j] >= sat_level))
+                    saturated=found & saturated[jt], catalogue=table, zeropoint=(float(a), float(b)))

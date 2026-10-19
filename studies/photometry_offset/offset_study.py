@@ -49,7 +49,7 @@ TERMS = ("aperture", "neighbours", "sky", "noise", "zp_colour", "zp_cal")
 def capture(field, stride, band="rho"):
     """Run the movie for `field` without drawing it; return what it measured from."""
     import night_movie as M
-    from mesa_argus import photometry as P
+    from mesa_argus import sep_photometry as P
 
     cap = dict(obs={}, phot=None, scene=None)
     observe = M.Scene.observe

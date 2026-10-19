@@ -125,8 +125,8 @@ y = 30
 epoch = "start+0.05"         # periodic: a primary eclipse / maximum; transients: t0 = ...
                              # ISO UTC, "start+D" days from the start of the night (or the UT window), or BJD_TDB
 
-[measure]                    # how the exposures are measured (defaults: SExtractor's)
-[output]                     # movie, bands, fits, page; stride, noise seed, exposure time, PSF and kernel options
+[measure]                    # how the exposures are measured (hdps source detector; production settings)
+[output]                     # movie, bands, fits, catalogues, page; stride, noise seed, exposure time, PSF and kernel options
 ```
 
 [`examples/observations/template.toml`](examples/observations/template.toml) lists every key with its default and
