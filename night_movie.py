@@ -49,7 +49,7 @@ from argus_sim import skymap_shim as sh  # noqa: E402
 from argus_sim.observatory import Observatory, seasonal_seeing_params, seeing_at_airmass  # noqa: E402
 
 from mesa_argus import dust  # noqa: E402
-from mesa_argus.argus import BANDS, COLORS, FLAM, SYMBOLS, apply_style, system_response  # noqa: E402
+from mesa_argus.argus import BANDS, BLUE, COLORS, FLAM, NAVY, RED, SYMBOLS, add_logo, apply_style, system_response  # noqa: E402
 from mesa_argus.seds import Templates  # noqa: E402
 
 iers.conf.auto_download = False
@@ -825,7 +825,11 @@ def main(argv=None):
     placed_label = {v["source"]: v["label"] for v in load_placed()}
     labels = {k: placed_label[int(source[k])] if source[k] < 0 else f"V{i + 1}" for i, k in enumerate(follow)}
     n_placed = int(np.sum(source < 0))
-    print(f"{len(stars) - n_placed} {'synthetic stars' if FIELDS[args.field].get('synthetic') else 'Gaia sources'} "
+    if args.catalogues is not None:  # what each simulated star is, for the truth columns (pipeline.lightcurves)
+        args.catalogues.mkdir(parents=True, exist_ok=True)
+        (args.catalogues / "truth_stars.json").write_text(json.dumps(
+            {"label": {str(k): v for k, v in labels.items()}, "source": [int(s) for s in source]}))
+    print(f"{len(stars) - n_placed}{'synthetic stars' if FIELDS[args.field].get('synthetic') else 'Gaia sources'} "
           f"({int(in_block.sum()) - n_placed} in the block)" + (f"; {n_placed} transients" if n_placed else "")
           + f"; following {len(follow) - n_placed} pulsators with MESA RSP models; the other "
           f"{int((gaia_var & in_block).sum()) - len(follow)} Gaia-classified variables in the block are held constant")
@@ -932,6 +936,7 @@ def main(argv=None):
     s = SimpleNamespace(times=times, bjd=bjd, airmass=airmass, seeing=seeing, scene=scene, survey=survey)
     print(f"observing and rendering {len(frames)} frames ({len(times)} exposures) -> {args.output}", flush=True)
     rows, measured, n_alerts, n_skipped = [], [], 0, 0
+    alerted = []  # per measured frame: (key, dx, dy) of each alert; key: the followed star, else ("pos", x, y) rounded
     for n, j in enumerate(frames):
         exposures = exposure(j)
         frame = {b: pipeline.frames.make_frame(e["image"], tile, TILE, frame_metadata(j, b, s, args)) for b, e in exposures.items()}
@@ -951,6 +956,7 @@ def main(argv=None):
             candidates["alert_id"] = alert(candidates, frame[B], reference, args.alerts) if args.alerts is not None else ""
             truth.label_candidates(candidates, scene.x, scene.y, expected_flux, follow, labels, cfg)
             n_alerts += int(np.sum(candidates["alert_id"] != ""))
+            alerted.append([alert_mark(c, scene, stars, follow) for c in candidates if c["alert_id"]])
             if args.catalogues is not None:
                 args.catalogues.mkdir(parents=True, exist_ok=True)
                 candidates.meta = {key: value for key, value in frame[B].metadata.items() if np.isscalar(value)}
@@ -992,13 +998,66 @@ def main(argv=None):
         draw_data = movie_data(args, stars, scene, follow, transient, models, follow_sed, follow_rate, follow_cycle, ref_rate,
                                static_mag, rates_at, true_mag, measured, frames, times, bjd, ut, airmass, seeing, G, in_block,
                                ab, ref_frames)
-        draw_data.update(labels=labels, pulsators=pulsators, source=source, gaia_var=gaia_var, templates=templates,
+        draw_data.update(alerted=alerted if reference is not None else [[] for _ in frames], frame_j=list(frames),
+                         labels=labels, pulsators=pulsators, source=source, gaia_var=gaia_var, templates=templates,
                          survey=survey)
         render(args, exposure, draw_data, ref_image, ref_full, stamps, frames)
     print(f"saved {args.output.with_suffix('.photometry.csv') if args.no_render else args.output}")
 
 
 # ---------------------------------------------------------------- the movie
+def alert_mark(candidate, scene, stars, follow):
+    """Where the movie marks an alert: (key, dx, dy), offsets in arcsec as the image panels. A followed star's alert
+    is marked on the star (key: its index); any other at the candidate (key: its position, rounded to 3 px)."""
+    k = int(candidate["star"])
+    if k in follow:
+        return k, float(stars["dx"][k]), float(stars["dy"][k])
+    x, y = float(candidate["x"]), float(candidate["y"])
+    return ("pos", round(x / 3), round(y / 3)), (x + 0.5 - scene.centre) * scene.plate, (y + 0.5 - scene.centre) * scene.plate
+
+
+def alert_marks(d, n, fps):
+    """The alert marks shown on movie frame n: [(dx, dy, alpha, scale)]. A mark appears when its object alerts, pops
+    (scale 1.8, 1.3, then 1) at the start of a run of consecutive alerts, and fades over half a second after the last."""
+    fade = max(1, int(fps) // 2)
+    marks = {}
+    for back in range(min(n, fade) + 1):
+        for key, dx, dy in d["alerted"][n - back]:
+            if key not in marks:
+                run = 0
+                while n - back - run - 1 >= 0 and any(m[0] == key for m in d["alerted"][n - back - run - 1]):
+                    run += 1
+                scale = (1.8, 1.3)[run] if back == 0 and run < 2 else 1.0
+                marks[key] = (dx, dy, 1.0 - back / (fade + 1), scale)
+    return list(marks.values())
+
+
+def draw_alert_marks(ax, marks):
+    """Metal Gear Solid style: a red exclamation mark, white-outlined, above the object (clipped to the panel: the
+    cut-out alerts are made on is larger than the block shown)."""
+    from matplotlib import patheffects
+
+    for dx, dy, alpha, scale in marks:
+        ax.text(dx, dy + 4.5, "!", ha="center", va="bottom", fontsize=24 * scale, weight="heavy", color=RED, alpha=alpha,
+                zorder=10, clip_on=True, path_effects=[patheffects.withStroke(linewidth=3.5, foreground="white", alpha=alpha)])
+
+
+def alert_spans(d, k, n):
+    """The light-curve spans (UT hours) of followed star k's alerts up to movie frame n: each alerted exposure +- half
+    the cadence, consecutive ones merged."""
+    t = np.array([d["ut"][j] for j in d["frame_j"]])
+    half = 0.5 * float(np.median(np.diff(t))) if len(t) > 1 else 0.01
+    spans = []
+    for m in range(n + 1):
+        if any(key == k for key, _, _ in d["alerted"][m]):
+            lo, hi = t[m] - half, t[m] + half
+            if spans and lo <= spans[-1][1] + 1e-9:
+                spans[-1][1] = hi
+            else:
+                spans.append([lo, hi])
+    return spans
+
+
 def model_hours(ut):
     """Where the light-curve panel draws the models: 800 points over a night; every 3 minutes over a longer span."""
     n = 800 if ut[-1] - ut[0] <= 24 else int((ut[-1] - ut[0]) * 20)
@@ -1060,11 +1119,11 @@ def movie_data(args, stars, scene, follow, transient, models, follow_sed, follow
     sed_values = sed_values[sed_values > 0]
     if sed_values.size == 0:  # nothing lit all night (e.g. a transient after the window)
         sed_values = np.array([1e-16, 1e-14])
-    palette = plt.get_cmap("tab10")
+    palette = [BLUE, RED, "#2ca02c", "#9467bd", "#8c564b", "#e377c2", "#bcbd22", "#17becf"]  # the brand's dots first
     return dict(stars=stars, scene=scene, follow=follow, transient=transient, models=models, follow_sed=follow_sed,
                 follow_cycle=follow_cycle, model_curve=model_curve, static_mag=static_mag, true_mag=true_mag,
                 times=times, bjd=bjd, ut=ut, airmass=airmass, seeing=seeing, G=G, in_block=in_block, ab=ab,
-                colour_of={k: palette(i % 10) for i, k in enumerate(follow)}, rgb=rgb, dlim=dlim, cmd_c=cmd_c, cmd_m=cmd_m,
+                colour_of={k: palette[i % len(palette)] for i, k in enumerate(follow)}, rgb=rgb, dlim=dlim, cmd_c=cmd_c, cmd_m=cmd_m,
                 rel=rel, sed_ylim=(float(np.percentile(sed_values, 3)) / 1.5, float(sed_values.max()) * 1.5),
                 centre=block_centre_label(), n_ref=len(ref_frames), measured=measured,
                 history={k: {"t": [], "m": [], "e": [], "true": []} for k in follow})
@@ -1091,6 +1150,7 @@ def render(args, exposure, d, ref_image, ref_full, stamps, frames):
                 h["m"].append(d["measured"][n][k][0])
                 h["e"].append(d["measured"][n][k][1])
             fig.clear()
+            d["n"] = n
             draw(fig, args, exposures, j, d)
             writer.grab_frame()
             if (n + 1) % max(1, len(frames) // 20) == 0:
@@ -1127,7 +1187,7 @@ def draw(fig, args, exposures, j, d):
             cmd.plot(np.r_[cyc["beta"] - cyc["rho"], cyc["beta"][0] - cyc["rho"][0]], np.r_[cyc[B], cyc[B][0]],
                      color=colour_of[k], lw=1.3, alpha=0.9, zorder=3)
         cmd.scatter(true_mag("beta", k, j) - true_mag("rho", k, j), true_mag(B, k, j), s=60, color=colour_of[k],
-                    edgecolor="#2b2b2b", linewidth=0.6, zorder=5)
+                    edgecolor=NAVY, linewidth=0.6, zorder=5)
     cmd.set(xlim=(np.percentile(d["cmd_c"], 0.5) - 0.15, np.percentile(d["cmd_c"], 99.5) + 0.15),
             ylim=(min(20.2, np.max(d["cmd_m"]) + 0.3), np.min(d["cmd_m"]) - 0.5),
             xlabel=r"$\beta-\rho$ (AB mag)", ylabel=rf"$m_{{\{B}}}$ (AB mag)")
@@ -1168,8 +1228,14 @@ def draw(fig, args, exposures, j, d):
     model_name = " / ".join([e for e in ("MESA RSP", "PHOEBE") if e in engines]
                             + list(dict.fromkeys(e for e in engines if e not in ("MESA RSP", "PHOEBE"))))
     lc.plot([], [], color="0.5", lw=1.0, alpha=0.5, label=f"{model_name} model")
+    if any(any(key in follow for key, _, _ in frame) for frame in d["alerted"]):  # each alert: a band in the star's colour
+        for k in follow:
+            for lo_t, hi_t in alert_spans(d, k, d["n"]):
+                for ax in (lc, resid_ax):
+                    ax.axvspan(lo_t, hi_t, color=colour_of[k], alpha=0.16, lw=0, zorder=0)
+        lc.fill_between([], [], color="0.5", alpha=0.25, lw=0, label="alert")
     for ax in (lc, resid_ax):
-        ax.axvline(ut[j], color="#455868", lw=0.8, alpha=0.35)
+        ax.axvline(ut[j], color=NAVY, lw=0.8, alpha=0.35)
         ax.grid(alpha=0.15)
         ax.set_xlim(ut[0] - 0.1, ut[-1] + 0.1)
     lo = np.nanmin([d["rel"][k]["span"][0] for k in follow])
@@ -1189,7 +1255,7 @@ def draw(fig, args, exposures, j, d):
               handletextpad=0.3)
     lc.set_title("Light curves (hdps source detector)", loc="left", weight="bold")
     lc.set_title(f"UT {d['times'][j].iso[11:16]} · airmass {d['airmass'][j]:.2f} · seeing {d['seeing'][j]:.2f}″", loc="right",
-                 fontsize=11, color="#3c5262")
+                 fontsize=11, color=NAVY)
     plt.setp(lc.get_xticklabels(), visible=False)
     resid_ax.axhline(0, color="0.5", lw=0.6, ls=":")
     span_days = (d["times"][-1].jd - d["times"][0].jd) > 1
@@ -1220,7 +1286,7 @@ def draw(fig, args, exposures, j, d):
     for v in np.arange(-HALF, HALF + 1e-6, step):  # the minipix grid
         image_ax.plot([v, v], [-HALF, HALF], color="white", lw=0.5, alpha=0.35)
         image_ax.plot([-HALF, HALF], [v, v], color="white", lw=0.5, alpha=0.35)
-    image_ax.add_patch(Rectangle((-step / 2, -step / 2), step, step, fill=False, ec="#7fd1ff", lw=1.2))  # the central minipix
+    image_ax.add_patch(Rectangle((-step / 2, -step / 2), step, step, fill=False, ec=BLUE, lw=1.2))  # the central minipix
     for k in follow:
         image_ax.add_patch(Circle((stars["dx"][k], stars["dy"][k]), 3.0, fill=False, ec=colour_of[k], lw=1.2))
         image_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold")
@@ -1232,14 +1298,14 @@ def draw(fig, args, exposures, j, d):
         image_ax.set_title(f"Exposure ({SYMBOLS[B]})", loc="left", weight="bold")
         image_ax.text(0.97, 0.97, f"telescope {int(d['survey']['tel_id'][j])}\n{float(d['survey']['field_angle'][j]):.2f}° off-axis",
                       transform=image_ax.transAxes, va="top", ha="right", fontsize=8, color="white",
-                      bbox={"facecolor": "#111726", "alpha": 0.65, "edgecolor": "none", "pad": 3})
+                      bbox={"facecolor": NAVY, "alpha": 0.65, "edgecolor": "none", "pad": 3})
     bar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap="gray"), ax=image_ax, orientation="horizontal", fraction=0.05,
                        pad=0.13, label=f"{SYMBOLS[B]} electrons / pixel above sky")
     bar.set_ticks([v for v in (0, 10, 100, 1000, 10000) if v <= rgb["vmax"]])
     bar.ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:,.0f}"))
     bar.ax.tick_params(labelsize=7)
     image_ax.text(0.03, 0.97, f"{args.exptime:g} s · exposure {j + 1}", transform=image_ax.transAxes, va="top",
-                  fontsize=8, color="white", bbox={"facecolor": "#111726", "alpha": 0.65, "edgecolor": "none", "pad": 3})
+                  fontsize=8, color="white", bbox={"facecolor": NAVY, "alpha": 0.65, "edgecolor": "none", "pad": 3})
 
     # the difference image (saturated pixels grey)
     diverging = plt.get_cmap("RdBu_r").copy()
@@ -1251,10 +1317,13 @@ def draw(fig, args, exposures, j, d):
     for k in follow:
         diff_ax.add_patch(Circle((stars["dx"][k], stars["dy"][k]), 3.0, fill=False, ec=colour_of[k], lw=1.0))
         diff_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold")
+    marks = alert_marks(d, d["n"], args.fps)
+    draw_alert_marks(image_ax, marks)
+    draw_alert_marks(diff_ax, marks)
     diff_ax.set_title("Difference (PSF-matched)", loc="left", weight="bold")
     diff_ax.text(0.03, 0.97, f"ref: median of {d['n_ref']} best-seeing exposures"
                  + ("\nwithout the transients (pre-event)" if d["model_curve"] else ""), transform=diff_ax.transAxes,
-                 va="top", fontsize=7.5, color="#333", bbox={"facecolor": "white", "alpha": 0.7, "edgecolor": "none", "pad": 2})
+                 va="top", fontsize=7.5, color=NAVY, bbox={"facecolor": "white", "alpha": 0.7, "edgecolor": "none", "pad": 2})
     diff_ax.set(xlim=(-edge, edge), ylim=(-edge, edge), xlabel="Offset (arcsec)")
     plt.setp(diff_ax.get_yticklabels(), visible=False)
     dbar = fig.colorbar(diff, ax=diff_ax, orientation="horizontal", fraction=0.05, pad=0.13,
@@ -1290,8 +1359,9 @@ def draw(fig, args, exposures, j, d):
 
     what = pulsator_title(follow, pulsators, source)  # a long list of stars: smaller, and on further lines
     what = "\n" + "\n".join(textwrap.wrap(what, 150, break_long_words=False)) if len(what) > 70 else " — " + what
-    fig.suptitle(f"ARGUS — {d['centre']} ({FIELDS[args.field]['name']}) — {block_label()} — {args.date} — 60 s exposures"
-                 + what, fontsize=13.5 if len(what) <= 48 else 11.5)
+    add_logo(fig, (0.012, 0.925, 0.15, 0.065))
+    fig.suptitle(f"{d['centre']} ({FIELDS[args.field]['name']}) — {block_label()} — {args.date} — 60 s exposures"
+                 + what, fontsize=13.5 if len(what) <= 48 else 11.5, x=0.58)
 
 
 if __name__ == "__main__":

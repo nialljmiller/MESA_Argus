@@ -257,6 +257,12 @@ def run_engine(obs, out, window, n_placed, extra=()):
             subprocess.run([sys.executable, "night_movie.py", "--scene", str(out / "scene"), "--field", name, "--band", band,
                             "-o", str(mp4), "--measure", json.dumps({**obs["measure"], **obs["pipeline"]}), "--highlight", str(n_placed), *options],
                            stdout=log, stderr=subprocess.STDOUT, check=True)
+    if o["catalogues"] and o["lightcurves"] and "--no-measure" not in extra:  # both bands' detections, linked
+        from mesa_argus import pipeline
+
+        link = pipeline.stage("lightcurves", obs["pipeline"]["lightcurves"])
+        catalogue = link(out / "catalogues", out, {**obs["measure"], **obs["pipeline"]})
+        print(f"catalogue.csv: {len(catalogue)} objects; their light curves in lightcurves/", flush=True)
     if o["page"]:
         subprocess.run([sys.executable, "demo/export_demo.py", "--scene", str(out / "scene")], check=True)
         subprocess.run([sys.executable, "demo/build_html.py", name], check=True)

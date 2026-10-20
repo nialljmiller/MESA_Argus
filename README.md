@@ -141,6 +141,11 @@ checked before any work starts. Outputs, in `outputs/pseudo_real/<name>/` (real 
 or `outputs/fully_synthetic/<name>/` (stars at random positions, `layout = "random"`); `<name>`: `[field] name`, else the
 file's name:
 
+- `catalogue.csv`: every object detected (both bands' detections linked by position, `link_arcsec`): ID, RA, Dec,
+  detections, median magnitude, scatter and error per band, the nearest ATLAS-Refcat2 star, its light curve file;
+  `truth_*` columns (the simulated star it is) for scoring only.
+- `lightcurves/NNNNNN.csv`: one per object, one row per detection: time (UTC, MJD, BJD_TDB), band, exposure,
+  telescope, airmass, seeing, zero point, magnitude and error, flux and error, S/N, position, flags.
 - `catalogues/`: every exposure's detections (`<name>_<band>_NNNN.parquet`: position, RA/Dec, flux, calibrated
   magnitude, the simulated star each one is) and difference-image candidates (`..._candidates.parquet`, with `truth`:
   the placed star it is, `star` for another simulated star, empty for nothing).
@@ -209,6 +214,7 @@ observe.py observation file      → outputs/<category>/<name>/scene/  (field, b
                                    → the pipeline (mesa_argus/pipeline/, one module per stage, hdps underneath):
                                      extraction → calibration (Refcat2) → PSF → ZOGY difference → candidates → alerts
                                    → catalogues, alerts, photometry CSV, movie, FITS
+  └─ after every band            → detections linked into objects → catalogue.csv, lightcurves/
 ```
 
 Every assumption (what comes from ArgusSim, what is written here, what is assumed) is in
@@ -303,7 +309,8 @@ mesa_argus/             the Python package (python -m mesa_argus ...)
   argus.py                Argus bands, units and plot style shared by the movies
   dust.py                 dust: the 3D map (Bayestar19, SFD), CCM89, dereddening Gaia stars
   pipeline/               the Argus pipeline run on every exposure, one module per stage (frames, extraction,
-                          calibration, psf, reference, dia, alerts; truth for scoring only), hdps underneath
+                          calibration, psf, reference, dia, alerts, lightcurves; truth for scoring only), hdps
+                          underneath
   sep_photometry.py       the earlier SExtractor (SEP) photometry (the demo's validation, the offset study)
   rsp.py                  MESA RSP pulsator models
   binary.py               PHOEBE eclipsing-binary models

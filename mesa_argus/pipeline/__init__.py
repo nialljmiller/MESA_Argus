@@ -11,9 +11,10 @@ production code is a new function and a new name here.
     reference    the image frames are subtracted from (a sacrificial night's median), in hdps's reference format
     dia          ZOGY subtraction and transient candidates (hdps diffimg)
     alerts       alert packets for the candidates (hdps alert schema 3.0, as its Kafka producer sends them)
+    lightcurves  every frame's detections linked into objects: a catalogue and one light curve per object
     truth        which simulated star each detection / candidate is: for scoring only; no stage above reads it
 """
-from . import alerts, calibration, dia, extraction, frames, psf, reference, truth
+from . import alerts, calibration, dia, extraction, frames, lightcurves, psf, reference, truth
 
 STAGES = {
     "extraction": {"hdps": extraction.hdps},
@@ -22,10 +23,12 @@ STAGES = {
     "reference": {"sacrificial_night": reference.sacrificial_night},
     "dia": {"hdps_zogy": dia.hdps_zogy},
     "alerts": {"hdps_v3": alerts.hdps_v3},
+    "lightcurves": {"positional": lightcurves.positional},
 }
 DEFAULTS = {"extraction": "hdps", "calibration": "atlas_refcat2", "psf": "hdps_moffat", "reference": "sacrificial_night",
-            "dia": "hdps_zogy", "alerts": "hdps_v3"}
-SETTINGS = {**extraction.SETTINGS, **calibration.SETTINGS, **psf.SETTINGS, **dia.SETTINGS, **truth.SETTINGS}  # every stage's ([measure])
+            "dia": "hdps_zogy", "alerts": "hdps_v3", "lightcurves": "positional"}
+SETTINGS = {**extraction.SETTINGS, **calibration.SETTINGS, **psf.SETTINGS, **dia.SETTINGS, **lightcurves.SETTINGS,
+            **truth.SETTINGS}  # every stage's ([measure])
 
 
 def stage(name, implementation=None):

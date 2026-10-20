@@ -60,6 +60,7 @@ psf = "hdps_moffat"       # PSF: hdps's Moffat field fit to Refcat2 stars (as Ti
 reference = "sacrificial_night"  # reference: median of a night observed first (same stars, no transients)
 dia = "hdps_zogy"         # difference imaging: hdps ZOGY, candidates from its calibrated S_corr
 alerts = "hdps_v3"        # alert packets: hdps alert schema 3.0, JSON lines (alerts/)
+lightcurves = "positional"  # detections linked by position across frames: catalogue.csv, lightcurves/
 reference_date = ""       # the sacrificial night (YYYY-MM-DD; "": the night before the observation)
 
 [measure]                 # the stages' settings (hdps production values for the detector)
@@ -85,6 +86,7 @@ dia_min_separation = 4    # dia: candidates at least this far apart (pixels)
 astrometric_sigma = 0.032 # dia: ZOGY's astrometric noise (pixels; hdps's value)
 dia_saturation_px = 10    # dia: no candidates this close (pixels) to a saturated pixel
 dia_edge_px = 20          # dia: no candidates this close (pixels) to the edge (ZOGY's FFT wrap-around)
+link_arcsec = 1.5         # lightcurves: a detection joins the nearest object within this (arcsec)
 match_radius = 2.0        # truth: a detection or candidate is a simulated star within this (pixels); scoring only
 [output]
 movie = true              # render the movie (false: photometry and any FITS only)
@@ -93,6 +95,7 @@ fits = false              # every measured exposure, both bands, as FITS (fits/ 
 catalogues = true         # every measured exposure's detections and their simulated stars (catalogues/, parquet);
                           # with alerts, also each exposure's difference-image candidates (*_candidates.parquet)
 alerts = true             # difference imaging and alert packets (alerts/); makes the reference first (reference/)
+lightcurves = true        # with catalogues: catalogue.csv (one row per object) and lightcurves/ (one CSV per object)
 page = false              # the interactive page (real Gaia stars only, for now)
 stride = 1                # render and measure every Nth exposure
 seed = 3                  # noise

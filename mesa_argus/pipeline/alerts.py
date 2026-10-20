@@ -16,13 +16,14 @@ FILTER_ID = {"beta": 1, "rho": 2}  # the schema's filter codes (argus.alert.cand
 
 def hdps_v3(candidates, frame, reference, out_dir):
     """Writes <out_dir>/<field>_<band>_<exposure>.jsonl; returns the alert IDs (one per alerted candidate, else '')."""
+    import astropy.units as u
     from astropy.time import Time
     from hdps.alerts.models import SCHEMA_VERSION, Alert, Candidate
     import orjson
 
     m = frame.metadata
     t_mid = Time(m["date_obs"])
-    t_start, t_end = (t_mid + s * m["exptime"] / 2 / 86400 for s in (-1, 1))
+    t_start, t_end = (t_mid + s * m["exptime"] / 2 * u.s for s in (-1, 1))
     ids, lines = [], []
     for i, c in enumerate(candidates):
         if c["is_negative"] or not np.isfinite(c["flux"]) or c["flux"] <= 0:
