@@ -74,12 +74,16 @@ class Runner:
                                       accumulation_dtype=co["accumulation_dtype"], clip_kappa=co["clip_kappa"],
                                       clip_min_frames=co["clip_min_frames"])
         self.coadd.current_output_dir = str(self.coadd_dir)
+        from mesa_argus.alert_files import AvroFileProducer
+
+        self.alert_stream = AvroFileProducer()
         strategy = InverseVarianceStrategy() if co["strategy"] == "inverse_variance" else UniformStrategy()
         for task in self.tasks:
             if hasattr(task, "set_accumulator"):
                 task.set_accumulator(self.coadd, strategy)
             if type(task).__name__ == "AlertVettingTask":
                 task._classifier = AllReal()
+                task._producer = self.alert_stream  # hdps builds the packets; the file sink replaces Kafka
         self._ratchet = {}  # camera -> current ratchet
         # the worker's WCS cache (hdps keeps it in valkey; here in memory): per (camera, ratchet), the linear WCS
         # header and the TPV distortion terms of the ratchet's first solved frame, given to its later frames
@@ -134,6 +138,7 @@ class Runner:
                     self._tpv[key] = tpv
         for product in products:
             DiskWriterBackend(str(self.out_dir / "products" / product.product_type)).write(product)
+        self.alert_stream.write(self.out_dir / "alerts" / (Path(path).stem + ".avro"))  # the exposure's packets
         return image, result, list(products)
 
     def close(self):
