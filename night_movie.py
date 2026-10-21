@@ -784,65 +784,75 @@ def write_raw_frame(folder, image, win, row, args):
     return path
 
 
-def measure_frame(frame, segments, band, obs, star_x, star_y, expected_flux, satlevel):
-    """hdps's frame catalogue (SourceDetectionTask), calibrated: RA/Dec from hdps's solved WCS, saturated (peak at the
-    saturation level in hdps's reduced frame), the zero point against ATLAS-Refcat2 (mesa_argus.pipeline.calibration:
-    hdps's zeropoint fit; no hdps Task computes it in the chain), and for scoring the simulated star each detection
-    is (truth.label). (None, None, None) when hdps could not process the frame."""
-    from types import SimpleNamespace
+def measure_frame(work, stem, band, obs, star_x, star_y, expected_flux):
+    """hdps's solved frame (LightweightFITSOutputTask's fits_image: the SOURCES catalogue, the solved WCS, hdps's zero
+    point from TPVWCSSolverTask's zeropoint_for_image), calibrated: mag = coadd_magzp - 2.5 log10(flux), mag_err =
+    1.0857 flux_err / flux. coadd_magzp on the frame is referenced to electrons (TPVWCSSolverTask's
+    _harvest_photometric_qa: "Electron-referenced, like every in-pipeline consumer"); the rate-referenced recipe in
+    hdps's ffi-catalogs.md is for the store row (ffi_row_from_image), so no 1/exptime here. Each detection's simulated
+    star for scoring (truth.label). (None, None, None, None) when hdps did not solve the frame."""
+    from astropy.io import fits
+    from astropy.table import Table
+    from astropy.wcs import WCS
 
-    from mesa_argus.pipeline import calibration, truth
+    from mesa_argus.pipeline import truth
 
-    if segments is None or frame.wcs is None or frame.sources is None:
-        return None, None, None
-    catalogue = frame.sources.table.copy()
+    path = work / "solved" / f"{stem}_solved.fits"
+    if not path.exists():
+        return None, None, None, None
+    with fits.open(path) as hdul:
+        header = hdul[0].header
+        catalogue = Table(hdul["SOURCES"].data)
+    wcs = WCS(header)
     x, y = np.asarray(catalogue["xcentroid"], float), np.asarray(catalogue["ycentroid"], float)
-    catalogue["ra"], catalogue["dec"] = frame.wcs.all_pix2world(x, y, 0)
-    data, (ny, nx) = np.asarray(frame.data), frame.data.shape
-    peak = [data[max(int(round(b)) - 2, 0):min(int(round(b)) + 3, ny), max(int(round(a)) - 2, 0):min(int(round(a)) + 3, nx)].max()
-            for a, b in zip(x, y)]
-    catalogue["saturated"] = np.asarray(peak, float) >= satlevel
-    centre = frame.wcs.all_pix2world([(nx - 1) / 2], [(ny - 1) / 2], 0)
-    adapter = SimpleNamespace(ra_center=float(centre[0][0]), dec_center=float(centre[1][0]), data=data,
-                              metadata=dict(band=band, date_obs=frame.metadata["UTCSTART"]))
-    zp = calibration.atlas_refcat2(catalogue, adapter, {**calibration.SETTINGS})
+    catalogue["ra"], catalogue["dec"] = wcs.all_pix2world(x, y, 0)
+    catalogue["saturated"] = np.asarray(catalogue["is_saturated"], bool)
+    flux, flux_err = np.asarray(catalogue["flux"], float), np.asarray(catalogue["flux_err"], float)
+    zp = None
+    if "coadd_magzp" in header:
+        zp = dict(zp=float(header["coadd_magzp"]), rms=float(header.get("magzp_rms", np.nan)),
+                  n=int(header.get("magzp_nstars", 0)), band=str(header.get("magzp_band", "")))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            catalogue["mag_instrumental"] = catalogue["mag"]
+            catalogue["mag"] = np.where(flux > 0, zp["zp"] - 2.5 * np.log10(flux), np.nan)
+            catalogue["mag_err"] = np.where(flux > 0, 1.0857 * flux_err / flux, np.nan)
+    else:  # hdps: no usable crossmatch, instrumental magnitudes only
+        catalogue["mag_instrumental"] = catalogue["mag"]
+        catalogue["mag"] = np.nan
+        catalogue["mag_err"] = np.nan
     star_of = truth.label(catalogue, star_x, star_y, expected_flux, {"match_radius": obs["truth"]["match_radius"]})
-    return catalogue, zp, star_of
+    return catalogue, zp, star_of, wcs
 
 
-def block_cutouts(segments):
-    """hdps's tile holding the block, cut around it: (science before subtraction, difference, extent in arcsec from
-    the block centre), or None when hdps made no difference image of that tile."""
-    if not segments:
+def block_cutouts(work, stem):
+    """hdps's tile holding the block (TileImageOutputTask's science_tile and difference_tile), cut around it:
+    (science before subtraction, difference, extent in arcsec from the block centre), or None when hdps made no
+    difference image of that tile."""
+    from astropy.io import fits
+
+    sci_path = work / f"epoch_{stem}_tile_{TILE:06d}_sci.fits"
+    diff_path = work / f"epoch_{stem}_tile_{TILE:06d}_diff.fits"
+    if not (sci_path.exists() and diff_path.exists()):
         return None
-    for seg in segments:
-        if int(getattr(seg, "tile_id", -1)) == TILE and "SFFT_DK" in seg.metadata:
-            sci = seg.metadata.get("presub_science")
-            if sci is None:
-                return None
-            cx, cy = (BLOCK[0] + 0.5) * MINIPIX_PX - 0.5, (BLOCK[1] + 0.5) * MINIPIX_PX - 0.5  # hdps tile grid
-            h = int(np.ceil((HALF + 2) / SKY_PX)) + 1
-            x0, y0 = int(round(cx)) - h, int(round(cy)) - h
-            cut = (slice(max(y0, 0), y0 + 2 * h + 1), slice(max(x0, 0), x0 + 2 * h + 1))
-            sci_cut, diff_cut = np.asarray(sci)[cut].astype(np.float32), np.asarray(seg.data)[cut].astype(np.float32)
-            extent = ((max(x0, 0) - 0.5 - cx) * SKY_PX, (max(x0, 0) + sci_cut.shape[1] - 0.5 - cx) * SKY_PX,
-                      (max(y0, 0) - 0.5 - cy) * SKY_PX, (max(y0, 0) + sci_cut.shape[0] - 0.5 - cy) * SKY_PX)
-            return dict(science=sci_cut, difference=diff_cut, extent=extent)
-    return None
+    sci, diff = fits.getdata(sci_path, "SCI"), fits.getdata(diff_path, "DIFF")
+    cx, cy = (BLOCK[0] + 0.5) * MINIPIX_PX - 0.5, (BLOCK[1] + 0.5) * MINIPIX_PX - 0.5  # hdps tile grid
+    h = int(np.ceil((HALF + 2) / SKY_PX)) + 1
+    x0, y0 = int(round(cx)) - h, int(round(cy)) - h
+    cut = (slice(max(y0, 0), y0 + 2 * h + 1), slice(max(x0, 0), x0 + 2 * h + 1))
+    sci_cut, diff_cut = np.asarray(sci)[cut].astype(np.float32), np.asarray(diff)[cut].astype(np.float32)
+    extent = ((max(x0, 0) - 0.5 - cx) * SKY_PX, (max(x0, 0) + sci_cut.shape[1] - 0.5 - cx) * SKY_PX,
+              (max(y0, 0) - 0.5 - cy) * SKY_PX, (max(y0, 0) + sci_cut.shape[0] - 0.5 - cy) * SKY_PX)
+    return dict(science=sci_cut, difference=diff_cut, extent=extent)
 
 
-def alerts_of(products, follow, star_ra, star_dec, labels):
-    """hdps's accepted alerts in a frame (AlertVettingTask's alert_catalog product): [dict(key, dx, dy)], dx, dy in
-    arcsec from the block centre; key: the followed star within 2" (truth, for the movie), else the alert's position."""
-    import io
-
+def alerts_of(work, stem, follow, star_ra, star_dec):
+    """hdps's accepted alerts in a frame (AlertVettingTask's alert_catalog): [dict(key, dx, dy)], dx, dy in arcsec
+    from the block centre; key: the followed star within 2" (truth, for the movie), else the alert's position."""
     import pandas as pd
 
     out = []
-    for product in products:
-        if product.product_type != "alert_catalog":
-            continue
-        table = pd.read_parquet(io.BytesIO(product.payload))
+    for path in sorted(work.glob(f"alerts_*_{stem}.parquet")):
+        table = pd.read_parquet(path)
         table = table[table["accepted"]]
         if not len(table):
             continue
@@ -1074,18 +1084,19 @@ def main(argv=None):
     seeing, scene = conditions(times, airmass, alt, az, args, stars, cfg, ab, survey)
 
     # 6. the camera: every exposure on its telescope's sensor (ArgusSim's geometry, mesa_argus.sensor), in the
-    # observation's readout window, written as a raw camera frame (mesa_argus.camera); 7. hdps processes each
-    # (mesa_argus.hdps_runner: its Task chain on the raw frame). The reference pass makes hdps's coadds (transients
-    # left out); the science pass runs the whole chain against them, then the measurements below (calibration, truth
-    # labels) and the movies.
+    # observation's readout window, written as a raw camera frame (mesa_argus.camera); 7. hdps's worker processes
+    # them (mesa_argus.hdps_worker). The reference pass makes hdps's coadds (transients left out); the science pass
+    # runs the whole chain against them, then the measurements from hdps's products (truth labels) and the movies.
     if survey is None:
         raise SystemExit("the engine observes as ArgusSim's survey does: observe.py writes scene/exposures.ecsv")
     from argus_sim.coverage_exact import Layout
 
-    from mesa_argus import camera, hdps_runner, runconfig, sensor
-    from mesa_argus.pipeline import calibration, truth
+    from mesa_argus import camera, hdps_worker, runconfig, sensor
 
     obs = runconfig.resolve(runconfig.load(args.observation))
+    for t in obs["hdps"]["tasks"]:  # hdps's tile images: only the tile the movie shows
+        if t["type"] == "TileImageOutputTask":
+            t["config"]["tile_ids"] = [int(TILE)]
     reference_pass = args.hdps_pass == "reference"
     window_px = int(round(obs["field"]["window"] * MINIPIX_PX * SKY_PX / ARGUS_CONFIG.telescope.plate_scale))
     star_ra, star_dec = block_radec(np.asarray(stars["dx"]), np.asarray(stars["dy"]))
@@ -1093,19 +1104,15 @@ def main(argv=None):
     projector = sensor.Projector(np.r_[centre_ra, star_ra], np.r_[centre_dec, star_dec], times, Layout.from_config())
     psfs = sensor.PSFs(ARGUS_CONFIG)
     work = args.work / B
-    runner = hdps_runner.Runner(obs, work, reference_dir=None if reference_pass else args.reference,
-                                stop_after="CoaddTapTask" if reference_pass else None, field_id=FIELD)
     expected_flux = static_rate[B][:, 0] * args.exptime
     for k in follow:
         expected_flux[k] = 0.0 if k in transient else np.mean(ref_rate[k][B]) * args.exptime
     frames = range(0, len(times), args.stride)
     seeds = np.random.SeedSequence(args.seed).spawn(len(times))
-    satlevel = 0.98 * ARGUS_CONFIG.telescope.fullwell
     print(f"{'reference pass' if reference_pass else 'observing'}: {len(frames)} exposures ({B}) as raw frames "
-          f"({window_px} px window) through hdps -> {work}", flush=True)
-    rows, measured, alerted, records, cutouts = [], [], [], [], []
-    n_alerts = n_skipped = 0
-    for n, j in enumerate(frames):
+          f"({window_px} px window) -> {work / 'raw'}", flush=True)
+    records = []
+    for n, j in enumerate(frames):  # 6. the camera: each exposure rendered and written as a raw frame
         row = survey[j]
         x, y, angle = projector.pixels(j, row["theta_deg"], row["ota"])
         win = sensor.window(x[0], y[0], window_px)
@@ -1114,20 +1121,38 @@ def main(argv=None):
                               np.random.default_rng(seeds[j]), ARGUS_CONFIG.telescope.readnoise,
                               ARGUS_CONFIG.telescope.fullwell)
         path = write_raw_frame(work / "raw", image, win, row, args)
-        frame, segments, products = runner.process(path)
-        if reference_pass:
-            continue
         sx, sy = x[1:] - win[0], y[1:] - win[1]  # every star in the window's pixels (truth)
         bright = (G < 17) & (sx > 20) & (sx < win[2] - 20) & (sy > 20) & (sy < win[3] - 20)  # for the WCS check
-        record = dict(path=path, window=win, field_xy=(x[0], y[0]), j=j, failed=frame.metadata.get("mesa_argus_failed"),
-                      truth=(sx[bright], sy[bright], star_ra[bright], star_dec[bright]), tel_id=int(row["tel_id"]),
-                      ratchet=int(row["ratchet"]), field_angle=float(row["field_angle"]))
-        catalogue, zp, star_of = measure_frame(frame, segments, B, obs, sx, sy, expected_flux, satlevel)
-        record.update(catalogue=catalogue, zp=zp, wcs=frame.wcs)
-        records.append(record)
-        cutouts.append(block_cutouts(segments))
-        n_skipped += segments is None
-        frame_alerts = alerts_of(products, follow, star_ra, star_dec, labels)
+        records.append(dict(path=path, window=win, field_xy=(x[0], y[0]), j=j, sx=sx, sy=sy,
+                            truth=(sx[bright], sy[bright], star_ra[bright], star_dec[bright]), tel_id=int(row["tel_id"]),
+                            ratchet=int(row["ratchet"]), field_angle=float(row["field_angle"])))
+        if (n + 1) % max(1, len(frames) // 10) == 0:
+            print(f"  rendered {n + 1}/{len(frames)}", flush=True)
+
+    # 7. hdps's worker over the raw frames (mesa_argus.hdps_worker). The reference pass makes hdps's coadds
+    # (transients left out); the science pass runs the whole chain against them.
+    if reference_pass:
+        result = hdps_worker.run(obs, work / "raw", work / "coadds", stop_after="CoaddTapTask",
+                                 worker_id=f"{FIELD}_{B}_reference")
+        shutil.rmtree(work / "coadds" / "solved", ignore_errors=True)
+        print(f"hdps worker: {result}; reference coadds -> {work / 'coadds'}", flush=True)
+        if not obs["output"]["raw"]:
+            shutil.rmtree(work / "raw", ignore_errors=True)
+        return
+    result = hdps_worker.run(obs, work / "raw", work, reference_dir=args.reference, worker_id=f"{FIELD}_{B}")
+    print(f"hdps worker: {result}", flush=True)
+
+    # the measurements, from hdps's products: the solved frame's catalogue and zero point, the tile images, alerts
+    rows, measured, alerted, cutouts = [], [], [], []
+    n_alerts = n_skipped = 0
+    for record in records:
+        j, stem = record["j"], record["path"].stem
+        row = survey[j]
+        catalogue, zp, star_of, wcs = measure_frame(work, stem, B, obs, record["sx"], record["sy"], expected_flux)
+        record.update(catalogue=catalogue, zp=zp, wcs=wcs, failed=None if catalogue is not None else "not solved by hdps")
+        cutouts.append(block_cutouts(work, stem))
+        n_skipped += catalogue is None
+        frame_alerts = alerts_of(work, stem, follow, star_ra, star_dec)
         alerted.append([(a["key"], a["dx"], a["dy"]) for a in frame_alerts])
         n_alerts += len(frame_alerts)
         if args.catalogues is not None and catalogue is not None:
@@ -1138,7 +1163,7 @@ def main(argv=None):
             meta = dict(field=FIELD, band=B, exposure=int(j), date_obs=times[j].isot, bjd_tdb=float(bjd[j]),
                         airmass=float(airmass[j]), seeing=float(seeing[j]), exptime=args.exptime,
                         tel_id=int(row["tel_id"]), ratchet=int(row["ratchet"]), fieldang=float(row["field_angle"]),
-                        **{f"zp_{key}": value for key, value in (zp or {}).items() if np.isscalar(value)})
+                        **{f"zp_{key}": value for key, value in (zp or {}).items()})
             catalogue.meta = meta
             catalogue.write(args.catalogues / f"{FIELD}_{B}_{j:04d}.parquet", overwrite=True)
         this_frame = {}
@@ -1152,12 +1177,6 @@ def main(argv=None):
                              measured_mag=mag, measured_err=err, band=B, tel_id=int(row["tel_id"]),
                              ratchet=int(row["ratchet"]), field_angle=float(row["field_angle"]), time_utc=row["time"]))
         measured.append(this_frame)
-        if (n + 1) % max(1, len(frames) // 10) == 0:
-            print(f"  {n + 1}/{len(frames)}", flush=True)
-    runner.close()  # the coadds of the last ratchets
-    if reference_pass:
-        print(f"reference coadds: {len(runner.coadds_written)} -> {runner.coadd_dir}")
-        return
     print(f"hdps: {n_alerts} alerts from {len(frames)} frames ({n_skipped} frames hdps could not process)", flush=True)
     with open(args.output.with_suffix(".photometry.csv"), "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
@@ -1178,8 +1197,11 @@ def main(argv=None):
 
         pipeline_movie.render(records, args.output.with_name(args.output.stem + "_pipeline.mp4"), FIELD, B, args.fps,
                               args.dpi, ut, airmass, seeing)
-    if not obs["output"]["raw"]:
+    if not obs["output"]["raw"]:  # the raw frames and hdps's bulky per-frame products (read above)
         shutil.rmtree(work / "raw", ignore_errors=True)
+        shutil.rmtree(work / "solved", ignore_errors=True)
+        for tile in work.glob("epoch_*_tile_*.fits"):
+            tile.unlink()
     print(f"saved {args.output.with_suffix('.photometry.csv') if args.no_render else args.output}")
 
 

@@ -56,6 +56,22 @@ class AvroFileProducer:
         self.pending = []
         return n
 
+    def write_by_epoch(self, folder):
+        """Write the collected packets one Avro container file per exposure, <folder>/<epochId>.avro (the epoch
+        hdps stamps on each candidate); returns the count."""
+        from fastavro import writer
+
+        by_epoch = {}
+        for packet in self.pending:
+            by_epoch.setdefault(str(packet["candidate"]["epochId"]), []).append(packet)
+        for epoch, packets in by_epoch.items():
+            Path(folder).mkdir(parents=True, exist_ok=True)
+            with open(Path(folder) / f"{epoch}.avro", "wb") as f:
+                writer(f, self.schema, packets, codec="deflate")
+        n = len(self.pending)
+        self.pending = []
+        return n
+
 
 def read(path):
     """The packets of an alert file, as dictionaries (fastavro reader against the embedded schema)."""

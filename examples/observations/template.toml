@@ -288,6 +288,12 @@ use_annealing = true
 use_chebyshev = true
 
 [[hdps.tasks]]
+type = "LightweightFITSOutputTask"
+[hdps.tasks.config]
+# allowed: any. hdps default; unused in the worker (its product goes to the data-products sink, fits_image).
+output_dir = "./solved"
+
+[[hdps.tasks]]
 type = "ReprojectionTask"
 [hdps.tasks.config]
 # allowed: any. hdps default: the 2048 x 2048 px tile of hdps's sky segmentation; fixed by that scheme.
@@ -305,7 +311,7 @@ background_mode = "regional"
 type = "SFFTSubtractionTask"
 [hdps.tasks.config]
 # allowed: "coadd" | "first_frame". hdps docker/demo/config.yaml: coadd, the references are earlier coadds (its
-# reference_dir: the run's reference pass, set by mesa_argus.hdps_runner).
+# reference_dir: the run's reference pass, set by mesa_argus.hdps_worker).
 reference_mode = "coadd"
 # allowed: >= 1 (no upper limit). hdps default. hdps checks it is below the tile overlap minus 2 px.
 kernel_half_width = 6
@@ -369,6 +375,30 @@ stamp_size = 31
 emit_kafka = false
 # allowed: "csv" | "parquet". hdps default.
 fmt = "parquet"
+
+[[hdps.tasks]]
+type = "TileImageOutputTask"
+[hdps.tasks.config]
+# allowed: false | true. hdps default false; true here: the field movie's images are hdps's tiles.
+enabled = true
+# allowed: any. hdps default "": the data-products sink.
+output_dir = ""
+# allowed: any. hdps default (output_dir).
+science_output_dir = ""
+# allowed: any. hdps default (output_dir).
+difference_output_dir = ""
+# allowed: false | true. hdps default.
+save_science = true
+# allowed: false | true. hdps default.
+save_difference = true
+# allowed: false | true. hdps default.
+save_difference_variance = false
+# allowed: false | true. false (hdps default true): exact float32 with NaN kept; RICE quantizes and maps NaN to 0.
+compress = false
+# allowed: any. hdps default (none: every tile).
+tile_ids = "none"
+# allowed: any. hdps default.
+filename_prefix = "epoch"
 
 [lightcurves]
 # [arcsec] allowed: 0.1 .. 5.3. A detection joins the nearest object within this. Above ~1 px (1.0") so centroid noise

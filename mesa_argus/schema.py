@@ -278,7 +278,10 @@ def _task(type_, values):
 # The production chain (docker/demo/config.yaml), every constructor parameter written out. Changes from it, each a
 # toy for something the simulation does not have: ImageReductionTask (the toy camera's gain and serial number, no
 # masters: provider "file", no paths); ReferenceRetrievalTask pixscale (ArgusSim's plate scale, filled at resolve);
-# AlertVettingTask enabled with no model bundle (real/bogus not run: every score 1).
+# AlertVettingTask enabled with no model bundle (real/bogus not run: every score 1). Two hdps output Tasks added for
+# the outputs: LightweightFITSOutputTask (the solved frame's catalogues, WCS and zero point; as the AEGIS
+# astrometric-reduction config, after TPVWCSSolverTask) and TileImageOutputTask (each differenced tile's science and
+# difference planes, for the movies).
 TASKS = [
     _task("DataCleanupTask", dict(target_dtype="float32", nan_replacement=0.0)),
     _task("ImageReductionTask", dict(camera_specs={}, bias_path=NONE, dark_path=NONE, flat_path=NONE,
@@ -293,6 +296,7 @@ TASKS = [
     _task("LinearWCSSolverTask", dict(n_stars=150)),
     _task("SourceMatchingTask", dict(n_sigma_clip=5.0, region_shape=[4, 6])),
     _task("TPVWCSSolverTask", dict(tpv_terms=17, niter=3, n_sigma_clip=5.0, use_annealing=True, use_chebyshev=True)),
+    _task("LightweightFITSOutputTask", dict(output_dir="./solved")),
     _task("ReprojectionTask", dict(segment_shape=[2048, 2048], grid_resolution=33)),
     _task("CoaddTapTask", dict(background_mode="regional")),
     _task("SFFTSubtractionTask", dict(reference_mode="coadd", kernel_half_width=6, kernel_poly_order=0, background_order=2,
@@ -304,6 +308,9 @@ TASKS = [
     _task("AlertVettingTask", dict(enabled=True, model_bundle="", detect_sigma=3.0, score_cut=0.5,
                                    emit_all_candidates=False, emit_stamps=True, stamp_size=31, emit_kafka=False,
                                    fmt="parquet")),
+    _task("TileImageOutputTask", dict(enabled=True, output_dir="", science_output_dir="", difference_output_dir="",
+                                      save_science=True, save_difference=True, save_difference_variance=False,
+                                      compress=False, tile_ids=NONE, filename_prefix="epoch")),
 ]
 
 # Allowed values and why, per (Task, setting). hdps itself validates only the enumerated modes (variance_conv, fmt,
@@ -367,7 +374,7 @@ TASK_RULES = {
     ("CoaddTapTask", "background_mode"): ({"scalar", "regional"}, f"{_H}. hdps checks."),
     ("SFFTSubtractionTask", "reference_mode"): ({"coadd", "first_frame"}, f"{_H}: coadd, the references are earlier "
                                                 "coadds (its reference_dir: the run's reference pass, set by "
-                                                "mesa_argus.hdps_runner)."),
+                                                "mesa_argus.hdps_worker)."),
     ("SFFTSubtractionTask", "kernel_half_width"): ((1, None), "hdps default. hdps checks it is below the tile "
                                                    "overlap minus 2 px."),
     ("SFFTSubtractionTask", "kernel_poly_order"): ((0, None), f"{_H}. A polynomial order: not negative."),
@@ -400,6 +407,20 @@ TASK_RULES = {
                                          "centre pixel."),
     ("AlertVettingTask", "emit_kafka"): ({False}, f"{_H}: no message broker here."),
     ("AlertVettingTask", "fmt"): ({"parquet", "csv"}, "hdps default."),
+    ("LightweightFITSOutputTask", "output_dir"): (None, "hdps default; unused in the worker (its product goes to "
+                                                  "the data-products sink, fits_image)."),
+    ("TileImageOutputTask", "enabled"): ({True, False}, "hdps default false; true here: the field movie's images "
+                                         "are hdps's tiles."),
+    ("TileImageOutputTask", "output_dir"): (None, "hdps default \"\": the data-products sink."),
+    ("TileImageOutputTask", "science_output_dir"): (None, "hdps default (output_dir)."),
+    ("TileImageOutputTask", "difference_output_dir"): (None, "hdps default (output_dir)."),
+    ("TileImageOutputTask", "save_science"): ({True, False}, "hdps default."),
+    ("TileImageOutputTask", "save_difference"): ({True, False}, "hdps default."),
+    ("TileImageOutputTask", "save_difference_variance"): ({True, False}, "hdps default."),
+    ("TileImageOutputTask", "compress"): ({True, False}, "false (hdps default true): exact float32 with NaN kept; "
+                                          "RICE quantizes and maps NaN to 0."),
+    ("TileImageOutputTask", "tile_ids"): (None, "hdps default (none: every tile)."),
+    ("TileImageOutputTask", "filename_prefix"): (None, "hdps default."),
 }
 
 SECTIONS = {"field": FIELD, "night": NIGHT, "stars": STARS, "camera": CAMERA, "lightcurves": LIGHTCURVES,
