@@ -8,7 +8,10 @@
   (set_accumulator), finalized at each camera's ratchet change and at the end (finalize_ratchet), written with
   coadd_writer.write_segment_fits;
 - SFFT's references: SFFTSubtractionTask configured with reference_dir (its CoaddReferenceProvider);
-- products: hdps's DiskWriterBackend, into products/<product type>/.
+- products: hdps's DiskWriterBackend, into products/<product type>/;
+- WCS caching, as the worker's _prepare_frame and _finalize_image: per (camera, ratchet) the solved linear WCS and the
+  TPV terms are kept and given to the ratchet's later frames (the TPV terms seed their distortion fit); hdps keeps
+  this cache in valkey, here it is in memory.
 
 The one toy: AlertVettingTask's real/bogus classifier. No trained model bundle exists, so the task gets AllReal, which
 scores every candidate 1 (real/bogus not run; decision 2026-10-20).
@@ -78,6 +81,9 @@ class Runner:
             if type(task).__name__ == "AlertVettingTask":
                 task._classifier = AllReal()
         self._ratchet = {}  # camera -> current ratchet
+        # the worker's WCS cache (hdps keeps it in valkey; here in memory): per (camera, ratchet), the linear WCS
+        # header and the TPV distortion terms of the ratchet's first solved frame, given to its later frames
+        self._linear_wcs, self._tpv = {}, {}
         self.coadds_written = []
 
     def _finalize(self, camera_id, ratchet):
@@ -101,6 +107,14 @@ class Runner:
         self._ratchet[camera_id] = ratchet_num
         image.metadata.setdefault("CAMID", camera_id)  # the worker's _prepare_frame stamps
         image.metadata.setdefault("RATCHNUM", ratchet)
+        key = (camera_id, ratchet_num)  # the worker's cache key (camera, ratchet)
+        wcs_cache_hit = key in self._linear_wcs
+        if wcs_cache_hit:  # _prepare_frame: the ratchet's cached linear WCS and TPV terms
+            from astropy.wcs import WCS
+
+            image.linear_wcs = WCS(self._linear_wcs[key])
+        if key in self._tpv:
+            image.metadata["_cached_tpv_dict"] = self._tpv[key]
         image.metadata["coadd_camera_id"] = camera_id
         image.metadata["coadd_ratchet_num"] = ratchet_num
         image.metadata["coadd_field_id"] = self.field_id
@@ -110,6 +124,14 @@ class Runner:
         except Exception as e:  # the worker counts a failed frame and moves on (a skip, not a fault)
             image.metadata["mesa_argus_failed"] = f"{type(e).__name__}: {e}"
             result = None
+        if result is not None:  # _finalize_image: cache the solution for the ratchet's later frames
+            if image.linear_wcs is not None and not wcs_cache_hit:
+                self._linear_wcs[key] = dict(image.linear_wcs.to_header())
+            if image.full_wcs is not None:
+                tpv = {k: float(v) for k, v in dict(image.full_wcs.to_header()).items()
+                       if k.startswith("PV1_") or k.startswith("PV2_")}
+                if tpv:
+                    self._tpv[key] = tpv
         for product in products:
             DiskWriterBackend(str(self.out_dir / "products" / product.product_type)).write(product)
         return image, result, list(products)
