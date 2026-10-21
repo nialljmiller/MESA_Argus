@@ -11,7 +11,6 @@ block = 9
 
 [night]
 date = "2026-10-16"
-observing = "survey"
 nights = 7
 
 [stars]
