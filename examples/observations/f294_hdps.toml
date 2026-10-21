@@ -1,0 +1,26 @@
+# f294 through the rebuilt chain: ArgusSim's survey of the field for one night, each exposure a raw camera frame of
+# its telescope's 56-minipix readout window, processed by hdps (reference coadds from the night before, then SFFT and
+# alerts); the RR Lyrae Gaia 4186921728614505856 at its real position and a dwarf nova placed in the block. Every
+# other parameter: its default (examples/observations/template.toml).
+[field]
+name = "f294_hdps"
+ra = 294.7844
+dec = -11.6235
+block = 9
+
+[night]
+date = "2026-07-30"
+nights = 1
+
+[stars]
+background = "f294_784m11_623_field"
+layout = "real"
+
+[[place]]
+star = "gaia_4186921728614505856"
+
+[[place]]
+star = "dwarf_nova_400pc"
+x = 60
+y = 40
+t0 = "start+0.05"

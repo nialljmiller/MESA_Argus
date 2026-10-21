@@ -1,0 +1,28 @@
+# A Type Ia supernova appearing in the Gaia field f065_830p44_237 (RA 65.83, Dec +44.24), observed as the survey
+# takes it for a week. Peak 18 d after the first night: about -18 to -11 d from peak over the week, r 20.8 -> 16.7
+# (SALT2, x0 0.0109, z 0.002, before the field's dust): below a single frame's limit for the first two nights, then
+# rising through it. The field's modelled Gaia variable at its real position.
+[field]
+name = "sn_f065"
+ra = 65.83
+dec = 44.237
+block = 9
+
+[night]
+date = "2026-11-22"
+observing = "survey"
+nights = 7
+
+[stars]
+background = "f065_830p44_237_field"
+layout = "real"
+missing = "skip"
+
+[[place]]
+star = "gaia_229602496313775872"
+
+[[place]]
+star = "sn_ia_z002"
+x = 40
+y = 60
+t0 = "start+18"

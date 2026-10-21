@@ -10,11 +10,35 @@ PSF-model-error variance instead (reference.py).
 psf_min_stars is 8, FramePSFBuilder's own floor, not TilePSFTask's 12: the frames here are cut-outs of a tile (the
 movie's block, ~548 px of the tile's 2048), with ~1/14 of a tile's stars; f294's beta cut-out has 10 clean ones.
 With that few the builder fits a constant PSF across the cut-out (Legendre degree 0).
+
+psf_cadence "per_ratchet" (hdps TilePSFTask's build_cadence): the model is fitted on a ratchet's first frame (one
+telescope at one pointing; frame metadata tel_id, ratchet) and used for the ratchet's other frames. The simulation's
+seeing and PSF are set per ratchet, so this is the same PSF; the fit is ~85% of a frame's pipeline time. "per_frame"
+fits every frame. Frames without a ratchet (ideal observing) are fitted every frame.
 """
 import numpy as np
 
 SETTINGS = dict(psf_mag_bright=12.0, psf_mag_faint=17.0, psf_select_stamp=25, psf_max_stars=200, psf_min_stars=8,
-                psf_stamp=41)
+                psf_stamp=41, psf_cadence="per_ratchet")
+
+
+def with_cadence(fit, cfg):
+    """fit (a psf stage function) applied at psf_cadence: per_ratchet reuses a ratchet's model for its other frames."""
+    if {**SETTINGS, **cfg}["psf_cadence"] == "per_frame":
+        return fit
+    if {**SETTINGS, **cfg}["psf_cadence"] != "per_ratchet":
+        raise SystemExit(f"psf_cadence {cfg['psf_cadence']!r}: per_ratchet or per_frame")
+    models = {}
+
+    def per_ratchet(frame, cfg):
+        key = (frame.metadata.get("tel_id"), frame.metadata.get("ratchet"))
+        if key[1] is None:
+            return fit(frame, cfg)
+        if key not in models:
+            models[key] = fit(frame, cfg)
+        return models[key]
+
+    return per_ratchet
 
 
 def hdps_moffat(frame, cfg):
@@ -42,6 +66,16 @@ def hdps_moffat(frame, cfg):
                                backend="numpy").build_image(frame, selection)
     except BuildError:
         return None
+
+
+def fwhm_px(model, frame, fallback=4.5):
+    """The model's FWHM (tile pixels) at the frame's centre; fallback (hdps.alerts.features' survey-typical 4.5 px)
+    without a model."""
+    if model is None:
+        return fallback
+    ny, nx = frame.data.shape
+    ra, dec = frame.full_wcs.wcs_pix2world([(nx - 1) / 2], [(ny - 1) / 2], 0)
+    return float(np.atleast_1d(model.fwhm(ra=np.atleast_1d(float(ra[0])), dec=np.atleast_1d(float(dec[0]))))[0])
 
 
 def stamp(model, frame, cfg):

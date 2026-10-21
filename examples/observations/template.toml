@@ -1,110 +1,423 @@
-# Every key of an observation file, with its default. Copy it, delete what you don't need (anything left out takes
-# the default shown), and run:   python observe.py my_observation.toml
-# Any key can be overridden on the command line:   python observe.py my_observation.toml --set output.stride=10
-# The observation as made (every key, the night as used) is written to observation.toml in
-# outputs/pseudo_real/<name>/ (layout real) or outputs/fully_synthetic/<name>/ (layout random).
-# Stars are built first, by make_stars.py; an observation only names them.
+# An observation: the one file that defines a run. Written by python -m mesa_argus.schema; every parameter with its
+# default, unit, allowed values and the justification.
 
 [field]
-ra = 294.7844             # deg, ICRS (required)
-dec = -11.6235            # deg, ICRS (required)
-block = 3                 # minipixes across the block shown: odd, 1-9 (3 = 84", 9 = 253")
-name = ""                 # the output folder's name; default: this file's name
+# [deg] allowed: 0.0 .. 360.0. ICRS right ascension of the field (the block's centre).
+ra = "required"
+# [deg] allowed: -90.0 .. 90.0. ICRS declination; whether Argus can see it at all is ArgusSim's coverage (observe.py
+# stops when no exposure covers it).
+dec = "required"
+# allowed: any. Output folder name; "": the observation file's name.
+name = ""
+# [minipix] allowed: 1 .. 64. Side of the block shown in the movie and followed in the summary, in hdps minipixes (32
+# tile px, 28.1"). At most 64: one hdps tile (2048 px) is 64 x 64 minipixes.
+block = 9
+# [minipix] allowed: 0, or 28 .. the sensor's short side (313 for ArgusSim's default sensor). Side of the simulated
+# readout window, in minipixes, centred on the field's position on the sensor (shifted to stay on it); 0: the whole
+# sensor (ArgusSim telescope.n_pixels_x x n_pixels_y). A real camera can read out a window (XORIGIN, YORIGIN, XSIZE,
+# YSIZE in its header). At least 28 (782 px): hdps's source detector needs 3 of its 256 px background regions across.
+# Default 56 (1564 px, 26.3'): of the windows tried, the one hdps handles best end to end (16 exposures of f294,
+# 2026-10-21: WCS solved 13/16, every touched tile reprojected 11/16; 28: 14/16 and 0/16, 40: 14/16 and 7/16, 80:
+# 11/16 and 0/16; production processes whole frames). The field's Gaia stars must reach the window's far corner:
+# radius ~0.5 deg for 56.
+window = 56
 
 [night]
-date = ""                 # local date the night starts, YYYY-MM-DD (default today; the nearest night the field is up
-                          # if not); "auto": the night the placed real (Gaia) stars change most
-start = ""                # UT HH:MM (default: dusk / when the field rises); "start+D" times count from here
-end = ""                  # UT HH:MM (default: dawn / when the field sets)
-site = "argus"            # "argus": ArgusSim's site; "sro": Sierra Remote Observatories
-max_airmass = 0.0         # a further airmass limit; 0: none (the array's minimum altitude, 32.84 deg, always applies)
-observing = "ideal"       # "ideal": every exposure in both bands, the season's median seeing, one PSF field angle;
-                          # "survey": the exposures ArgusSim's array actually takes (mesa_argus/survey.py): one band
-                          # each (the covering telescope's), gaps between telescopes, seeing per ratchet, the PSF at
-                          # the field's angle in that telescope; no weather or clouds
-nights = 1                # survey: nights from date
-survey_seed = 0           # survey: the seeing draws (one seed, one realisation)
+# allowed: YYYY-MM-DD | "auto". Local date of the first night (the night starts on that evening); "auto": the night
+# the placed real stars change most.
+date = "auto"
+# [nights] allowed: 1 .. 366. Consecutive nights observed. 7 is the standard observation (a week); up to a year.
+nights = 7
+# allowed: 0 .. 2147483647. Seed of ArgusSim's per-ratchet draws (seasonal zenith seeing); the same seed makes the
+# same nights.
+seed = 0
+# [nights] allowed: 1 .. 30. Nights observed before the first night to make hdps's references (its coadd bootstrap:
+# pass 1 coadds these nights' frames with CoaddTapTask, pass 2 subtracts against those coadds; docker/demo/config.yaml
+# header). Same stars, transients left out. 1: the night before.
+reference_nights = 1
 
 [stars]
-background = "f294_784m11_623_field"   # a built star set (required): the field's constant stars
-layout = "real"           # "real": the set's own positions; "random": scattered around the pointing (synthetic)
-seed = 1                  # random layout; and any placed star with x or y = -1
-missing = "stop"          # a placed star that is not built: "stop", or "skip" it
+# allowed: any. The star set (stars/<name>/) every field star comes from: Gaia stars of the field built by
+# make_stars.py.
+background = "required"
+# allowed: "random" | "real". real: each star at its Gaia position; random: scattered uniformly over the window (a
+# synthetic field).
+layout = "real"
+# allowed: 0 .. 2147483647. Seed of the random layout and random placements.
+seed = 1
+# allowed: "skip" | "stop". A placed star not built yet: stop the run, or skip it.
+missing = "stop"
 
-# Built stars put in the field, any number. Real Gaia stars (generator "Gaia variable") sit where they are, with
-# their own ephemeris: give only star =. Others: x, y (percent of the image from its lower left; default 50, 50;
-# -1 random) and t0 (transients) or epoch (periodic: a maximum / primary eclipse): ISO UTC "2026-07-20T05:30",
-# "start+0.1" days from the night's (or the UT window's) start, or a BJD_TDB number. distance (pc, periodic stars):
-# where the star is put, seen through the 3D map's dust at that distance on the field's sightline; default the
-# model's own distance (a library star is stored at 10 pc and needs one).
-[[place]]
-star = "gaia_4186921728614505856"
+[argussim.observatory]
+# ArgusSim: how the image is taken. Defaults are read from ArgusSim.
+# [deg] allowed: -90.0 .. 90.0. Site latitude, Mt Fowlkes (ArgusSim argus_sim/config.py). A latitude.
+latitude = 30.6716
+# [deg] allowed: -180.0 .. 180.0. Site longitude, east positive (ArgusSim argus_sim/config.py). A longitude.
+longitude = -104.0215
+# [m] allowed: -500.0 .. 9000.0. Site height (ArgusSim argus_sim/config.py). Between the lowest and highest land on
+# Earth.
+altitude = 2070
+# [deg] allowed: 0.0 .. 90.0. Lowest altitude the array points at (ArgusSim argus_sim/config.py). Above the horizon.
+min_alt = 32.84
+# allowed: false | true. Zenith seeing per ratchet from the site's DIMM seasons (Barker et al. 2003; ArgusSim
+# argus_sim/config.py, PI 2026-09-19).
+seasonal_seeing = true
+# [arcsec] allowed: > 0. Lognormal seeing, used only when seasonal_seeing is false (ArgusSim argus_sim/config.py).
+# Positive.
+seeing_mean = 0.87
+# [arcsec] allowed: >= 0.0 (no upper limit). As seeing_mean (ArgusSim argus_sim/config.py). Not negative.
+seeing_std = 0.15
+# allowed: 0.0 .. 1.0. Grey transparency, 1 = photometric (ArgusSim argus_sim/config.py). A transmitted fraction.
+transparency = 1.0
+# [ucd/m2] allowed: >= 0.0 (no upper limit). Artificial sky glow (ArgusSim argus_sim/config.py). Not negative.
+artificial_light_cd_m2 = 1.94
+# allowed: 0.8 .. 2.0. Airglow scaling when survey.solar_activity_prior is "fixed"; ArgusSim's stated range, 0.8
+# (solar minimum) to 2.0 (maximum) (ArgusSim argus_sim/config.py).
+solar_activity = 0.8
 
-[[place]]
-star = "lib_rrab_p05521_mhm100"
-distance = 8000
-epoch = "start+0.1"
-x = 60
-y = 40
+[argussim.telescope]
+# ArgusSim: how the image is taken. Defaults are read from ArgusSim.
+# [mm] allowed: > 0. (ArgusSim argus_sim/config.py). Positive.
+aperture_diameter = 280
+# [mm] allowed: >= 0.0 (no upper limit). (ArgusSim argus_sim/config.py). Not negative; smaller than the aperture.
+central_obstruction_diameter = 168
+# [mm] allowed: > 0. (ArgusSim argus_sim/config.py); with pixel_size, the plate scale. Positive.
+focal_length = 770.0
+# [um] allowed: > 0. (ArgusSim argus_sim/config.py). Positive.
+pixel_size = 3.76
+# [px] allowed: >= 768 (no upper limit). Sensor long axis (ArgusSim argus_sim/config.py). At least 768: hdps's source
+# detector needs 3 of its 256 px background regions across.
+n_pixels_x = 11648
+# [px] allowed: >= 768 (no upper limit). Sensor short axis (ArgusSim argus_sim/config.py). As n_pixels_x.
+n_pixels_y = 8742
+# [e-] allowed: >= 0.0 (no upper limit). (ArgusSim argus_sim/config.py). A noise: not negative.
+readnoise = 1.2
+# [e-/s/px] allowed: >= 0.0 (no upper limit). (ArgusSim argus_sim/config.py). A rate: not negative.
+dark_current = 0.0022
+# [e-] allowed: 1 .. 6553500. (ArgusSim argus_sim/config.py). Positive; with [camera] gain it must fit the 16-bit raw
+# frame (fullwell / gain <= 65535), checked with [camera].
+fullwell = 21657
+# allowed: 0.0 .. 1.0. Multiplicative throughput degradation (ArgusSim argus_sim/config.py). A fraction.
+throughput_loss = 1.0
+# allowed: "gaussian" | "zemax". Delivered optics (zemax, the default since 2026-09-19) or a Gaussian spot; ArgusSim's
+# two models (ArgusSim argus_sim/config.py).
+psf_model = "zemax"
+# [um] allowed: > 0. RMS spot radius of the Gaussian PSF (ArgusSim argus_sim/config.py). Positive.
+spot_size = 3.2
+# [px] allowed: > 0 or "none". Cap on the delivered EE50 diameter (ArgusSim argus_sim/config.py); none: uncapped.
+# Positive.
+ee50_max_px = 3.0
+# allowed: false | true. (ArgusSim argus_sim/config.py)
+randomize_pixel_phase = false
 
-[[place]]
-star = "sn_ia_z002"
-t0 = "start+0.0625"
-x = 30
-y = 70
+[argussim.survey]
+# ArgusSim: how the image is taken. Defaults are read from ArgusSim.
+# [deg] allowed: -90.0 .. 0.0. Observing only with the Sun below this (ArgusSim argus_sim/config.py). Below the
+# horizon.
+min_sun_alt = -18
+# [deg] allowed: 0.0 .. 180.0. (ArgusSim argus_sim/config.py). An angle on the sky.
+min_moon_sep = 1.5
+# allowed: "epoch" | "fixed". Per-night solar activity: ArgusSim's 2028-2033 prior, or observatory.solar_activity
+# (ArgusSim argus_sim/config.py).
+solar_activity_prior = "epoch"
+# allowed: false | true. Nights gated by the site's clear fractions (ArgusSim argus_sim/config.py, PI 2026-09-19).
+apply_weather = true
 
-[pipeline]                # which implementation runs each measurement stage (mesa_argus/pipeline/)
-extraction = "hdps"       # hdps's source detector (GPU, or its CPU mirror)
-calibration = "atlas_refcat2"  # zero point against ATLAS-Refcat2 (hdps zeropoint; ~/.rico_cache/atlas_refcat2)
-psf = "hdps_moffat"       # PSF: hdps's Moffat field fit to Refcat2 stars (as TilePSFTask), difference imaging's filter
-reference = "sacrificial_night"  # reference: median of a night observed first (same stars, no transients)
-dia = "hdps_zogy"         # difference imaging: hdps ZOGY, candidates from its calibrated S_corr
-alerts = "hdps_v3"        # alert packets: hdps alert schema 3.0, JSON lines (alerts/)
-lightcurves = "positional"  # detections linked by position across frames: catalogue.csv, lightcurves/
-reference_date = ""       # the sacrificial night (YYYY-MM-DD; "": the night before the observation)
+[argussim.schedule]
+# ArgusSim: how the image is taken. Defaults are read from ArgusSim.
+# [s] allowed: > 0. Exposure time (ArgusSim coverage_exact.Schedule). Positive; at most track_min, checked with it.
+exptime_s = 60.0
+# [min] allowed: > 0. Tracking per ratchet (Schedule). Positive.
+track_min = 14.0
+# [min] allowed: >= 0.0 (no upper limit). Reset per ratchet, no exposures (Schedule). Not negative.
+reset_min = 1.0
+# [deg] allowed: -180.0 .. 180.0. Tracking angle at a ratchet's start (Schedule). An angle.
+theta_start_deg = 3.75
+# [deg] allowed: -90.0 .. 0.0. Exposures with the Sun below this (Schedule). Below the horizon.
+sun_alt_max_deg = -18.0
 
-[measure]                 # the stages' settings (hdps production values for the detector)
-detect_sigma = 3.0        # detection threshold (sigma)
-bg_region_size = 64       # background region (pixels)
-flux_radius = 4.0         # aperture radius (pixels)
-matched_filter_width = 4.0  # matched filter FWHM (pixels)
-de_dup_radius = 6.0       # detections closer than this (pixels) are merged, the brightest kept
-cr_detect_contrast = 0.25 # cosmic-ray test: neighbours below this fraction of the peak
-match_arcsec = 1.5        # calibration: match to Refcat2 (arcsec)
-min_snr = 20.0            # calibration: a star counts only if measured at S/N >= this
-refcat_radius_deg = 0.12  # calibration: Refcat2 cone (deg)
-refcat_max_mag = 19.0     # calibration: faintest Refcat2 star read (g)
-psf_mag_bright = 12.0     # psf: Refcat2 magnitude window of the PSF stars (hdps TilePSFTask: 12-17)
-psf_mag_faint = 17.0
-psf_select_stamp = 25     # psf: stamp (pixels) a PSF star must have clean and to itself
-psf_max_stars = 200       # psf: at most this many PSF stars (the brightest)
-psf_min_stars = 8         # psf: fewer and the frame is skipped (as hdps skips the tile; hdps: 12 per full tile)
-psf_stamp = 41            # psf: the PSF image ZOGY takes (pixels)
-dia_threshold = 8.0       # dia: candidate threshold (sigma; hdps 5, with a real/bogus classifier after it)
-dia_region_size = 256     # dia: region (pixels) for S_corr's robust scale
-dia_min_separation = 4    # dia: candidates at least this far apart (pixels)
-astrometric_sigma = 0.032 # dia: ZOGY's astrometric noise (pixels; hdps's value)
-dia_saturation_px = 10    # dia: no candidates this close (pixels) to a saturated pixel
-dia_edge_px = 20          # dia: no candidates this close (pixels) to the edge (ZOGY's FFT wrap-around)
-link_arcsec = 1.5         # lightcurves: a detection joins the nearest object within this (arcsec)
-match_radius = 2.0        # truth: a detection or candidate is a simulated star within this (pixels); scoring only
+[camera]
+# The toy camera (mesa_argus/camera.py): electrons to ADU, which ArgusSim does not define. none: the default
+# described.
+# [e-/ADU] allowed: 0.01 .. 100.0. Toy: ArgusSim defines the detector in electrons only. Default: ArgusSim's full well
+# (telescope.fullwell) at hdps's raw saturation level (saturation_adu), so a full pixel is where hdps flags
+# saturation; 0.373 for 21657 e- (hdps's prototype QHY600M: 0.33).
+gain = "none"
+# [ADU] allowed: 0 .. 65535. Toy: bias level (none in ArgusSim).
+offset = 0
+# [ADU] allowed: 1.0 .. 65535.0. hdps.calibration.ImageReducer's saturation_value: raw pixels at or above it are
+# flagged saturated.
+saturation_adu = 58000.0
+
+[hdps]
+# hdps: the pipeline the raw frames go through.
+# allowed: any. ATLAS-Refcat2 for ReferenceRetrievalTask (hdps docker/demo/config.yaml: RICO_CACHE_DIR/atlas_refcat2).
+refcat = "~/.rico_cache/atlas_refcat2"
+
+[hdps.coadd]
+# allowed: "inverse_variance" | "mean". Frame weighting in the coadd (hdps docker/demo/config.yaml).
+strategy = "inverse_variance"
+# [sigma] allowed: > 0. Outlier clip on the sky-subtracted residual (hdps docker/demo/config.yaml). Positive.
+clip_kappa = 3.0
+# [frames] allowed: >= 1 (no upper limit). Fewest frames before clipping (hdps docker/demo/config.yaml). At least 1.
+clip_min_frames = 3
+# allowed: "float32" | "float64". (hdps docker/demo/config.yaml: float32, sub-1e-6 relative difference from float64).
+accumulation_dtype = "float32"
+
+# [[hdps.tasks]]: hdps's Task chain, in order, run by hdps.orchestrate's PipelineExecutor; each [hdps.tasks.config]
+# holds the Task's constructor parameters.
+
+[[hdps.tasks]]
+type = "DataCleanupTask"
+[hdps.tasks.config]
+# allowed: "float32" | "float64". hdps docker/demo/config.yaml. A float type the later Tasks take.
+target_dtype = "float32"
+# allowed: any. hdps docker/demo/config.yaml. Any value.
+nan_replacement = 0.0
+
+[[hdps.tasks]]
+type = "ImageReductionTask"
+[hdps.tasks.config]
+# allowed: any. Toy camera: filled at resolve ({serial_number}); no overscan geometry, so nothing is trimmed.
+camera_specs = {}
+# allowed: any. Toy camera: no masters (none).
+bias_path = "none"
+# allowed: any. Toy camera: no masters (none).
+dark_path = "none"
+# allowed: any. Toy camera: no masters (none).
+flat_path = "none"
+# allowed: false | true. hdps docker/demo/config.yaml has true; the toy camera has no overscan.
+overscan_trimming = false
+# allowed: false | true. hdps docker/demo/config.yaml
+bias_subtract = false
+# allowed: any. none: [camera] gain (the pipeline applies it once, here).
+gain = "none"
+# allowed: false | true. hdps default; falls back to the CPU without CuPy.
+gpu_reduce = true
+# allowed: "file" | "opsdb". hdps docker/demo/config.yaml uses opsdb (the ops database); file: no database, masters
+# from paths. hdps checks.
+provider = "file"
+
+[[hdps.tasks]]
+type = "SourceDetectionTask"
+[hdps.tasks.config]
+# allowed: > 0. hdps docker/demo/config.yaml. A threshold in sigma: positive.
+detect_sigma = 3.0
+# allowed: >= 1 (no upper limit). hdps docker/demo/config.yaml. A size in pixels: positive. The window must be 3
+# regions across (checked with [field] window).
+bg_region_size = 256
+# allowed: >= 1 (no upper limit). hdps default. A count: at least 1.
+max_sources = 10000000
+# allowed: > 0. hdps default (aperture radius). A size in pixels: positive.
+flux_radius = 4.0
+# allowed: > 0. hdps docker/demo/config.yaml (FWHM). A size in pixels: positive.
+matched_filter_width = 4.0
+# allowed: >= 1 (no upper limit). hdps default. A count: at least 1.
+centroid_n_iter = 3
+# allowed: 0.0 .. 1.0. hdps default. A fraction of the peak.
+cr_detect_contrast = 0.25
+# allowed: false | true. hdps default.
+de_dup_sources = true
+# allowed: > 0. hdps default. A size in pixels: positive.
+de_dup_radius = 6.0
+# allowed: 0.0 .. 1.0. hdps default. A fraction of 65534.
+saturation_threshold = 0.9999
+
+[[hdps.tasks]]
+type = "SourceFilterTask"
+[hdps.tasks.config]
+# allowed: >= 0 (no upper limit). hdps default. A pixel index: not negative.
+min_x = 0
+# allowed: >= 0 (no upper limit). hdps default. A pixel index: not negative.
+min_y = 0
+# allowed: any. hdps default (none: no limit).
+max_x = "none"
+# allowed: any. hdps default (none: no limit).
+max_y = "none"
+# allowed: any. hdps default (none: no cut).
+min_snr = "none"
+
+[[hdps.tasks]]
+type = "ReferenceRetrievalTask"
+[hdps.tasks.config]
+# allowed: "ATLAS". hdps docker/demo/config.yaml. The one provider with a local catalogue here (Refcat2).
+catalog_provider = "ATLAS"
+# allowed: 0.0 .. 180.0. hdps docker/demo/config.yaml. An angle on the sky; to cover a whole frame, at least the
+# sensor's half-diagonal (2.0 deg for ArgusSim's).
+radius_deg = 2.5
+# allowed: any. hdps default.
+min_mag = 0.0
+# allowed: any. hdps docker/demo/config.yaml; fainter than min_mag.
+max_mag = 19.1
+# allowed: any. none: ArgusSim's plate scale (telescope pixel_size / focal_length); hdps's config has its prototype
+# camera's 1.42.
+pixscale = "none"
+# allowed: false | true. hdps default.
+cacheable = true
+# allowed: > 0. hdps default (deg). Positive.
+cache_precision = 0.1
+# allowed: >= 0.0 (no upper limit). hdps default. Not negative.
+cache_max_age_days = 7.0
+
+[[hdps.tasks]]
+type = "LinearWCSSolverTask"
+[hdps.tasks.config]
+# allowed: >= 3 (no upper limit). hdps docker/demo/config.yaml. At least 3 stars fix a linear (6-parameter) solution.
+n_stars = 150
+
+[[hdps.tasks]]
+type = "SourceMatchingTask"
+[hdps.tasks.config]
+# allowed: > 0. hdps docker/demo/config.yaml. A threshold in sigma: positive.
+n_sigma_clip = 5.0
+# allowed: any. hdps docker/demo/config.yaml: [rows, columns] of matching regions.
+region_shape = [4, 6]
+
+[[hdps.tasks]]
+type = "TPVWCSSolverTask"
+[hdps.tasks.config]
+# allowed: any. hdps docker/demo/config.yaml. A TPV term count (hdps's solver decides which it takes).
+tpv_terms = 17
+# allowed: >= 1 (no upper limit). hdps docker/demo/config.yaml. A count: at least 1.
+niter = 3
+# allowed: > 0. hdps default. A threshold in sigma: positive.
+n_sigma_clip = 5.0
+# allowed: false | true. hdps docker/demo/config.yaml
+use_annealing = true
+# allowed: false | true. hdps docker/demo/config.yaml
+use_chebyshev = true
+
+[[hdps.tasks]]
+type = "ReprojectionTask"
+[hdps.tasks.config]
+# allowed: any. hdps default: the 2048 x 2048 px tile of hdps's sky segmentation; fixed by that scheme.
+segment_shape = [2048, 2048]
+# allowed: >= 2 (no upper limit). hdps default. A grid of at least 2 points per axis.
+grid_resolution = 33
+
+[[hdps.tasks]]
+type = "CoaddTapTask"
+[hdps.tasks.config]
+# allowed: "regional" | "scalar". hdps docker/demo/config.yaml. hdps checks.
+background_mode = "regional"
+
+[[hdps.tasks]]
+type = "SFFTSubtractionTask"
+[hdps.tasks.config]
+# allowed: "coadd" | "first_frame". hdps docker/demo/config.yaml: coadd, the references are earlier coadds (its
+# reference_dir: the run's reference pass, set by mesa_argus.hdps_runner).
+reference_mode = "coadd"
+# allowed: >= 1 (no upper limit). hdps default. hdps checks it is below the tile overlap minus 2 px.
+kernel_half_width = 6
+# allowed: >= 0 (no upper limit). hdps docker/demo/config.yaml. A polynomial order: not negative.
+kernel_poly_order = 0
+# allowed: >= 0 (no upper limit). hdps docker/demo/config.yaml (2 beats 1). A polynomial order: not negative.
+background_order = 2
+# allowed: false | true. hdps default.
+mask_saturated_in_fit = true
+# allowed: false | true. hdps default.
+mask_bright_stars = false
+# allowed: "direct" | "fft". hdps default. hdps checks.
+variance_conv = "direct"
+# allowed: >= 0 (no upper limit). hdps docker/demo/config.yaml. A count: not negative.
+rejection_iters = 1
+# allowed: > 0. hdps docker/demo/config.yaml. A threshold in sigma: positive.
+rejection_sigma = 3.0
+# allowed: >= 0 (no upper limit). hdps docker/demo/config.yaml. Pixels: not negative.
+rejection_grow = 2
+# allowed: false | true. true (hdps default false): AlertVettingTask's ref/sci stamps need the pre-subtraction planes
+# (its emit_stamps note).
+retain_planes = true
+
+[[hdps.tasks]]
+type = "DiffDetectionTask"
+[hdps.tasks.config]
+# allowed: > 0. hdps docker/demo/config.yaml. A threshold in sigma: positive.
+detect_sigma = 5.0
+# allowed: >= 1 (no upper limit). hdps docker/demo/config.yaml. A size in pixels: positive.
+bg_region_size = 256
+# allowed: >= 1 (no upper limit). hdps default. A count: at least 1.
+max_sources = 100000
+# allowed: > 0. hdps default (FWHM). A size in pixels: positive.
+matched_filter_width = 4.0
+
+[[hdps.tasks]]
+type = "TransientOutputTask"
+[hdps.tasks.config]
+# allowed: "csv" | "parquet". hdps docker/demo/config.yaml. hdps checks.
+fmt = "parquet"
+
+[[hdps.tasks]]
+type = "AlertVettingTask"
+[hdps.tasks.config]
+# allowed: false | true. hdps docker/demo/config.yaml has false (no classifier deployed); true here: the alerts are an
+# output.
+enabled = true
+# allowed: any. "": no real/bogus model exists; every candidate scores 1 (decision 2026-10-20).
+model_bundle = ""
+# allowed: > 0. hdps docker/demo/config.yaml. A threshold in sigma: positive.
+detect_sigma = 3.0
+# allowed: 0.0 .. 1.0. A real/bogus score is a probability. With every score 1, any cut accepts every candidate.
+score_cut = 0.5
+# allowed: false | true. hdps default.
+emit_all_candidates = false
+# allowed: false | true. true (hdps default false): ref/sci/diff stamps with each alert.
+emit_stamps = true
+# allowed: a positive odd integer. hdps default. Odd, so the candidate sits on the centre pixel.
+stamp_size = 31
+# allowed: false. hdps docker/demo/config.yaml: no message broker here.
+emit_kafka = false
+# allowed: "csv" | "parquet". hdps default.
+fmt = "parquet"
+
+[lightcurves]
+# [arcsec] allowed: 0.1 .. 5.3. A detection joins the nearest object within this. Above ~1 px (1.0") so centroid noise
+# links; below hdps's de-duplication radius (6 px, 6.0"), inside which two detections in one frame cannot both exist.
+link_arcsec = 1.5
+
+[truth]
+# [px] allowed: 0.5 .. 6.0. Scoring only: a detection or candidate is a simulated star within this (tile px). Below
+# hdps's de-dup radius (6 px).
+match_radius = 2.0
+
 [output]
-movie = true              # render the movie (false: photometry and any FITS only)
-bands = ["beta", "rho"]   # one movie and photometry CSV per band
-fits = false              # every measured exposure, both bands, as FITS (fits/ in the output folder)
-catalogues = true         # every measured exposure's detections and their simulated stars (catalogues/, parquet);
-                          # with alerts, also each exposure's difference-image candidates (*_candidates.parquet)
-alerts = true             # difference imaging and alert packets (alerts/); makes the reference first (reference/)
-lightcurves = true        # with catalogues: catalogue.csv (one row per object) and lightcurves/ (one CSV per object)
-page = false              # the interactive page (real Gaia stars only, for now)
-stride = 1                # render and measure every Nth exposure
-seed = 3                  # noise
-exptime = 60.0            # s
-# seeing = 1.0            # zenith FWHM (arcsec); default: ArgusSim's seasonal site median for the date
-field_angle = 1.44        # deg from the optical axis (sets the PSF)
-area = 8.0                # side (arcmin) of the simulated area
-fps = 24.0
+# allowed: a non-empty list of "beta", "rho". Argus bands kept (ArgusSim's filter_strategy has b, named g there, and
+# rho).
+bands = ["beta", "rho"]
+# allowed: false | true. Render the movie (the third output).
+movie = true
+# allowed: false | true. Keep hdps's per-frame source catalogues.
+catalogues = true
+# allowed: false | true. Run difference imaging and keep hdps's alert products.
+alerts = true
+# allowed: false | true. Link detections into catalogue.csv and lightcurves/ (needs catalogues).
+lightcurves = true
+# allowed: false | true. Also render the pipeline movie (each raw frame on its sensor, hdps's detections and WCS);
+# drawn from the same run, about 15-25% more time.
+pipeline_movie = true
+# allowed: false | true. Keep the raw camera frames (raw/); they are always written for hdps, and deleted after unless
+# kept.
+raw = false
+# allowed: 1 .. 1000. Movie: every Nth frame.
+stride = 1
+# [frames/s] allowed: 1 .. 120. Movie frame rate.
+fps = 24
+# allowed: 50 .. 300. Movie resolution.
 dpi = 100
-kernel_half = 3           # difference-imaging kernel half-width (pixels)
-kernel_clip = 3.0
-kernel_stamps = 20.0
+# allowed: 0 .. 2147483647. Seed of the photon and read noise.
+noise_seed = 3
+
+# [[place]]: any number of built stars placed in the field (each key below).
+# star: [] allowed any. A built star (stars/<name>/).
+# x: [%] allowed 0 .. 100 | -1. Position across the block, percent from its left edge; -1: random. Ignored for a real
+# Gaia star (its own position).
+# y: [%] allowed 0 .. 100 | -1. Position up the block, percent from its bottom edge; -1: random.
+# t0: [] allowed any. Transients: the model's t0 (ISO UTC, "start+D" days after the first exposure, or BJD).
+# epoch: [] allowed any. Periodic stars: a primary eclipse / maximum (as t0).
+# distance: [pc] allowed 0.0 .. 10000000.0. Distance for the dust in front of it (the 3D map); none: behind all the
+# dust in its sightline, or the star's own.
+# [[place]]
+# star = "dwarf_nova_400pc"
+# x = 60
+# y = 40
+# t0 = "start+0.05"

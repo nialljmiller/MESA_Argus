@@ -1,0 +1,29 @@
+# A short, high-amplification microlensing event in the Gaia field f098_580p58_321 (RA 98.58, Dec +58.32), observed
+# as the survey takes it for a week. Point lens, t_E 0.2 d, u0 0.02: the source (rho 19.1, below a single frame's
+# limit) brightens 50 times (rho 14.8) at the peak and is back below the limit within hours. Peak 3 d 2 h after the
+# first exposure: mid-way through the fourth night's observing (the survey takes f098 ~07:15-11:15 UT). The field's
+# modelled Gaia variable at its real position.
+[field]
+name = "microlensing_f098"
+ra = 98.5795966362
+dec = 58.32086737177
+block = 9
+
+[night]
+date = "2026-10-16"
+observing = "survey"
+nights = 7
+
+[stars]
+background = "f098_580p58_321_field"
+layout = "real"
+missing = "skip"
+
+[[place]]
+star = "gaia_1001448801332222848"
+
+[[place]]
+star = "microlensing_te02"
+x = 40
+y = 60
+t0 = "start+3.083"

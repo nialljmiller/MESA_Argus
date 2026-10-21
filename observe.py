@@ -51,15 +51,13 @@ def read_observation():
     p.add_argument("--dec", type=float)
     p.add_argument("--name")
     p.add_argument("--date", help="YYYY-MM-DD or auto")
-    p.add_argument("--start", help="UT HH:MM")
-    p.add_argument("--end", help="UT HH:MM")
     p.add_argument("--bands", nargs="+")
     p.add_argument("--place", action="append", default=[], help="a [[place]] as a TOML inline table (replaces the file's)")
     p.add_argument("--set", action="append", default=[], metavar="SECTION.KEY=VALUE", help="any key, e.g. output.stride=10")
     p.add_argument("--scene-only", action="store_true", help="write the scene and stop")
     a = p.parse_args()
     flags = (("ra", "field.ra"), ("dec", "field.dec"), ("name", "field.name"), ("date", "night.date"),
-             ("start", "night.start"), ("end", "night.end"), ("bands", "output.bands"))
+             ("bands", "output.bands"))
     overrides = {dotted: getattr(a, flag) for flag, dotted in flags if getattr(a, flag) is not None}
     for item in a.set:
         dotted, _, v = item.partition("=")
@@ -229,43 +227,41 @@ def place_stars(placements, scene_dir, night_info, half_width, rng):
     return rows, extra
 
 
-def run_engine(obs, out, window, n_placed, extra=()):
-    import night_movie
-
-    name, n, o = obs["field"]["name"], obs["night"], obs["output"]
-    options = []
-    for k in night_movie.MOVIE_OPTIONS:
-        v = (n["max_airmass"] or None) if k == "max_airmass" else o.get(k)
-        if v is not None:
-            options += [f"--{k.replace('_', '-')}", str(v)]
+def run_engine(obs, out, n_placed, extra=(), reference=None):
+    """The engine (night_movie.py) for each band at once (each is single-threaded): the band's exposures as raw frames
+    through hdps, with the band's hdps coadds as references (reference: the folder holding <band>/coadds)."""
+    name, o = obs["field"]["name"], obs["output"]
+    options = ["--observation", str(out / "observation.toml"), "--work", str(out / "hdps"), "--stride", str(o["stride"]),
+               "--fps", str(o["fps"]), "--dpi", str(o["dpi"]), "--seed", str(o["noise_seed"]),
+               "--exptime", str(obs["argussim"]["schedule"]["exptime_s"]), "--highlight", str(n_placed)]
     if not o["movie"]:
         options += ["--no-render"]
-    if window[0]:
-        options += ["--start", window[0]]
-    if window[1]:
-        options += ["--end", window[1]]
-    if o["fits"]:
-        options += ["--fits", str(out / "fits")]
+    if o["pipeline_movie"] and "--hdps-pass" not in extra:
+        options += ["--pipeline-movie"]
     if o["catalogues"]:
         options += ["--catalogues", str(out / "catalogues")]
     options += list(extra)
-    bands = o["bands"][:1] if "--no-measure" in extra else o["bands"]  # frames hold every band taken: one run makes them
-    for band in bands:
+    running = []
+    for band in o["bands"]:
         mp4 = out / f"{name}_night_{band}.mp4"
         print(f"observing {band} -> {mp4.relative_to(REPO)} (log {mp4.with_suffix('.log').relative_to(REPO)})", flush=True)
-        with open(mp4.with_suffix(".log"), "w") as log:
-            subprocess.run([sys.executable, "night_movie.py", "--scene", str(out / "scene"), "--field", name, "--band", band,
-                            "-o", str(mp4), "--measure", json.dumps({**obs["measure"], **obs["pipeline"]}), "--highlight", str(n_placed), *options],
-                           stdout=log, stderr=subprocess.STDOUT, check=True)
-    if o["catalogues"] and o["lightcurves"] and "--no-measure" not in extra:  # both bands' detections, linked
-        from mesa_argus import pipeline
+        log = open(mp4.with_suffix(".log"), "w")
+        band_options = ["--reference", str(reference / band / "coadds")] if reference is not None else []
+        command = [sys.executable, "night_movie.py", "--scene", str(out / "scene"), "--field", name, "--band", band,
+                   "-o", str(mp4), *options, *band_options]
+        running.append((band, log, subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)))
+    failed = []
+    for band, log, process in running:
+        if process.wait() != 0:
+            failed.append(band)
+        log.close()
+    if failed:
+        raise SystemExit(f"the engine failed for {', '.join(failed)}: see the log(s) in {out.relative_to(REPO)}/")
+    if o["catalogues"] and o["lightcurves"] and "--hdps-pass" not in extra:  # both bands' detections, linked
+        from mesa_argus.pipeline import lightcurves
 
-        link = pipeline.stage("lightcurves", obs["pipeline"]["lightcurves"])
-        catalogue = link(out / "catalogues", out, {**obs["measure"], **obs["pipeline"]})
+        catalogue = lightcurves.positional(out / "catalogues", out, dict(obs["lightcurves"]))
         print(f"catalogue.csv: {len(catalogue)} objects; their light curves in lightcurves/", flush=True)
-    if o["page"]:
-        subprocess.run([sys.executable, "demo/export_demo.py", "--scene", str(out / "scene")], check=True)
-        subprocess.run([sys.executable, "demo/build_html.py", name], check=True)
 
 
 def main():
@@ -277,31 +273,22 @@ def main():
 
 
 def make_reference(obs, out, placements):
-    """The reference images: observe the sacrificial night (the same field and stars, without the transients, on
-    [pipeline] reference_date, else the night before), keep its tiles, and make each band's reference from them with
-    the reference stage. Returns the folder they are in."""
+    """hdps's references, by its coadd bootstrap (docker/demo/config.yaml): the [night] reference_nights before the
+    first night are observed (the same field and stars, the transients left out), and each band's frames go through
+    hdps up to CoaddTapTask, whose coadds are the references. Returns the folder holding <band>/coadds."""
     import copy
     from datetime import date as Date, timedelta
 
-    from mesa_argus import pipeline
-
     reference = copy.deepcopy(obs)
-    p = obs["pipeline"]
-    reference["night"].update(date=p["reference_date"] or (Date.fromisoformat(obs["night"]["date"]) - timedelta(days=1)).isoformat(),
-                              nights=1)
+    n = obs["night"]["reference_nights"]
+    reference["night"].update(date=(Date.fromisoformat(obs["night"]["date"]) - timedelta(days=n)).isoformat(), nights=n)
     reference["place"] = [place for place, folder, meta in placements if meta["timing"] != "transient"]
-    reference["output"].update(movie=False, catalogues=False, fits=False, alerts=False, page=False)
+    reference["output"].update(movie=False, pipeline_movie=False, catalogues=False, lightcurves=False)
     ref_out = out / "reference"
-    print(f"sacrificial night {reference['night']['date']} for the reference -> {ref_out.relative_to(REPO)}/", flush=True)
-    observe(reference, ref_out, engine_options=["--no-measure", "--fits", str(ref_out / "frames")])
-    cfg = {**obs["measure"], **p}
-    build = pipeline.stage("reference", p["reference"])
-    stages = {name: pipeline.stage(name, p[name]) for name in ("extraction", "calibration", "psf")}
-    for band in obs["output"]["bands"]:
-        files = sorted((ref_out / "frames").glob(f"*_{band}_*.fits"))
-        path = build(files, ref_out, obs["field"]["name"], band, stages, cfg)
-        print(f"reference {band}: median of {len(files)} exposures -> {path.relative_to(REPO)}", flush=True)
-    return ref_out
+    print(f"reference: {n} night(s) from {reference['night']['date']} through hdps's coadd -> {ref_out.relative_to(REPO)}/",
+          flush=True)
+    observe(reference, ref_out, engine_options=["--hdps-pass", "reference"])
+    return ref_out / "hdps"
 
 
 def observe(obs, out, scene_only=False, engine_options=None):
@@ -315,7 +302,7 @@ def observe(obs, out, scene_only=False, engine_options=None):
 
     f, n, s = obs["field"], obs["night"], obs["stars"]
     name, ra, dec = f["name"], f["ra"], f["dec"]
-    window = (n["start"] or None, n["end"] or None)  # UT HH:MM, or the whole dark night
+    window = (None, None)  # the whole dark night (ArgusSim's schedule)
     scene_dir = out / "scene"
     shutil.rmtree(scene_dir, ignore_errors=True)
     scene_dir.mkdir(parents=True)
@@ -330,21 +317,16 @@ def observe(obs, out, scene_only=False, engine_options=None):
         placements.append((p, *built_star(p["star"])))
 
     # the night
-    site = night.SITES[n["site"]]
-    max_airmass = n["max_airmass"] or None
+    site = night.SITES["argus"]
+    max_airmass = None
     n["date"] = choose_night(f, n, window, [m["real"] for _, _, m in placements if m.get("real")], site, max_airmass)
-    if n["observing"] not in ("ideal", "survey"):
-        raise SystemExit(f"[night] observing = {n['observing']!r}: \"ideal\" or \"survey\"")
-    if n["observing"] == "survey":  # the exposures the array takes of the pointing (mesa_argus/survey.py)
-        from astropy.table import unique
-        from mesa_argus import survey
+    from astropy.table import unique
+    from mesa_argus import survey  # the exposures ArgusSim's array takes of the pointing (mesa_argus/survey.py)
 
-        coverage = survey.exposures(ra, dec, n["date"], n["nights"], n["survey_seed"], *window)
-        if len(coverage) == 0:
-            raise SystemExit(f"the array does not cover RA {ra}, Dec {dec} on the night of {n['date']} (in the UT window)")
-        exposures = Time(list(unique(coverage, keys="time")["time"]), scale="utc").jd
-    else:
-        exposures = night.exposures(ra, dec, n["date"], site, *window, max_airmass)[0].jd
+    coverage = survey.exposures(ra, dec, n["date"], n["nights"], n["seed"])
+    if len(coverage) == 0:
+        raise SystemExit(f"the array does not cover RA {ra}, Dec {dec} on the night of {n['date']}")
+    exposures = Time(list(unique(coverage, keys="time")["time"]), scale="utc").jd
     start = Time(exposures[0], format="jd", scale="utc")
     night_start_bjd = float(night.bjd_tdb(start, ra, dec, site))
     night_end_bjd = float(night.bjd_tdb(Time(exposures[-1], format="jd", scale="utc"), ra, dec, site)) + 10 / 1440
@@ -364,21 +346,20 @@ def observe(obs, out, scene_only=False, engine_options=None):
                       tile=tile, block=list(block), block_n=f["block"], date=n["date"], site=site,
                       synthetic=s["layout"] == "random", ebv=ebv)
     (scene_dir / "field.json").write_text(json.dumps(field_json, indent=1))
-    if n["observing"] == "survey":
-        coverage.write(scene_dir / "exposures.ecsv", overwrite=True)  # the engine observes exactly these
+    coverage.write(scene_dir / "exposures.ecsv", overwrite=True)  # the engine observes exactly these
     dust.maps.cache_clear()  # the 3D map (~6 GB) is not needed while the engine runs
 
     # what was done, for reading and for making it again
     resolved = out / "observation.toml"
     resolved.write_text(runconfig.dumps(obs, f"observe.py: {name}, resolved (python observe.py "
                                              f"{resolved.relative_to(REPO)} makes it again)"))
-    observing = ("observing: ideal (every exposure, both bands)" if n["observing"] == "ideal" else
-                 f"observing: survey ({len(coverage)} exposures at {len(exposures)} times (overlapping telescopes take "
-                 f"some together) through {len(set(coverage['tel_id']))} telescopes: "
+    observing = (f"observing: ArgusSim's survey ({len(coverage)} exposures at {len(exposures)} times (overlapping telescopes "
+                 f"take some together) through {len(set(coverage['tel_id']))} telescopes: "
                  f"{int(np.sum(coverage['band'] == 'beta'))} beta, {int(np.sum(coverage['band'] == 'rho'))} rho; "
-                 f"{n['nights']} night(s), seeing seed {n['survey_seed']}; scene/exposures.ecsv)")
-    summary = [f"# {name}", "", observing, "", f"RA {ra:.5f}, Dec {dec:+.5f}; night of {n['date']}; site {n['site']}; UT window "
-               f"{window[0] or 'dusk'}-{window[1] or 'dawn'}; Milky Way E(B-V) {ebv:.3f} (the whole column at the pointing; each "
+                 f"{n['nights']} night(s), seed {n['seed']}; scene/exposures.ecsv); each a raw frame of a "
+                 f"{f['window']}-minipix readout window through hdps")
+    summary = [f"# {name}", "", observing, "", f"RA {ra:.5f}, Dec {dec:+.5f}; first night {n['date']}; Milky Way E(B-V) "
+               f"{ebv:.3f} (the whole column at the pointing; each "
                "star sees the 3D map's dust in front of it, mesa_argus/dust.py)", "",
                background_note, "", "## Stars placed", ""]
     for r in rows:
@@ -394,13 +375,13 @@ def observe(obs, out, scene_only=False, engine_options=None):
     if scene_only:
         print(f"scene: {scene_dir.relative_to(REPO)}/")
         return
+    reference = None
     if engine_options is None:
         engine_options = []
         if obs["output"]["alerts"]:
-            reference_dir = make_reference(obs, out, placements)
-            shutil.rmtree(out / "alerts", ignore_errors=True)
-            engine_options += ["--reference", str(reference_dir), "--alerts", str(out / "alerts")]
-    run_engine(obs, out, window, len(rows), engine_options)
+            reference = make_reference(obs, out, placements)
+    shutil.rmtree(out / "hdps", ignore_errors=True)
+    run_engine(obs, out, len(rows), engine_options, reference)
     print(f"done: {out.relative_to(REPO)}/")
 
 

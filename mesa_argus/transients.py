@@ -117,9 +117,9 @@ def make_microlensing(out, t_e, u0, base_mag, bp_rp, rho=0.0, fs=1.0):
     i = templates.index(bp_rp)
     sed = np.interp(WAVE, templates.wave.value, templates.flux[i])
     sed *= 10 ** (-0.4 * (base_mag - rho_mag(WAVE, sed)))
-    # time steps fine near t0, coarse far from it
+    # time steps fine near t0, coarse far from it; at least +-10 d, so a week's observation fits wherever t0 is in it
     width = t_e * max(u0, rho, 1e-3)
-    s = np.arcsinh(max(10 * t_e, 3.0) / width)
+    s = np.arcsinh(max(10 * t_e, 10.0) / width)
     time = width * np.sinh(np.linspace(-s, s, 2001))
     A = magnification(np.sqrt(u0**2 + (time / t_e) ** 2), rho)
     flux = (fs * A + 1 - fs)[:, None] * sed[None, :]

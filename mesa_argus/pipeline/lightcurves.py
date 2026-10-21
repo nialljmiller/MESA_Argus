@@ -16,6 +16,7 @@ Written into the observation's folder:
                            airmass, seeing, the frame's zero point; everything the extraction and calibration measured
                            (position, flux, error, S/N, shape, flags, mag, mag_err, ...); truth_* as above
 """
+import re
 from pathlib import Path
 
 import numpy as np
@@ -29,7 +30,8 @@ def _frames(catalogue_dir):
     """Every frame's detections (astropy Table, its frame metadata in .meta), in time order."""
     from astropy.table import Table
 
-    files = [f for f in Path(catalogue_dir).glob("*.parquet") if not f.name.endswith("_candidates.parquet")]
+    files = [f for f in Path(catalogue_dir).glob("*.parquet") if re.search(r"_\d{4}\.parquet$", f.name)]  # not the
+    # difference-image tables (*_candidates, *_transients)
     tables = [Table.read(f) for f in files]
     return sorted(tables, key=lambda t: t.meta["date_obs"])
 

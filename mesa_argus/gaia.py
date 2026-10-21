@@ -10,7 +10,8 @@ import numpy as np
 
 from . import dust
 
-RADIUS_DEG = 0.12  # Gaia query radius: covers the 8' x 8' simulated area
+RADIUS_DEG = 0.52  # Gaia query radius: reaches the far corner of the default readout window (56 minipixes, 26.3'),
+# at most a diagonal from the field when the window is shifted to stay on the sensor (schema [field] window)
 Z_SUN = 0.0169
 RV_ = dust.RV  # A_V = R_V E(B-V) (CCM89)
 MIN_PLX_SNR = 3.0  # parallax S/N for a parallax distance; below it, a period-luminosity distance (pulsators) or dropped (binaries)
@@ -48,11 +49,12 @@ def fetch(ra, dec, data):
               "asassn_variables.ecsv": ("II/366/catv2021", ["ASASSN-V", "Per", "Amp", "Type", "HJD", "Vmag", "GaiaDR3",
                                                             "RAJ2000", "DEJ2000"])}
     for name, (cat, columns) in tables.items():
-        if (data / name).exists():
-            continue
+        if (data / name).exists() and Table.read(data / name).meta.get("radius_deg", 0.12) >= RADIUS_DEG:
+            continue  # cached at a large enough radius (tables from before 2026-10-20 carry none: 0.12 deg)
         print(f"  Gaia DR3 {cat} …", flush=True)
         r = Vizier(row_limit=-1, columns=columns, timeout=900).query_region(c, radius=RADIUS_DEG * u.deg, catalog=cat)
         t = r[0] if r else Table(names=["Source"], dtype=[np.int64])
+        t.meta["radius_deg"] = RADIUS_DEG
         t.write(data / name, overwrite=True)
 
 

@@ -33,14 +33,15 @@ def ut_hours(text):
 def exposures(ra, dec, date, nights=1, seed=0, start=None, end=None):
     """Every exposure of the position in the nights starting on local `date` (UTC 23:00 + 14 h each), within the UT
     window start-end: one row per (exposure, telescope). Columns: time (UTC isot, mid-exposure), ratchet, tel_id,
-    band (beta / rho), field_angle (deg), seeing_zenith (arcsec, the ratchet's)."""
+    ota (the telescope's row in ArgusSim's layout), theta_deg (the exposure's tracking angle), band (beta / rho),
+    field_angle (deg), seeing_zenith (arcsec, the ratchet's)."""
     t0 = Time(f"{date} 23:00:00", scale="utc")
     t1 = t0 + (nights - 1) * u.day + 14 * u.hour
     layout = Layout.from_config()
     cover = covering(ra, dec, t0, t1, layout=layout, apparent=True)
     if len(cover.point) == 0:
-        return Table(names=["time", "ratchet", "tel_id", "band", "field_angle", "seeing_zenith"],
-                     dtype=[str, int, int, str, float, float])
+        return Table(names=["time", "ratchet", "tel_id", "ota", "theta_deg", "band", "field_angle", "seeing_zenith"],
+                     dtype=[str, int, int, int, float, str, float, float])
     j = cover.exposure
     times = cover.times[j]
 
@@ -60,7 +61,8 @@ def exposures(ra, dec, date, nights=1, seed=0, start=None, end=None):
         first.setdefault(int(k), t)
     seeing = {k: draw_seasonal_seeing(t, rng) for k, t in sorted(first.items())}
 
-    out = Table(dict(time=times.isot, ratchet=ratchet, tel_id=cover.tel_id, band=[BAND_NAMES[b] for b in cover.band],
+    out = Table(dict(time=times.isot, ratchet=ratchet, tel_id=cover.tel_id, ota=cover.ota, theta_deg=cover.theta_deg[j],
+                     band=[BAND_NAMES[b] for b in cover.band],
                      field_angle=field_angle, seeing_zenith=[seeing[int(k)] for k in ratchet]))
     clock = (times.datetime64.astype("datetime64[s]").astype(np.int64) % 86400) / 3600
     clock = np.where(clock >= 20, clock - 24, clock)

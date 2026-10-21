@@ -86,7 +86,7 @@ def sacrificial_night(frame_files, out_dir, name, band, stages, cfg):
 
 def load(reference_dir, tile_id, band):
     """The reference for a tile and band, or None: dict(sci, npix, dq, psf, pmerr (hdps's V_err plane, or None),
-    magzp, ncombine, tstart, tstop, depth5, tile_id)."""
+    magzp, bkgvar, ncombine, tstart, tstop, depth5, tile_id)."""
     matches = sorted(Path(reference_dir).glob(f"*_tile_{tile_id:06d}_{band}.fits"))
     if not matches:
         return None
@@ -103,5 +103,6 @@ def load(reference_dir, tile_id, band):
                                                    kernels.reshape(nb, nb, *kernels.shape[1:]), sci.shape)
         return dict(sci=sci, npix=np.asarray(h["NPIX"].data, float), dq=np.asarray(h["DQ"].data, bool),
                     psf=np.asarray(h["PSF"].data, float), pmerr=pmerr, magzp=float(hd["MAGZP"]),
+                    bkgvar=float(hd["BKGVAR"]),
                     ncombine=int(hd["NCOMBINE"]), tstart=float(hd["TSTART"]), tstop=float(hd["TSTOP"]),
                     depth5=float(hd["DEPTH5"]), tile_id=int(hd["TILE_ID"]))
