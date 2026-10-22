@@ -321,6 +321,10 @@ kernel_poly_order = 0
 background_order = 2
 # allowed: false | true. hdps default.
 mask_saturated_in_fit = true
+# allowed: false | true. true (hdps_full_cpu; hdps main has no such setting and fits across them): pixels with no
+# reference or no science data kept out of the kernel fit. Fitting across them gives the kernel a flat pedestal (a
+# kernel-sized square around every star) and a background gradient.
+mask_no_coverage_in_fit = true
 # allowed: false | true. hdps default.
 mask_bright_stars = false
 # allowed: "direct" | "fft". hdps default. hdps checks.

@@ -300,7 +300,7 @@ TASKS = [
     _task("ReprojectionTask", dict(segment_shape=[2048, 2048], grid_resolution=33)),
     _task("CoaddTapTask", dict(background_mode="regional")),
     _task("SFFTSubtractionTask", dict(reference_mode="coadd", kernel_half_width=6, kernel_poly_order=0, background_order=2,
-                                      mask_saturated_in_fit=True, mask_bright_stars=False, variance_conv="direct",
+                                      mask_saturated_in_fit=True, mask_no_coverage_in_fit=True, mask_bright_stars=False, variance_conv="direct",
                                       rejection_iters=1, rejection_sigma=3.0, rejection_grow=2, retain_planes=True)),
     _task("DiffDetectionTask", dict(detect_sigma=5.0, bg_region_size=256, max_sources=100000,
                                     matched_filter_width=4.0)),
@@ -380,6 +380,11 @@ TASK_RULES = {
     ("SFFTSubtractionTask", "kernel_poly_order"): ((0, None), f"{_H}. A polynomial order: not negative."),
     ("SFFTSubtractionTask", "background_order"): ((0, None), f"{_H} (2 beats 1). A polynomial order: not negative."),
     ("SFFTSubtractionTask", "mask_saturated_in_fit"): ({True, False}, "hdps default."),
+    ("SFFTSubtractionTask", "mask_no_coverage_in_fit"): ({True, False}, "true (hdps_full_cpu; hdps main has no such "
+                                                         "setting and fits across them): pixels with no reference or "
+                                                         "no science data kept out of the kernel fit. Fitting across "
+                                                         "them gives the kernel a flat pedestal (a kernel-sized square "
+                                                         "around every star) and a background gradient."),
     ("SFFTSubtractionTask", "mask_bright_stars"): ({True, False}, "hdps default."),
     ("SFFTSubtractionTask", "variance_conv"): ({"direct", "fft"}, "hdps default. hdps checks."),
     ("SFFTSubtractionTask", "rejection_iters"): ((0, None), f"{_H}. A count: not negative."),
