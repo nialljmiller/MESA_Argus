@@ -21,7 +21,23 @@ from pathlib import Path
 
 import numpy as np
 
-SETTINGS = dict(link_arcsec=1.5)
+SETTINGS = dict(link_arcsec=1.5, refcat_max_mag=19.0)
+_REFCAT = {}
+
+
+def reference_stars(ra, dec, radius, max_mag, epoch_year):
+    """ATLAS-Refcat2 around (ra, dec) from hdps's loader (hdps.astrometry.providers.ATLASRefcat2): its table with
+    positions moved to the epoch (proper motions in mas/yr from 2015.5)."""
+    key = (round(ra, 4), round(dec, 4), radius, max_mag)
+    if key not in _REFCAT:
+        from hdps.astrometry.providers import ATLASRefcat2
+
+        _REFCAT[key] = ATLASRefcat2().get_reference_stars(ra, dec, radius, min_g=0.0, max_g=max_mag).table
+    t = _REFCAT[key]
+    dt = epoch_year - 2015.5
+    ra_now = np.asarray(t["ra"]) + np.nan_to_num(np.asarray(t["pmra"], float)) * dt / 3.6e6 / np.cos(np.radians(t["dec"]))
+    dec_now = np.asarray(t["dec"]) + np.nan_to_num(np.asarray(t["pmdec"], float)) * dt / 3.6e6
+    return t, ra_now, dec_now
 FRAME_COLUMNS = ("exposure", "band", "date_obs", "bjd_tdb", "exptime", "airmass", "seeing", "tel_id", "ratchet",
                  "fieldang", "zp_zp", "zp_rms", "zp_n", "zp_tier")
 
@@ -170,11 +186,9 @@ def positional(catalogue_dir, out_dir, cfg):
     catalogue = Table(rows=catalogue)
 
     # the nearest Refcat2 star (proper motion to the first detection's epoch)
-    from .calibration import SETTINGS as CAL, reference_stars
-
-    cal = {**CAL, **cfg}
-    ref, ref_ra, ref_dec = reference_stars(float(np.mean(catalogue["ra"])), float(np.mean(catalogue["dec"])),
-                                           cal["refcat_radius_deg"], cal["refcat_max_mag"],
+    centre = SkyCoord(float(np.mean(catalogue["ra"])) * u.deg, float(np.mean(catalogue["dec"])) * u.deg)
+    radius = float(centre.separation(SkyCoord(catalogue["ra"] * u.deg, catalogue["dec"] * u.deg)).deg.max()) + 0.01
+    ref, ref_ra, ref_dec = reference_stars(centre.ra.deg, centre.dec.deg, radius, c["refcat_max_mag"],
                                            Time(float(np.min(catalogue["mjd_first"])), format="mjd").jyear)
     j, sep, _ = SkyCoord(catalogue["ra"] * u.deg, catalogue["dec"] * u.deg).match_to_catalog_sky(
         SkyCoord(ref_ra * u.deg, ref_dec * u.deg))

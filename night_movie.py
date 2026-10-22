@@ -27,7 +27,6 @@ import shutil
 import textwrap
 import warnings
 from pathlib import Path
-from types import SimpleNamespace
 
 import astropy.units as u
 from astropy.coordinates import SkyCoord
@@ -42,7 +41,7 @@ from matplotlib.animation import FFMpegWriter  # noqa: E402
 from matplotlib.colors import AsinhNorm  # noqa: E402
 from matplotlib.patches import Circle, Rectangle  # noqa: E402
 import numpy as np  # noqa: E402
-from scipy import ndimage, sparse  # noqa: E402
+from scipy import sparse  # noqa: E402
 
 from argus_sim import ABPhot, SpectralSky, SystemThroughput, ZemaxPSF  # noqa: E402
 from argus_sim import c as ARGUS_CONFIG  # noqa: E402
@@ -551,38 +550,6 @@ class Scene:
                     sensor=image.reshape(self.native_n, self.native_n))
 
 
-def difference_image(image, image_sat, reference, reference_sat, readnoise, half=3, clip=3.0, fit_pixels=None):
-    """PSF-matched difference image (display only): image - (reference (x) K + b), Bramich (2008) delta-function
-    kernel K of (2 half + 1)^2 free pixels plus a constant b, fitted by weighted least squares on pixels unsaturated
-    in both images (and in fit_pixels: stamps around bright stars), rejecting pixels beyond clip sigma and refitting
-    (Bramich 2008 sec. 2.3) so variables do not leak into the kernel. Returns the difference (nan at the border) and
-    the kernel's sum."""
-    n = image.shape[0]
-    core = (slice(half, n - half), slice(half, n - half))
-    shifted = [reference[half + dy:n - half + dy, half + dx:n - half + dx].ravel()
-               for dy in range(-half, half + 1) for dx in range(-half, half + 1)]
-    A = np.column_stack(shifted + [np.ones(shifted[0].size)])
-    target = image[core].ravel()
-    excluded = (image_sat | reference_sat)[core].ravel()  # left out of the fit only; the difference is shown everywhere
-    if fit_pixels is not None:
-        excluded = excluded | ~fit_pixels[core].ravel()
-    use = ~excluded
-    sigma = np.sqrt(np.maximum(target, 1.0) + readnoise**2)
-    for _ in range(10):
-        coef, *_ = np.linalg.lstsq(A[use] / sigma[use, None], target[use] / sigma[use], rcond=None)
-        model = A @ coef
-        sigma = np.sqrt(np.maximum(model, 1.0) + readnoise**2)
-        if clip <= 0:
-            break
-        new = ~excluded & (np.abs(target - model) <= clip * sigma)
-        if np.array_equal(new, use):
-            break
-        use = new
-    diff = np.full_like(image, np.nan, dtype=float)
-    diff[core] = (target - A @ coef).reshape(n - 2 * half, n - 2 * half)
-    return diff, float(np.sum(coef[:-1]))
-
-
 # ---------------------------------------------------------------- the steps of main
 def constant_star_rates(stars, pulsators, ab):
     """Every star as a constant. Its Gaia G and BP-RP were measured through the dust in front of it (column ebv_own):
@@ -720,31 +687,6 @@ def conditions(times, airmass, alt, az, args, stars, cfg, ab, survey=None):
     return seeing, scene
 
 
-def difference_reference(scene, seeing, rates_at, seeds, band, args, bands):
-    """The difference image's reference: the median of the best-seeing exposures (each a full noisy exposure, the
-    transients left out), and the stamps around bright stars the kernel is fitted on."""
-    ref_frames = np.argsort(seeing, kind="stable")[: max(20, len(seeing) // 5)]
-    stack, stack_full = [], []
-    for j in ref_frames:
-        rng = np.random.default_rng(seeds[j])  # the bands in the movie's order: the identical exposure
-        exposure = {b: scene.observe(b, rates_at(b, j, reference=True), j, rng) for b in bands}[band]
-        stack.append(exposure["image"])
-        stack_full.append(exposure["full"])
-    ref_image = np.median(stack, axis=0)
-    ref_full = np.mean(stack_full, axis=0) >= 0.5  # saturated in the median itself
-    stamps = None
-    if args.kernel_stamps > 0:
-        sky = float(np.median(ref_image))
-        noise = 1.4826 * float(np.median(np.abs(ref_image - sky)))
-        bright = (ref_image - sky) > args.kernel_stamps * noise
-        stamps = ndimage.binary_dilation(bright, structure=np.ones((2 * args.kernel_half + 9,) * 2, bool))
-        print(f"kernel stamps: {int(ndimage.label(bright)[1])} sources above {args.kernel_stamps:g} sigma, "
-              f"{100 * stamps.mean():.0f}% of pixels", flush=True)
-    print(f"difference reference: median of {len(ref_frames)} best-seeing exposures "
-          f"(seeing {seeing[ref_frames].min():.2f}-{seeing[ref_frames].max():.2f}\")", flush=True)
-    return ref_frames, ref_image, ref_full, stamps
-
-
 def block_radec(dx, dy):
     """RA, Dec (deg) of offsets dx, dy (arcsec) from the block centre in the tile's tangent plane: the inverse of
     block_offsets."""
@@ -866,69 +808,18 @@ def alerts_of(work, stem, follow, star_ra, star_dec):
     return out
 
 
-def write_raw_frames(folder, exposures, j, s, args):
-    """Exposure j in each band taken, as a raw camera frame (mesa_argus.camera): <folder>/<CAMID>/<CAMID>_<UTC>.fits.
-    The telescope pointing (TARGRA, TARGDEC) is the block centre; the simulated region is a readout window centred on
-    the sensor."""
-    from datetime import timedelta
-
-    from astropy.time import Time
-
-    from mesa_argus import camera
-
-    scene, mid = s.scene, Time(s.times[j])
-    start = mid - timedelta(seconds=args.exptime / 2)
-    end = mid + timedelta(seconds=args.exptime / 2)
-    tel_id = int(s.survey["tel_id"][j]) if s.survey is not None else 0
-    ratchet = (f"{start.datetime:%Y%m%d}_{int(s.survey['ratchet'][j]):06d}" if s.survey is not None
-               else f"{start.datetime:%Y%m%d}_000000")
-    cfg = ARGUS_CONFIG.telescope
-    for b, e in exposures.items():
-        if s.survey is None:  # ideal observing: both bands at once, so one toy camera per band
-            tel_id = list(BANDS).index(b)
-        cam = camera.camera_id(tel_id)
-        meta = dict(utc_start=start.isot, utc_end=end.isot, exptime=args.exptime, ratchet=ratchet, tel_id=tel_id,
-                    target_ra=CENTRE.ra.deg, target_dec=CENTRE.dec.deg, band=b,
-                    x_origin=(cfg.n_pixels_x - scene.native_n) // 2, y_origin=(cfg.n_pixels_y - scene.native_n) // 2)
-        out = Path(folder) / cam
-        out.mkdir(parents=True, exist_ok=True)
-        camera.write_raw(out / f"{cam}_{start.datetime:%Y%m%d_%H%M%S%f}.fits", e["sensor"], meta)
-
-
-def frame_metadata(j, band, s, args):
-    """What made exposure j, for the frame's header: what a pipeline knows about an exposure (no truth)."""
-    meta = dict(field=FIELD, band=band, exposure=int(j), exptime=args.exptime, date_obs=s.times[j].isot,
-                bjd_tdb=float(s.bjd[j]), airmass=float(s.airmass[j]), seeing=float(s.seeing[j]),
-                fullwell=float(s.scene.fullwell), satlevel=0.98 * float(s.scene.fullwell), rdnoise=float(s.scene.readnoise),
-                bunit="electron", origin="MESA_ARGUS night_movie.py")
-    if s.survey is not None:  # which telescope took it, and where in its field the block fell
-        meta.update(tel_id=int(s.survey["tel_id"][j]), ratchet=int(s.survey["ratchet"][j]),
-                    fieldang=float(s.survey["field_angle"][j]))
-    return meta
-
-
 # ---------------------------------------------------------------- main
-# the options an observation file's [output] may set (observe.py passes them on)
-MOVIE_OPTIONS = ("max_airmass", "exptime", "seeing", "field_angle", "stride", "fps", "dpi", "seed", "kernel_half",
-                 "kernel_clip", "kernel_stamps", "area")
-
-
 def parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--scene", type=Path, help="a scene folder written by observe.py")
     p.add_argument("--field", help="a hand-made field (m3, m15, rr308108, rr416445); with --scene, its name")
-    p.add_argument("--measure", default="{}", help="pipeline stages and settings as JSON (mesa_argus.pipeline)")
-    p.add_argument("--fits", type=Path, help="also write every measured exposure (both bands) as FITS here")
     p.add_argument("--catalogues", type=Path, help="also write every measured exposure's detections (parquet) here")
-    p.add_argument("--no-measure", action="store_true", help="make the exposures (with --fits) and stop: no pipeline")
-    p.add_argument("--raw", type=Path, help="also write every exposure as a raw camera frame here (mesa_argus.camera)")
     p.add_argument("--observation", type=Path, help="the resolved observation file (observe.py): hdps chain, window, camera")
     p.add_argument("--hdps-pass", choices=["reference", "science"], default="science",
                    help="reference: the reference nights, hdps coadds only; science: the whole chain against them")
     p.add_argument("--work", type=Path, help="hdps's working folder (raw frames, products, coadds), per band below it")
     p.add_argument("--pipeline-movie", action="store_true", help="also draw the pipeline movie (mesa_argus.pipeline_movie)")
-    p.add_argument("--reference", type=Path, help="reference images (pipeline.reference): run difference imaging")
-    p.add_argument("--alerts", type=Path, help="with --reference: write alert packets here")
+    p.add_argument("--reference", type=Path, help="hdps's reference coadds (the reference pass's coadds/): SFFT's reference_dir")
     p.add_argument("--no-render", action="store_true", help="measure (and write FITS) but draw no movie")
     p.add_argument("-o", "--output", type=Path,
                    help="default: next to the scene; a hand-made field: outputs/pseudo_real/<field>/<field>_night_<band>.mp4")
@@ -944,9 +835,6 @@ def parser():
     p.add_argument("--dpi", type=int, default=100)
     p.add_argument("--highlight", type=int, default=6, help="hand-made fields: pulsators to follow")
     p.add_argument("--seed", type=int, default=3, help="noise")
-    p.add_argument("--kernel-half", type=int, default=3, help="difference-imaging kernel half-width (pixels)")
-    p.add_argument("--kernel-clip", type=float, default=3.0, help="kernel fit rejection (sigma); 0 = none")
-    p.add_argument("--kernel-stamps", type=float, default=20.0, help="fit the kernel on stamps around sources this many sigma above sky; 0 = all pixels")
     p.add_argument("--area", type=float, default=8.0, help="side (arcmin) of the simulated area (kernel and zero point)")
     p.add_argument("--block", type=int, default=None, help="minipixes across the block shown (default: the field's)")
     p.add_argument("--band", choices=list(BANDS), default="rho", help="band shown in the images, light curves and CMD")
@@ -960,9 +848,7 @@ def main(argv=None):
     if args.scene is not None:  # relative paths are relative to where the command was run
         args.scene = (Path.cwd() / args.scene) if not args.scene.is_absolute() else args.scene
         args.field = args.field or args.scene.resolve().parent.name
-    if args.fits is not None and not args.fits.is_absolute():
-        args.fits = Path.cwd() / args.fits
-    for key in ("catalogues", "reference", "alerts", "raw", "observation", "work"):
+    for key in ("catalogues", "reference", "observation", "work"):
         if getattr(args, key) is not None and not getattr(args, key).is_absolute():
             setattr(args, key, Path.cwd() / getattr(args, key))
     if args.output is None:
@@ -1091,7 +977,7 @@ def main(argv=None):
         raise SystemExit("the engine observes as ArgusSim's survey does: observe.py writes scene/exposures.ecsv")
     from argus_sim.coverage_exact import Layout
 
-    from mesa_argus import camera, hdps_worker, runconfig, sensor
+    from mesa_argus import hdps_worker, runconfig, sensor
 
     obs = runconfig.resolve(runconfig.load(args.observation))
     for t in obs["hdps"]["tasks"]:  # hdps's tile images: only the tile the movie shows
@@ -1206,16 +1092,6 @@ def main(argv=None):
 
 
 # ---------------------------------------------------------------- the movie
-def alert_mark(candidate, scene, stars, follow):
-    """Where the movie marks an alert: (key, dx, dy), offsets in arcsec as the image panels. A followed star's alert
-    is marked on the star (key: its index); any other at the candidate (key: its position, rounded to 3 px)."""
-    k = int(candidate["star"])
-    if k in follow:
-        return k, float(stars["dx"][k]), float(stars["dy"][k])
-    x, y = float(candidate["x"]), float(candidate["y"])
-    return ("pos", round(x / 3), round(y / 3)), (x + 0.5 - scene.centre) * scene.plate, (y + 0.5 - scene.centre) * scene.plate
-
-
 def alert_marks(d, n, fps):
     """The alert marks shown on movie frame n: [(dx, dy, alpha, scale)]. A mark appears when its object alerts, pops
     (scale 1.8, 1.3, then 1) at the start of a run of consecutive alerts, and fades over half a second after the last."""

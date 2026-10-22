@@ -81,4 +81,3 @@ y = 10
 
 [output]
 bands = ["rho"]
-fits = true

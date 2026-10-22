@@ -129,14 +129,16 @@ y = 30
 epoch = "start+0.05"         # periodic: a primary eclipse / maximum; transients: t0 = ...
                              # ISO UTC, "start+D" days from the start of the night (or the UT window), or BJD_TDB
 
-[pipeline]                   # which implementation runs each pipeline stage (mesa_argus/pipeline/), by name
-[measure]                    # the stages' settings (hdps production values where hdps has them)
-[output]                     # movie, bands, fits, catalogues, alerts, page; stride, noise seed, exposure time, PSF options
+[camera]                     # the toy camera electronics (gain, offset) where ArgusSim has none
+[argussim]                   # observatory, telescope, survey, schedule: read from ArgusSim (override with care)
+[hdps]                       # the hdps chain: [[hdps.tasks]] (the production Task list, every setting), [hdps.coadd]
+[lightcurves]  [truth]       # linking detections into objects; matching them to the simulated stars (scoring)
+[output]                     # bands, movies, catalogues, alerts, light curves, raw frames; stride, fps, noise seed
 ```
 
 [`examples/observations/template.toml`](examples/observations/template.toml) lists every key with its default and
 meaning. Anything can be overridden on the command line: `--set section.key=value`, `--place '{star = "...", ...}'`
-(replaces the file's placements), `--date`, `--start`, `--end`, `--ra`, `--dec`, `--name`, `--bands`. Everything is
+(replaces the file's placements), `--date`, `--ra`, `--dec`, `--name`, `--bands`. Everything is
 checked before any work starts. Outputs, in `outputs/pseudo_real/<name>/` (real Gaia stars where they are, `layout = "real"`)
 or `outputs/fully_synthetic/<name>/` (stars at random positions, `layout = "random"`); `<name>`: `[field] name`, else the
 file's name:
@@ -146,15 +148,20 @@ file's name:
   `truth_*` columns (the simulated star it is) for scoring only.
 - `lightcurves/NNNNNN.csv`: one per object, one row per detection: time (UTC, MJD, BJD_TDB), band, exposure,
   telescope, airmass, seeing, zero point, magnitude and error, flux and error, S/N, position, flags.
-- `catalogues/`: every exposure's detections (`<name>_<band>_NNNN.parquet`: position, RA/Dec, flux, calibrated
-  magnitude, the simulated star each one is) and difference-image candidates (`..._candidates.parquet`, with `truth`:
-  the placed star it is, `star` for another simulated star, empty for nothing).
-- `alerts/` (`output.alerts = true`): alert packets, hdps schema 3.0, one JSON line per alert, one file per exposure.
-- `reference/`: the reference images (`*_tile_NNNNNN_<band>.fits`, hdps's reference format) and the sacrificial night
-  they are made from.
+- `catalogues/`: every exposure's detections (`<name>_<band>_NNNN.parquet`): hdps's `SOURCES` catalogue from the
+  solved frame (position, flux and error, S/N, saturation), RA/Dec from hdps's WCS, magnitude from hdps's zero point
+  (`coadd_magzp − 2.5 log10 flux`, electron-referenced), and the simulated star each one is (`star`, for scoring).
+- `hdps/<band>/`: hdps's own products, as its worker writes them: `transients_*.parquet` (difference-image candidates,
+  `TransientOutputTask`), `alerts_*.parquet` and `alerts_stamps_*.npz` (`AlertVettingTask`), `ratchet_*_coadd.fits`
+  (the ratchet coadds), and `alerts/<exposure>.avro`: the alert packets, hdps's own, Avro with the public `argus.alert`
+  schema (read from hdps at run time), one file per exposure in place of the Kafka stream.
+- `reference/`: the reference night (the night before, transients left out) through the same chain; its coadds in
+  `reference/hdps/<band>/coadds/` are SFFT's references.
 - `<name>_night_<band>.photometry.csv`: the placed stars' measurements, with the true model magnitude beside it.
-- `<name>_night_<band>.mp4`: the movie (CMD, β/ρ colour exposure, difference image, light curves, SEDs).
-- `fits/` (`output.fits = true`): every exposure in both bands as an hdps sky tile, with what made it in the header.
+- `<name>_night_<band>.mp4`: the field movie (CMD, exposure, hdps's difference image, light curves, SEDs, alerts);
+  `<name>_night_<band>_pipeline.mp4`: the pipeline movie (each raw frame on its sensor, hdps's detections and WCS).
+- `output.raw = true` keeps the raw camera frames (`hdps/<band>/raw/`) and hdps's bulky per-frame products (the solved
+  frames and tile images); otherwise they are deleted once read.
 - `observation.toml`: the observation as made (every key, the night as used); running it makes the same data.
 - `summary.md`; `scene/`: exactly what the engine (`night_movie.py`) read.
 
@@ -209,11 +216,14 @@ make_stars.py star file          → stars/<name>/   (generators in mesa_argus/s
                                                      parametric transients, Gaia)
 observe.py observation file      → outputs/<category>/<name>/scene/  (field, background stars, placed stars with their file,
                                                             position, timing and dust)
-  ├─ the sacrificial night      → the night before, same stars, no transients → its median: the reference
-  └─ night_movie.py --scene      → the night's exposures: ArgusSim PSF, sky, airmass and noise → hdps sky tiles
-                                   → the pipeline (mesa_argus/pipeline/, one module per stage, hdps underneath):
-                                     extraction → calibration (Refcat2) → PSF → ZOGY difference → candidates → alerts
-                                   → catalogues, alerts, photometry CSV, movie, FITS
+  ├─ the reference night        → the night before, same stars, no transients, through hdps up to its coadds
+  └─ night_movie.py --scene      → ArgusSim's survey of the field: each exposure on its telescope's sensor
+                                     (mesa_argus/sensor.py: ArgusSim geometry and PSF) in an N x N-minipix readout
+                                     window, written as a raw camera frame (mesa_argus/camera.py, toy electronics)
+                                   → hdps's own worker over the raw frames (mesa_argus/hdps_worker.py: GPUWorker, the
+                                     production Task chain: reduction → detection → WCS → reprojection → coadd →
+                                     SFFT → difference detection → alert vetting)
+                                   → catalogues, photometry CSV, alerts, both movies, from hdps's products
   └─ after every band            → detections linked into objects → catalogue.csv, lightcurves/
 ```
 
@@ -308,9 +318,12 @@ night_movie.py          the engine observe.py runs: simulate and measure the exp
 mesa_argus/             the Python package (python -m mesa_argus ...)
   argus.py                Argus bands, units and plot style shared by the movies
   dust.py                 dust: the 3D map (Bayestar19, SFD), CCM89, dereddening Gaia stars
-  pipeline/               the Argus pipeline run on every exposure, one module per stage (frames, extraction,
-                          calibration, psf, reference, dia, alerts, lightcurves; truth for scoring only), hdps
-                          underneath
+  schema.py               every observation parameter: default, unit, limits, justification (template.toml from it)
+  sensor.py, camera.py    an exposure on its telescope's sensor (ArgusSim geometry, PSF); the raw camera frame
+  hdps_worker.py          the raw frames through hdps's own worker (GPUWorker); the toys it needs
+  alert_files.py          hdps's alert packets written as Avro files (in place of Kafka)
+  pipeline_movie.py       the pipeline movie
+  pipeline/               what is added after hdps: lightcurves (detections linked into objects), truth (scoring)
   sep_photometry.py       the earlier SExtractor (SEP) photometry (the demo's validation, the offset study)
   rsp.py                  MESA RSP pulsator models
   binary.py               PHOEBE eclipsing-binary models

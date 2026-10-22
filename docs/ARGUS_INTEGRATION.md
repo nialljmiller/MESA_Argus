@@ -42,6 +42,13 @@ Each of these changes measurements: decide one at a time.
   IMX461 data (restricted).
 
 ### hdps
+- [x] The measurement pipeline is hdps itself: raw camera frames through hdps's own worker (`GPUWorker`) and the
+      production Task chain on the `hdps_full_cpu` branch (2026-10-21). The earlier MESA_Argus stages (extraction,
+      calibration, psf, reference, ZOGY/SFFT, alerts) are deleted.
+- [ ] Propose upstream: SFFT `mask_no_coverage_in_fit` (keep no-data pixels out of the kernel fit; hdps main fits
+      across them). Report: AlertVettingTask reads `MAGZP`, which the chain never sets (it sets `coadd_magzp`), so
+      alert magnitudes are empty; ffi-catalogs.md gives the rate-referenced recipe for `magzp`, the frame's
+      `coadd_magzp` is electron-referenced.
 - [ ] Write our exposures as L2 `.arg` segments with hdps's own `hdps.archive.data_store.encode_frames` (same
       0.879"/px tile grid as ours), and a reference in `CoaddReferenceProvider`'s layout (synthref `render.py`).
 - [ ] SFFT fixes (kernel mirror, DC offset, spatially varying background) are on branches `origin/408/16..20`,
@@ -132,3 +139,24 @@ Each of these changes measurements: decide one at a time.
   there) but not enough; production uses the reference side only too (tasks.py extra_var_rs), with real/bogus
   vetting after it. Open: science-side V_err (the GPU seam extra_var_ns exists, unused in production), or the
   measured PSF asymmetry.
+- 2026-10-20: the pipeline rebuilt as hdps itself. Each exposure: ArgusSim's survey (telescope, band, tracking angle)
+  and geometry place every star on its telescope's sensor (mesa_argus/sensor.py), rendered in an N x N-minipix
+  readout window (field.window, default 56) and written as a raw camera frame (mesa_argus/camera.py: real AEGIS
+  header keys, toy gain = full well / 58000 e-/ADU, readout parity of the real frames). One observation file defines
+  every parameter with default, limits and justification (mesa_argus/schema.py; template.toml generated from it).
+  Real/bogus not run (every score 1). CPU paths for ReprojectionTask, CoaddTapTask, SFFTSubtractionTask and
+  DiffDetectionTask on hdps cpu-mirror.
+- 2026-10-21: hdps cpu-mirror rebased onto main after #425 (tasks.py split into a package). MESA_Argus's own runner
+  replaced by hdps's GPUWorker (mesa_argus/hdps_worker.py: ManifestSource, its WCS cache, coadd finalize, product
+  writer; fakeredis for valkey). LightweightFITSOutputTask (catalogue, WCS, zero point) and TileImageOutputTask (the
+  movie's tile) added to the chain. Alert packets: hdps's own (AlertVettingTask), Avro with the public argus.alert
+  schema (v3.0; v4 is on origin/feature/alert-schema-v4, unmerged) read from hdps at run time, one file per exposure
+  in place of Kafka. The packets carry hdps's gaps: UUID alertId (ADR-0027's HEALPix id not implemented), no
+  event/SSO association, alertCadence 0, no inline cutouts (stamps in alert_stamps), psfMagnitudeDif empty (MAGZP).
+- 2026-10-21: squares around every star and a gradient in hdps's difference images: hdps's SFFT fits its kernel over
+  the whole tile including where the reference has no data (one per-ratchet coadd covers ~38% of a tile at the
+  56-minipix window); the kernel took a flat pedestal (sum 1.36 vs 1.10), a 13 x 13 px square around every star.
+  hdps cpu-mirror 2093773c: mask_no_coverage_in_fit; 83a6bb1c: the CPU SFFT does no whole-tile median subtraction
+  (the GPU code has none; on a part-covered tile it shifted the difference by the sky, +1000 e-). On one frame:
+  level 0-2 e-, swing across a tile 1-4 e- (was up to 1905), squares 45 e- (was 11644). Bright stars leave ~20%
+  residuals (0.2 px registration, PSF from another telescope's reference), which alert with real/bogus off: accepted.

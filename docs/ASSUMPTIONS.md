@@ -23,39 +23,58 @@ Stars are simulated by `make_stars.py` with no dust and nothing about observing;
 | Synthetic AB magnitudes (filter only) and detected electrons (full system) from an SED | `ABPhot.mag_from_sed`, `ABPhot.electrons_from_sed` |
 | HDPS minipix geometry (32 × 0.879″ = 28.1″) | `skymap_shim` |
 
-## 2. Written here (ArgusSim has no equivalent): images and photometry
+## 2. Written here (ArgusSim has no equivalent): images
 
-ArgusSim supplies one star's PSF at a time (`ZemaxPSF.with_seeing`) and an analytic S/N (`NoiseBudget.get_snr`). It
-does not make images or measure them. The following is this repo's own code, built on ArgusSim's inputs.
+ArgusSim supplies the survey (which telescope takes the field when, in which band, its tracking angle; `Survey`,
+`coverage_exact`), the geometry (each telescope's array frame and focal plane, `coverage_exact.Layout`) and one star's
+PSF at a time (`ZemaxPSF.with_seeing`). It does not make images. The following is this repo's own code, built on those.
 
-- **Scene** (`night_movie.Scene`). Every source's position becomes a pixel position. Its ArgusSim PSF is taken at
-  that sub-pixel position (rounded to 1/8 pixel), scaled by its ArgusSim electrons for the exposure (its SED at that
-  moment, at that airmass), and summed with ArgusSim's sky and dark current.
+- **Sensor** (`mesa_argus/sensor.py`). Every star's sensor pixel in every exposure, as ArgusSim's geometry places it:
+  ICRS → CIRS once per night, then the telescope's array frame with its tracking angle → gnomonic focal plane →
+  pixels. Its ArgusSim PSF is taken at its own field angle (the nearest tabulated one) and sub-pixel phase (1/8 px),
+  scaled by its ArgusSim electrons for the exposure (its SED at that moment, at that airmass), and summed with
+  ArgusSim's sky and dark current. Only an N × N-minipix readout window around the field is made (`field.window`,
+  default 56 minipix, ≈ 26′; at least 28, hdps's detector minimum; at most the sensor).
 - **Noise.** A Poisson draw per pixel, clipped at ArgusSim's full well, plus Gaussian read noise.
-- **Photometry** (`mesa_argus/photometry.py`). SExtractor (its Python port SEP) with SExtractor's defaults on every
-  exposure: background mesh, 1.5σ detection, deblending, windowed centroids, MAG_AUTO. The real Argus pipeline does
-  no PSF or aperture photometry of its own, so a standard extractor stands in for it.
-- **Calibration.** Each exposure separately: about 300 bright, least-blended catalogue stars give the zero point with
-  a linear colour term in BP−RP (3σ clipped). A source without a catalogue colour (every transient) takes the median
-  colour of the calibration stars. A source much bluer or redder than that median is therefore measured with a
-  colour-term bias: about −0.17 mag for a blue SN Ia, about −0.05 to −0.1 mag for a dwarf-nova disc.
-- **Difference image** (display only). The reference is the median of the night's best-seeing exposures (each a full
-  noisy simulated exposure; the transients left out, i.e. the field before the event). It is PSF-matched to each
-  exposure with a Bramich (2008) delta-function kernel, fitted on stamps around reference sources with 3σ rejection.
+- **Camera** (`mesa_argus/camera.py`, a toy). The window is written as a raw camera frame with the real AEGIS header
+  keys (UTCSTART, RATCHNUM, CAMID, TARGRA/TARGDEC: the window centre, ...): uint16 with gain = full well / 58,000
+  e⁻/ADU (so hdps's 58,000 ADU saturation is the full well), no bias, no overscan, the real frames' readout parity.
+
+## 2b. Measurement: hdps itself, with the toys it needs
+
+The raw frames go through hdps's own worker (`mesa_argus/hdps_worker.py`: `GPUWorker`, its ratchet manifests, WCS
+cache, coadd finalize and product writer) running the production Task chain (`docker/demo/config.yaml`, every setting
+in the observation file's `[[hdps.tasks]]`): reduction → source detection → Refcat2 → linear and TPV WCS → solved
+frame (`LightweightFITSOutputTask`) → reprojection onto hdps sky tiles → ratchet coadd → SFFT against reference
+coadds → difference detection → transient catalogue → alert vetting → tile images (`TileImageOutputTask`). hdps runs
+on the CPU through the `hdps_full_cpu` branch, whose CPU paths mirror the GPU code. What stands in for what does not
+exist here:
+
+- **valkey**: an in-process fakeredis server (as hdps's own tests use). **Kafka**: hdps's alert packets written as
+  Avro files, one per exposure, with the public `argus.alert` schema read from hdps at run time.
+- **Real/bogus**: not run; every candidate scores 1 (no trained model). Anything left in a difference image that
+  hdps's alert detector finds is an alert (bright stars leave residuals that would be alerts too).
+- **References**: the night before, through the same chain to its ratchet coadds (transients left out). hdps picks
+  one coadd per tile; with the readout window smaller than a tile it covers part of it.
+- **`hdps_full_cpu` changes beyond CPU mirroring**: SFFT keeps pixels with no reference or no science data out of
+  its kernel fit (`mask_no_coverage_in_fit`; hdps main fits across them, which gave the kernel a flat pedestal, a
+  kernel-sized square around every star and a gradient on part-covered tiles); the CPU SFFT does no whole-tile median
+  subtraction (the GPU code has none).
+- **Photometry**: hdps's source detector's matched-filter flux on the reduced frame, calibrated by hdps's zero point
+  (`coadd_magzp`, electron-referenced, fitted against ATLAS g for β and r for ρ; the scalar tier, no colour term, so
+  β reads ≈ 0.3 mag off truth for these stars' colours). No PSF or aperture photometry, as the real pipeline.
+- **Ours after hdps** (`mesa_argus/pipeline/`): linking each band's detections by position into objects and light
+  curves (hdps has no light-curve product yet), and the truth labels for scoring.
 - **Colour exposure** (display only). β and ρ, sky subtracted; ρ → red, β → blue, their mean → green, with β scaled
   so the field's median star is grey. Brightness is ρ electrons per pixel above sky on an asinh stretch; colour is the
   pixel's channel ratios (Lupton et al. 2004); a pixel at full well in either band is white.
 
 ## 3. Argus-related choices made here (assumptions, not from ArgusSim)
 
-Items 1–5 are conditions ArgusSim's own survey simulation draws (Survey, ForwardMC) and these movies do not use yet.
+Items 3–5 are conditions ArgusSim's own survey simulation draws (Survey, ForwardMC) and these movies do not use yet.
+(Earlier assumptions 1 and 2, a fixed field angle and continuous coverage in both bands, are gone: the field angle,
+telescope, band and coverage of every exposure now come from ArgusSim's survey and geometry, section 2.)
 
-1. **Field angle 1.44°, fixed all night.** The area-weighted median of the 2.03° field. The PSF depends strongly on
-   it (HFD 2.34″ at 1°, 2.70″ at 1.44°, 3.25″ at 2°). ArgusSim's survey takes it per ratchet (`random_field_angle`,
-   or exact from `coverage_exact`).
-2. **Continuous coverage, both bands.** Every exposure of the night is taken to image the field in both β and ρ with
-   one telescope. ArgusSim's `coverage_exact` / `tanseg_coverage` say which OTA (so which single band) covers a
-   position in each exposure, and when it falls in a gap.
 3. **A median-seeing night.** The seasonal median zenith seeing for the whole night, varying only with airmass.
    ArgusSim's survey draws it per ratchet (`draw_atmosphere`: lognormal about the seasonal median, correlated with
    transparency).
@@ -63,8 +82,8 @@ Items 1–5 are conditions ArgusSim's own survey simulation draws (Survey, Forwa
    (`draw_cloud_transparency`) and whether a night is clear (`observable_weather`).
 5. **Solar activity 0.8** (ArgusSim's config default, solar minimum), which sets the airglow level. ArgusSim's survey
    uses a per-night 2028–2033 prior (`solar_activity_by_ratchet`).
-6. **PSF details.** The PSF stamp ends at 29 × 29 pixels (ArgusSim's Zemax grid limit), so very bright stars lose
-   their far wings. Detector axes are taken as aligned with the HDPS tile axes. The same seeing FWHM is used in β and
+6. **PSF details.** The PSF stamp ends at 28 × 28 pixels (ArgusSim's Zemax grid limit), so very bright stars lose
+   their far wings (≈ 1% of the light beyond 12 px). The PSF is the nearest tabulated field angle's. The same seeing FWHM is used in β and
    ρ (real seeing scales as λ^−0.2, so β's would be ~8% broader; ArgusSim has no chromatic seeing either).
 7. **Not modelled at all:** flat-field and calibration errors, detector non-linearity, blooming beyond full-well
    clipping, cosmic rays, persistence, gain and ADC quantisation, scintillation, tracking jitter and image rotation.
@@ -102,16 +121,15 @@ Bailer-Jones et al. (2021) geometric, else Gaia GSP-Phot, else none (the whole c
   - Periodic: MESA RSP pulsators (RR Lyrae, Cepheids, Type II Cepheids, HADS) tuned to the given period, at the given L
     (or dust-free absolute M_G) and distance; PHOEBE binaries (W UMa from period, q, inclination, Teffs and fillout
     factor; detached from radii and Teffs) at the given distance, masses from the main-sequence Teff–mass relation
-    unless given. Placed by an observation (position, epoch), they enter the catalogue (and the difference reference)
-    at their intensity-mean G and BP−RP through the field's dust, as a catalogued variable would.
+    unless given. Placed by an observation (position, epoch), they are in the reference night
+    (so in hdps's reference coadds) as they are on that night, as a real variable would be.
 - **Transients** (`mesa_argus/transients.py`): SEDs against time since t0.
   - sncosmo models (supernova templates built from observed spectra; no physics run), placed at a redshift and peak
     absolute magnitude with sncosmo's default cosmology.
   - Two parametric models written in this repo, not from sncosmo: point-lens microlensing (MESA template source), and
     a dwarf-nova outburst (steady accretion disc
     of changing accretion rate plus the white dwarf; no donor, bright spot or lines).
-  - Transients are not in the catalogue (no catalogue colour; see calibration above) and not in the difference
-    reference.
+  - Transients are left out of the reference night, so they are not in hdps's reference coadds.
 - **Variables not modelled** (held constant at their Gaia mean): double-mode pulsators, non-radial pulsators,
   long-period, rotational, eruptive and stochastic variables, and any star whose model failed to reproduce its
   catalogue period or eclipses. `make_stars.py --gaia-list RA DEC` gives the reason per star.
@@ -137,8 +155,11 @@ stars at the same G.
 - **CMD:** grey, the constant stars at their true (template) magnitudes; coloured tracks, each followed source's model
   (one cycle, or the night for a transient); coloured points, its **true** model value now, not a measurement.
 - **Exposure:** the β/ρ colour composite of this exposure (section 2).
-- **Difference:** this exposure minus the PSF-matched reference, in electrons per pixel (saturated pixels grey).
-- **Light curves:** MAG_AUTO measured on each exposure (points) and the model (line), relative to the night's mean;
-  below, measured − true.
+- **Difference:** hdps's SFFT difference image of the tile holding the block (`TileImageOutputTask`), in electrons
+  per pixel; a red exclamation mark where hdps raised an alert.
+- **Light curves:** hdps's calibrated source-detector magnitude on each exposure (points) and the model (line),
+  relative to the night's mean; shaded bands where the source alerted; below, measured − true.
+- **Pipeline movie** (`*_pipeline.mp4`): where the readout window falls on the telescope's sensor, the raw frame with
+  hdps's detections, hdps's WCS against the true positions, and detections per frame.
 - **SED:** each followed source's SED now (solid), and the same SED times the β and ρ system responses at this
   airmass (dotted).
