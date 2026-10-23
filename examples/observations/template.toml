@@ -447,6 +447,10 @@ pipeline_movie = true
 # allowed: false | true. Keep the raw camera frames (raw/); they are always written for hdps, and deleted after unless
 # kept.
 raw = false
+# allowed: false | true. Save what both movies need (<name>_night_<band>.movie.joblib: each frame's block cut-outs, a
+# 4 x 4-binned raw-frame preview, detections, WCS, measurements, alerts; ~1 MB per frame), so they can be drawn after
+# the run (tools/render_movies.py) with movie = false during it.
+movie_data = true
 # allowed: 1 .. 1000. Movie: every Nth frame.
 stride = 1
 # [frames/s] allowed: 1 .. 120. Movie frame rate.

@@ -303,7 +303,7 @@ def run_engine(obs, out, n_placed, extra=(), reference=None):
     for band in o["bands"]:
         mp4 = out / f"{name}_night_{band}.mp4"
         print(f"observing {band} -> {mp4.relative_to(REPO)} (log {mp4.with_suffix('.log').relative_to(REPO)})", flush=True)
-        log = open(mp4.with_suffix(".log"), "w")
+        log = open(mp4.with_suffix(".render.log" if "--render-only" in extra else ".log"), "w")
         band_options = ["--reference", str(reference / band / "coadds")] if reference is not None else []
         command = [sys.executable, "night_movie.py", "--scene", str(out / "scene"), "--field", name, "--band", band,
                    "-o", str(mp4), *options, *band_options]
@@ -315,7 +315,7 @@ def run_engine(obs, out, n_placed, extra=(), reference=None):
         log.close()
     if failed:
         raise SystemExit(f"the engine failed for {', '.join(failed)}: see the log(s) in {out.relative_to(REPO)}/")
-    if o["catalogues"] and o["lightcurves"] and "--hdps-pass" not in extra:  # both bands' detections, linked
+    if o["catalogues"] and o["lightcurves"] and "--hdps-pass" not in extra and "--render-only" not in extra:
         from mesa_argus.pipeline import lightcurves
 
         catalogue = lightcurves.positional(out / "catalogues", out, dict(obs["lightcurves"]))

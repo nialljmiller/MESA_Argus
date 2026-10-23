@@ -199,6 +199,9 @@ OUTPUT = [
       "detections and WCS); drawn from the same run, about 15-25% more time."),
     P("raw", False, "", {True, False}, "Keep the raw camera frames (raw/); they are always written for hdps, and "
       "deleted after unless kept."),
+    P("movie_data", True, "", {True, False}, "Save what both movies need (<name>_night_<band>.movie.joblib: each "
+      "frame's block cut-outs, a 4 x 4-binned raw-frame preview, detections, WCS, measurements, alerts; ~1 MB per "
+      "frame), so they can be drawn after the run (tools/render_movies.py) with movie = false during it."),
     P("stride", 1, "", (1, 1000), "Movie: every Nth frame."),
     P("fps", 24, "frames/s", (1, 120), "Movie frame rate."),
     P("dpi", 100, "", (50, 300), "Movie resolution."),

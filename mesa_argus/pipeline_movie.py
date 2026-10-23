@@ -1,7 +1,7 @@
 """The pipeline movie: how each exposure goes through the chain. Per frame: where the readout window falls on its
 telescope's sensor (ArgusSim's geometry), the raw camera frame with hdps's detections, hdps's solved WCS against the
 true star positions over the night, and the detections per frame. Drawn from the engine's per-frame records
-(night_movie.py step 8) and the raw frames.
+(night_movie.py), each raw frame as its preview (block means of preview_bin pixels), so it can be drawn after the run.
 """
 import numpy as np
 
@@ -9,7 +9,6 @@ import numpy as np
 def render(records, output, field, band, fps, dpi, ut, airmass, seeing):
     import matplotlib.pyplot as plt
     from argus_sim import c
-    from astropy.io import fits
     from matplotlib.animation import FFMpegWriter
     from matplotlib.colors import AsinhNorm
     from matplotlib.patches import Rectangle
@@ -27,7 +26,7 @@ def render(records, output, field, band, fps, dpi, ut, airmass, seeing):
     with writer.saving(fig, str(output), dpi=dpi):
         for n, r in enumerate(records):
             j, win = r["j"], r["window"]
-            raw = fits.getdata(r["path"]).astype(np.float32) * camera.GAIN  # electrons
+            raw = np.asarray(r["preview"], np.float32)  # electrons, block means of preview_bin x preview_bin pixels
             cat = r["catalogue"]
             err = np.nan
             if r["wcs"] is not None and len(r["truth"][0]):
@@ -53,7 +52,8 @@ def render(records, output, field, band, fps, dpi, ut, airmass, seeing):
 
             ax_i = fig.add_subplot(grid[:, 1])
             norm = AsinhNorm(linear_width=40, vmin=np.percentile(raw, 5), vmax=np.percentile(raw, 99.8))
-            ax_i.imshow(raw, origin="lower", cmap="gray", norm=norm, interpolation="nearest")
+            ax_i.imshow(raw, origin="lower", cmap="gray", norm=norm, interpolation="nearest",
+                        extent=(-0.5, raw.shape[1] * r["preview_bin"] - 0.5, -0.5, raw.shape[0] * r["preview_bin"] - 0.5))
             if cat is not None and len(cat):
                 ax_i.scatter(cat["xcentroid"], cat["ycentroid"], s=26, facecolors="none", edgecolors=RED, linewidths=0.6)
             status = "hdps: " + (f"{history['ndet'][-1]} detections (red); WCS solved; "

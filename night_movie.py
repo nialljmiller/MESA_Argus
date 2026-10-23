@@ -702,6 +702,42 @@ def block_radec(dx, dy):
     return ra % 360.0, dec
 
 
+PREVIEW_BIN = 4  # the pipeline movie's raw-frame preview: block means of 4 x 4 sensor pixels
+
+
+def binned(image, k):
+    """Block means of k x k pixels (float16; the edges that do not fill a block dropped)."""
+    h, w = (image.shape[0] // k) * k, (image.shape[1] // k) * k
+    return image[:h, :w].reshape(h // k, k, w // k, k).mean(axis=(1, 3)).astype(np.float16)
+
+
+def slim_record(r):
+    """A frame's record as the movies need it, picklable: no paths or open objects (detections as arrays, the WCS as
+    its header text)."""
+    cat = r.get("catalogue")
+    return dict(window=r["window"], field_xy=r["field_xy"], j=r["j"], failed=r.get("failed"), truth=r["truth"],
+                tel_id=r["tel_id"], ratchet=r["ratchet"], field_angle=r["field_angle"], zp=r.get("zp"),
+                preview=r["preview"], preview_bin=r["preview_bin"],
+                det_x=None if cat is None else np.asarray(cat["xcentroid"], np.float32),
+                det_y=None if cat is None else np.asarray(cat["ycentroid"], np.float32),
+                wcs=None if r.get("wcs") is None else r["wcs"].to_header_string(relax=True))
+
+
+def movie_records(slim):
+    """Slim records back into what pipeline_movie.render reads (catalogue x/y, an astropy WCS)."""
+    from astropy.io import fits
+    from astropy.table import Table
+    from astropy.wcs import WCS
+
+    out = []
+    for r in slim:
+        r = dict(r)
+        r["catalogue"] = None if r["det_x"] is None else Table(dict(xcentroid=r["det_x"], ycentroid=r["det_y"]))
+        r["wcs"] = None if r["wcs"] is None else WCS(fits.Header.fromstring(r["wcs"]))
+        out.append(r)
+    return out
+
+
 def alert_table(work, stem):
     """Every row of hdps's alert catalogue for a frame (AlertVettingTask's alert_catalog: position, PSF flux, score,
     accepted, the feat_* features its real/bogus model reads), with each accepted row's alertId from the frame's Avro
@@ -850,6 +886,9 @@ def parser():
     p.add_argument("--pipeline-movie", action="store_true", help="also draw the pipeline movie (mesa_argus.pipeline_movie)")
     p.add_argument("--reference", type=Path, help="hdps's reference coadds (the reference pass's coadds/): SFFT's reference_dir")
     p.add_argument("--no-render", action="store_true", help="measure (and write FITS) but draw no movie")
+    p.add_argument("--render-only", action="store_true",
+                   help="draw the movies from a finished run's <output>.movie.joblib (output.movie_data): no "
+                        "rendering, no hdps; the scene is rebuilt as in the run")
     p.add_argument("-o", "--output", type=Path,
                    help="default: next to the scene; a hand-made field: outputs/pseudo_real/<field>/<field>_night_<band>.mp4")
     p.add_argument("--date", help="local date the night starts (default: the field's own)")
@@ -1024,6 +1063,35 @@ def main(argv=None):
         expected_flux[k] = 0.0 if k in transient else np.mean(ref_rate[k][B]) * args.exptime
     frames = range(0, len(times), args.stride)
     seeds = np.random.SeedSequence(args.seed).spawn(len(times))
+    movie_file = args.output.with_suffix(".movie.joblib")
+
+    def movies(frames, measured, alerted, cutouts, records):
+        """8. the movies: the field movie (the panels as before, its images hdps's tile and difference image around
+        the block) and the pipeline movie (each raw frame's preview, where it falls on the sensor, hdps's detections
+        and WCS)."""
+        if not args.no_render:
+            draw_data = movie_data(args, stars, scene, follow, transient, models, follow_sed, follow_rate, follow_cycle,
+                                   ref_rate, static_mag, rates_at, true_mag, measured, frames, times, bjd, ut, airmass,
+                                   seeing, G, in_block, ab, cutouts)
+            draw_data.update(alerted=alerted, frame_j=list(frames), labels=labels, pulsators=pulsators, source=source,
+                             gaia_var=gaia_var, templates=templates, survey=survey, cutouts=cutouts)
+            render(args, draw_data, frames)
+        if args.pipeline_movie:
+            from mesa_argus import pipeline_movie
+
+            pipeline_movie.render(records, args.output.with_name(args.output.stem + "_pipeline.mp4"), FIELD, B,
+                                  args.fps, args.dpi, ut, airmass, seeing)
+
+    if args.render_only:  # a finished run's movie data: the movies only
+        import joblib
+
+        if not movie_file.exists():
+            raise SystemExit(f"{movie_file}: no movie data (run with output.movie_data = true)")
+        saved = joblib.load(movie_file)
+        movies(saved["frames"], saved["measured"], saved["alerted"], saved["cutouts"], movie_records(saved["records"]))
+        print(f"saved {args.output} (from {movie_file.name})")
+        return
+
     print(f"{'reference pass' if reference_pass else 'observing'}: {len(frames)} exposures ({B}) as raw frames "
           f"({window_px} px window) -> {work / 'raw'}", flush=True)
     records = []
@@ -1039,6 +1107,7 @@ def main(argv=None):
         sx, sy = x[1:] - win[0], y[1:] - win[1]  # every star in the window's pixels (truth)
         bright = (G < 17) & (sx > 20) & (sx < win[2] - 20) & (sy > 20) & (sy < win[3] - 20)  # for the WCS check
         records.append(dict(path=path, window=win, field_xy=(x[0], y[0]), j=j, sx=sx, sy=sy,
+                            preview=binned(image, PREVIEW_BIN), preview_bin=PREVIEW_BIN,
                             truth=(sx[bright], sy[bright], star_ra[bright], star_dec[bright]), tel_id=int(row["tel_id"]),
                             ratchet=int(row["ratchet"]), field_angle=float(row["field_angle"])))
         if (n + 1) % max(1, len(frames) // 10) == 0:
@@ -1138,20 +1207,13 @@ def main(argv=None):
         writer.writeheader()
         writer.writerows(rows)
 
-    # 8. the movies: the field movie (the panels as before, its images hdps's tile and difference image around the
-    # block) and the pipeline movie (each raw frame, where it falls on the sensor, hdps's detections and WCS)
-    if not args.no_render:
-        draw_data = movie_data(args, stars, scene, follow, transient, models, follow_sed, follow_rate, follow_cycle, ref_rate,
-                               static_mag, rates_at, true_mag, measured, frames, times, bjd, ut, airmass, seeing, G, in_block,
-                               ab, cutouts)
-        draw_data.update(alerted=alerted, frame_j=list(frames), labels=labels, pulsators=pulsators, source=source,
-                         gaia_var=gaia_var, templates=templates, survey=survey, cutouts=cutouts)
-        render(args, draw_data, frames)
-    if args.pipeline_movie:
-        from mesa_argus import pipeline_movie
+    if obs["output"]["movie_data"]:  # what the movies need, so they can be drawn later (--render-only)
+        import joblib
 
-        pipeline_movie.render(records, args.output.with_name(args.output.stem + "_pipeline.mp4"), FIELD, B, args.fps,
-                              args.dpi, ut, airmass, seeing)
+        joblib.dump(dict(frames=list(frames), measured=measured, alerted=alerted, cutouts=cutouts,
+                         records=[slim_record(r) for r in records]), movie_file, compress=3)
+        print(f"movie data -> {movie_file.name}", flush=True)
+    movies(frames, measured, alerted, cutouts, movie_records([slim_record(r) for r in records]))
     if not obs["output"]["raw"]:  # the raw frames and hdps's bulky per-frame products (read above)
         shutil.rmtree(work / "raw", ignore_errors=True)
         shutil.rmtree(work / "solved", ignore_errors=True)
