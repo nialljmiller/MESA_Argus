@@ -46,3 +46,26 @@ def label_candidates(candidates, star_x, star_y, star_flux, followed, labels, cf
         star[i] = k if d[k] <= radius else -1
     candidates["star"] = star
     candidates["truth"] = [labels[k] if k in followed else ("star" if k >= 0 else "") for k in star]
+
+
+def label_alerts(ra, dec, star_ra, star_dec, star_flux, followed, transient, labels, radius_arcsec=2.0):
+    """What the simulation put where each alert is (for scoring and for training a real/bogus model): the nearest
+    simulated star within radius_arcsec (ties: the brighter) and its class: 'transient' (a placed transient),
+    'variable' (a followed variable), 'constant' (any other simulated star: the alert is a subtraction residual),
+    'none' (nothing simulated there). Returns dict of arrays: truth_star, truth_label, truth_class,
+    truth_sep_arcsec."""
+    ra, dec = np.asarray(ra, float), np.asarray(dec, float)
+    star_ra, star_dec = np.asarray(star_ra, float), np.asarray(star_dec, float)
+    n = len(ra)
+    star = np.full(n, -1)
+    sep_out = np.full(n, np.nan)
+    for i in range(n):
+        sep = np.hypot((star_ra - ra[i]) * np.cos(np.radians(dec[i])), star_dec - dec[i]) * 3600.0
+        sep = sep - 1e-9 * np.nan_to_num(star_flux)  # ties: the brighter
+        k = int(np.argmin(sep)) if len(sep) else -1
+        if k >= 0 and sep[k] <= radius_arcsec:
+            star[i], sep_out[i] = k, sep[k]
+    cls = np.array(["transient" if k in transient else "variable" if k in followed else "constant" if k >= 0
+                    else "none" for k in star])
+    label = np.array([labels.get(k, "") if k >= 0 else "" for k in star])
+    return dict(truth_star=star, truth_label=label, truth_class=cls, truth_sep_arcsec=sep_out)

@@ -159,6 +159,9 @@ LIGHTCURVES = [
 TRUTH = [
     P("match_radius", 2.0, "px", (0.5, 6.0), "Scoring only: a detection or candidate is a simulated star within "
       "this (tile px). Below hdps's de-dup radius (6 px)."),
+    P("alert_radius", 2.0, "arcsec", (0.5, 6.0), "Scoring only: an alert is the simulated star within this of its "
+      "position (hdps's tile WCS against the true position; the median WCS error is ~0.1\"). About two pixels; "
+      "below the 6 px de-dup radius so a neighbour is not taken."),
 ]
 
 OUTPUT = [
@@ -300,7 +303,8 @@ TASKS = [
     _task("ReprojectionTask", dict(segment_shape=[2048, 2048], grid_resolution=33)),
     _task("CoaddTapTask", dict(background_mode="regional")),
     _task("SFFTSubtractionTask", dict(reference_mode="coadd", kernel_half_width=6, kernel_poly_order=0, background_order=2,
-                                      mask_saturated_in_fit=True, mask_no_coverage_in_fit=True, mask_bright_stars=False, variance_conv="direct",
+                                      mask_saturated_in_fit=True, mask_no_coverage_in_fit=True, mask_bright_stars=True,
+                                      bright_star_threshold=3000.0, mask_dilation_growth=4, variance_conv="direct",
                                       rejection_iters=1, rejection_sigma=3.0, rejection_grow=2, retain_planes=True)),
     _task("DiffDetectionTask", dict(detect_sigma=5.0, bg_region_size=256, max_sources=100000,
                                     matched_filter_width=4.0)),
@@ -385,7 +389,16 @@ TASK_RULES = {
                                                          "no science data kept out of the kernel fit. Fitting across "
                                                          "them gives the kernel a flat pedestal (a kernel-sized square "
                                                          "around every star) and a background gradient."),
-    ("SFFTSubtractionTask", "mask_bright_stars"): ({True, False}, "hdps default."),
+    ("SFFTSubtractionTask", "mask_bright_stars"): ({True, False}, "true (hdps default and production false): "
+                                                   "bright-star residual footprints kept out of detection (inf "
+                                                   "Var(D)), so with no real/bogus model their residuals are not "
+                                                   "alerts. Real variability under the mask is not detected either."),
+    ("SFFTSubtractionTask", "bright_star_threshold"): (POSITIVE, "electrons per pixel in the reference (sky-"
+                                                       "subtracted coadd) or the science tile (which still holds its "
+                                                       "sky, ~1000-1300 e- in rho here): above the science sky, or "
+                                                       "the whole science tile is masked. hdps default 5000."),
+    ("SFFTSubtractionTask", "mask_dilation_growth"): ((0, None), "hdps default: px added to the mask radius per "
+                                                      "magnitude above the threshold."),
     ("SFFTSubtractionTask", "variance_conv"): ({"direct", "fft"}, "hdps default. hdps checks."),
     ("SFFTSubtractionTask", "rejection_iters"): ((0, None), f"{_H}. A count: not negative."),
     ("SFFTSubtractionTask", "rejection_sigma"): (POSITIVE, f"{_H}. {_SIG}"),

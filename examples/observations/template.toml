@@ -325,8 +325,15 @@ mask_saturated_in_fit = true
 # reference or no science data kept out of the kernel fit. Fitting across them gives the kernel a flat pedestal (a
 # kernel-sized square around every star) and a background gradient.
 mask_no_coverage_in_fit = true
-# allowed: false | true. hdps default.
-mask_bright_stars = false
+# allowed: false | true. true (hdps default and production false): bright-star residual footprints kept out of
+# detection (inf Var(D)), so with no real/bogus model their residuals are not alerts. Real variability under the mask
+# is not detected either.
+mask_bright_stars = true
+# allowed: > 0. electrons per pixel in the reference (sky-subtracted coadd) or the science tile (which still holds its
+# sky, ~1000-1300 e- in rho here): above the science sky, or the whole science tile is masked. hdps default 5000.
+bright_star_threshold = 3000.0
+# allowed: >= 0 (no upper limit). hdps default: px added to the mask radius per magnitude above the threshold.
+mask_dilation_growth = 4
 # allowed: "direct" | "fft". hdps default. hdps checks.
 variance_conv = "direct"
 # allowed: >= 0 (no upper limit). hdps docker/demo/config.yaml. A count: not negative.
@@ -413,6 +420,10 @@ link_arcsec = 1.5
 # [px] allowed: 0.5 .. 6.0. Scoring only: a detection or candidate is a simulated star within this (tile px). Below
 # hdps's de-dup radius (6 px).
 match_radius = 2.0
+# [arcsec] allowed: 0.5 .. 6.0. Scoring only: an alert is the simulated star within this of its position (hdps's tile
+# WCS against the true position; the median WCS error is ~0.1"). About two pixels; below the 6 px de-dup radius so a
+# neighbour is not taken.
+alert_radius = 2.0
 
 [output]
 # allowed: a non-empty list of "beta", "rho". Argus bands kept (ArgusSim's filter_strategy has b, named g there, and

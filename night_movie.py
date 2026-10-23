@@ -702,6 +702,35 @@ def block_radec(dx, dy):
     return ra % 360.0, dec
 
 
+def alert_table(work, stem):
+    """Every row of hdps's alert catalogue for a frame (AlertVettingTask's alert_catalog: position, PSF flux, score,
+    accepted, the feat_* features its real/bogus model reads), with each accepted row's alertId from the frame's Avro
+    packets (the packet's candidate ra/dec are the row's, written from the same values). None if hdps wrote none."""
+    import pandas as pd
+
+    from mesa_argus import alert_files
+
+    paths = sorted(p for p in work.glob(f"alerts_*_{stem}.parquet") if not p.name.startswith("alerts_stamps_"))
+    if not paths:
+        return None
+    parts = []
+    for p in paths:  # each row's place in hdps's files: its catalogue row, and its stamps (the npz's row_index)
+        part = pd.read_parquet(p)
+        part.insert(0, "catalog_file", p.name)
+        part.insert(1, "catalog_row", range(len(part)))
+        stamps = p.with_name(p.name.replace("alerts_", "alerts_stamps_", 1)).with_suffix(".npz")
+        part.insert(2, "stamps_file", stamps.name if stamps.exists() else "")
+        parts.append(part)
+    table = pd.concat(parts, ignore_index=True)
+    ids = {}
+    packets = work / "alerts" / f"{stem}.avro"
+    if packets.exists():
+        for packet in alert_files.read(packets):
+            ids[(packet["candidate"]["ra"], packet["candidate"]["dec"])] = packet["alertId"]
+    table.insert(0, "alertId", [ids.get((float(r), float(d)), "") for r, d in zip(table["ra_deg"], table["dec_deg"])])
+    return table
+
+
 def write_raw_frame(folder, image, win, row, args):
     """The exposure as a raw camera frame (mesa_argus.camera): <folder>/<CAMID>_<UTC start>.fits. The header's
     pointing is the readout window's centre (the camera's pointing over what it reads out)."""
@@ -1029,7 +1058,7 @@ def main(argv=None):
     print(f"hdps worker: {result}", flush=True)
 
     # the measurements, from hdps's products: the solved frame's catalogue and zero point, the tile images, alerts
-    rows, measured, alerted, cutouts = [], [], [], []
+    rows, measured, alerted, cutouts, alert_rows = [], [], [], [], []
     n_alerts = n_skipped = 0
     for record in records:
         j, stem = record["j"], record["path"].stem
@@ -1039,6 +1068,38 @@ def main(argv=None):
         cutouts.append(block_cutouts(work, stem))
         n_skipped += catalogue is None
         frame_alerts = alerts_of(work, stem, follow, star_ra, star_dec)
+        table = alert_table(work, stem)
+        if table is not None and len(table):  # every alert, labelled with what the simulation put there
+            from hdps.alerts.features import FEATURE_SPEC_VERSION
+
+            from mesa_argus.pipeline import truth
+
+            for at, (key, value) in enumerate(dict(observation=FIELD, band=B, exposure=int(j), time_utc=str(row["time"]),
+                                                   exptime=args.exptime, airmass=float(airmass[j]),
+                                                   seeing=float(seeing[j]), tel_id=int(row["tel_id"]),
+                                                   ratchet=int(row["ratchet"]),
+                                                   field_angle=float(row["field_angle"]),
+                                                   feature_spec=FEATURE_SPEC_VERSION).items()):
+                table.insert(1 + at, key, value)
+            for key, values in truth.label_alerts(table["ra_deg"], table["dec_deg"], star_ra, star_dec, expected_flux,
+                                                  set(follow), transient, labels, obs["truth"]["alert_radius"]).items():
+                table[key] = values
+            table["truth_mag"] = [true_mag(B, int(k), j) if k >= 0 else np.nan for k in table["truth_star"]]
+            # the change the difference image should show at the star (electrons): its flux now minus its flux in
+            # the reference (a transient: none; a followed variable: its mean over the reference night; any other
+            # star: unchanged). What decides real or bogus for a real/bogus training set (tools/rb_training_set.py).
+            now = rates_at(B, j) * args.exptime
+            k = table["truth_star"].to_numpy()
+            flux_now = np.where(k >= 0, now[np.maximum(k, 0)], np.nan)
+            flux_ref = np.where(k >= 0, flux_now, np.nan)
+            for i, kk in enumerate(k):
+                if kk in transient:
+                    flux_ref[i] = 0.0
+                elif kk in follow:
+                    flux_ref[i] = float(np.mean(ref_rate[kk][B])) * args.exptime
+            table["truth_flux_now"], table["truth_flux_reference"] = flux_now, flux_ref
+            table["truth_diff_flux"] = flux_now - flux_ref
+            alert_rows.append(table)
         alerted.append([(a["key"], a["dx"], a["dy"]) for a in frame_alerts])
         n_alerts += len(frame_alerts)
         if args.catalogues is not None and catalogue is not None:
@@ -1064,6 +1125,14 @@ def main(argv=None):
                              ratchet=int(row["ratchet"]), field_angle=float(row["field_angle"]), time_utc=row["time"]))
         measured.append(this_frame)
     print(f"hdps: {n_alerts} alerts from {len(frames)} frames ({n_skipped} frames hdps could not process)", flush=True)
+    if alert_rows:  # <name>_night_<band>.alerts.csv: every hdps alert row, its features and its truth
+        import pandas as pd
+
+        alerts = pd.concat(alert_rows, ignore_index=True)
+        alerts.to_csv(args.output.with_suffix(".alerts.csv"), index=False)
+        accepted = alerts[alerts["accepted"]]
+        print("alert truth (accepted): " + ", ".join(f"{c} {n}" for c, n in accepted["truth_class"].value_counts().items()),
+              flush=True)
     with open(args.output.with_suffix(".photometry.csv"), "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
         writer.writeheader()
