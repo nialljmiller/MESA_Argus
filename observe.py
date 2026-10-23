@@ -348,7 +348,9 @@ def make_reference(obs, out, placements):
     reference["night"].update(date=(Date.fromisoformat(obs["night"]["date"]) - timedelta(days=n)).isoformat(), nights=n)
     reference["place"] = [place for place, folder, meta in placements if meta["timing"] != "transient"]
     reference["inject"]["number"] = 0  # the injected periodic stars are in [[place]] above; no transients
-    reference["output"].update(movie=False, pipeline_movie=False, catalogues=False, lightcurves=False)
+    # every exposure, whatever the science night's stride: a reference is a deep stack (hdps's coadds of whole ratchets);
+    # a strided one stacks 1-3 frames, leaving residuals unlike any the real/bogus model was trained on
+    reference["output"].update(movie=False, pipeline_movie=False, catalogues=False, lightcurves=False, stride=1)
     ref_out = out / "reference"
     print(f"reference: {n} night(s) from {reference['night']['date']} through hdps's coadd -> {ref_out.relative_to(REPO)}/",
           flush=True)
