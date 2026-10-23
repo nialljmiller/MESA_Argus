@@ -30,6 +30,7 @@ running it makes the same data), summary.md, scene/.
 import argparse
 import json
 import shutil
+import os
 import subprocess
 import sys
 from datetime import date as Date
@@ -307,7 +308,12 @@ def run_engine(obs, out, n_placed, extra=(), reference=None):
         band_options = ["--reference", str(reference / band / "coadds")] if reference is not None else []
         command = [sys.executable, "night_movie.py", "--scene", str(out / "scene"), "--field", name, "--band", band,
                    "-o", str(mp4), *options, *band_options]
-        running.append((band, log, subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)))
+        # NUMBA_BOUNDSCHECK: an out-of-range index in a numba kernel (hdps's CPU mirrors) raises IndexError, which hdps's
+        # worker counts as one failed frame, instead of a segmentation fault that kills the band's whole run (two ρ
+        # runs died that way on 2026-10-23, in a numba kernel during difference detection)
+        # (its own NUMBA_CACHE_DIR: kernels cached without the check would otherwise be reused without it)
+        env = dict(os.environ, NUMBA_BOUNDSCHECK="1", NUMBA_CACHE_DIR=os.path.expanduser("~/.cache/numba_boundscheck"))
+        running.append((band, log, subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=env)))
     failed = []
     for band, log, process in running:
         if process.wait() != 0:
