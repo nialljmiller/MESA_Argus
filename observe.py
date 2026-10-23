@@ -368,6 +368,12 @@ def observe(obs, out, scene_only=False, engine_options=None):
 
     # the stars
     star_set = built_star(s["background"])[1]
+    from mesa_argus.gaia import RADIUS_DEG
+
+    if star_set.get("generator") == "Gaia field" and star_set.get("radius_deg", 0.12) < RADIUS_DEG:  # see gaia.RADIUS_DEG
+        raise SystemExit(f"{s['background']} holds Gaia stars within {star_set.get('radius_deg', 0.12)} deg only; the "
+                         f"readout window needs {RADIUS_DEG} (its outer part would be empty and hdps's WCS solve fails): "
+                         f"rebuild it (python make_stars.py <its star file> --rebuild {s['background']})")
     placements = []
     for p in obs["place"]:
         if s["missing"] == "skip" and not (STARS / p["star"] / "meta.json").exists():
