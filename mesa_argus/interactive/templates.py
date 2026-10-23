@@ -15,6 +15,7 @@ Types and their library sources:
     microlensing            a point lens (Paczynski) on a library source SED: tE and u0 set directly
 """
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -112,10 +113,14 @@ def light(name, ebv=0.0):
                     period=None if float(z["period"]) < 0 else float(z["period"]), meta=meta)
     out = _integrate(name, ebv)
     CACHE.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, kind=out["kind"], timing=out["timing"], wave=out["wave"].to_value("AA"),
+    # written under this process's own name, then moved into place in one step: several processes (the app's
+    # workers, the precompute) may integrate the same template at once, and none may read a half-written file
+    part = path.with_name(f"{path.stem}.{os.getpid()}.part.npz")
+    np.savez_compressed(part, kind=out["kind"], timing=out["timing"], wave=out["wave"].to_value("AA"),
                         seds=out["seds"].astype(np.float32), x=out["x"], period=-1.0 if out["period"] is None else out["period"],
                         meta=json.dumps(out["meta"]), **{f"mag_{b}": out["mag"][b] for b in ("beta", "rho")},
                         **{f"electrons_{b}": out["electrons"][b] for b in ("beta", "rho")})
+    os.replace(part, path)
     return out
 
 

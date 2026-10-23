@@ -154,6 +154,7 @@ class Night:
         measured (by the worker pool when given, else threads here), then assembled."""
         s.band = self.band
         state = (s, float(d_airmass), int(seed))
+        self.light(state)  # the star's template integrated here once (cached on disk), not by every worker or thread
         ns = list(range(len(self.frames)))
         done = workers.measure(state, ns) if workers is not None else None
         if done is None:  # threads: FFTs and numba release the GIL; each frame has its own noise seed

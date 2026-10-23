@@ -19,12 +19,14 @@ _fig = None
 
 
 def quiet_argus_sim():
-    """ArgusSim announces its default configuration at import, through its own handler unless one is there."""
+    """ArgusSim announces its default configuration at import, through its own handler unless one is there; matplotlib
+    reports each fallback from the movie's "heavy" font weight."""
     log = logging.getLogger("argus_sim")
     if not log.handlers:
         log.addHandler(logging.NullHandler())
         log.propagate = False
         log.setLevel(logging.WARNING)
+    logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
 
 def _setup():
