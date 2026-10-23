@@ -347,6 +347,7 @@ python3 -m ipykernel install --user --name mesa-argus --display-name "MESA_ARGUS
 python observe.py examples/observations/interactive_m3.toml        # one night through hdps, every candidate kept
 python -m mesa_argus.interactive.pack outputs/pseudo_real/interactive_m3 --pack m3   # -> data/interactive/packs/
 python -m mesa_argus.interactive.precompute_templates               # star E's templates (else made when chosen)
+python tools/check_edited_star.py f294test                          # star E against stars hdps measured itself
 jupyter lab notebooks/argus_night_live.ipynb
 ```
 

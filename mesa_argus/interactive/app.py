@@ -24,7 +24,8 @@ from mesa_argus.interactive.worker import Workers, quiet_argus_sim
 
 quiet_argus_sim()
 
-FIELD_NAMES = {"f294test": "f294, test field (injected stars)", "m3": "M3 (globular cluster)", "m67": "M67 (old open cluster)", "m45": "M45, the Pleiades (young open cluster)"}
+FIELD_NAMES = {"m3": "M3 (globular cluster)", "m67": "M67 (old open cluster)", "m45": "M45, the Pleiades (young open cluster)",
+               "f294test": "f294, test field (injected stars)"}  # the field dropdown's order
 BANDS = (("β", "beta"), ("ρ", "rho"))
 WORDS = {  # each type's slider names: magnitude, amplitude, period/timescale
     "periodic": ("Mean mag", "Amplitude", "Period (d)"),
@@ -50,7 +51,8 @@ def available():
     for path in sorted(pack.PACKS.glob("*_*.joblib")):
         name, band = path.stem.rsplit("_", 1)
         out.setdefault(name, []).append(band)
-    return out
+    order = list(FIELD_NAMES)
+    return dict(sorted(out.items(), key=lambda kv: order.index(kv[0]) if kv[0] in order else len(order)))
 
 
 def words(kind):
