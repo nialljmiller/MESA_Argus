@@ -1,89 +1,151 @@
 # The pipeline, as flow charts
 
-Plain-text Mermaid: GitHub, VS Code and Obsidian draw it. To edit, change the text; to add a step, add a node and an
-arrow. Every box names the code that does it; arrows carry the data handed on.
+How one observation is made, from the stars to the alerts, and how the real/bogus model is trained. Plain-text
+Mermaid: GitHub, VS Code and Obsidian draw it.
 
-**Colours (who owns each step):**
+**How to read them**
 
-| Colour | Owner |
+- A box is a step: what it does in plain words, then (small) the code that does it.
+- An arrow carries what is handed on; its label names that data.
+- A dashed arrow is optional or later (a setting turns it on, or it happens in another run).
+- Circled numbers give the order things happen in.
+
+| Colour | Who owns the step |
 |---|---|
-| blue | ArgusSim |
-| green | MESA_ARGUS (ours) |
-| amber | hdps |
-| red | stand-ins, where hdps or Argus has no piece yet |
-| grey | outputs |
+| blue | ArgusSim (the Argus instrument, site and survey model) |
+| green | MESA_ARGUS (this repository) |
+| amber | hdps (the Argus pipeline), run unchanged |
+| red | a stand-in, where hdps or Argus has no real piece yet |
+| grey | a file written |
 
 Charts:
-1. Overview
-2. One exposure: from the sky to a raw frame
-3. hdps: the Task chain on each frame
-4. The reference night
-5. Outputs, truth and real/bogus training
 
-## 1. Overview
+1. [Overview: one observation, start to finish](#1-overview-one-observation-start-to-finish)
+2. [The scene: stars on the sky and the night's exposures](#2-the-scene-stars-on-the-sky-and-the-nights-exposures)
+3. [One exposure: from the sky to a raw camera frame](#3-one-exposure-from-the-sky-to-a-raw-camera-frame)
+4. [hdps on every frame](#4-hdps-on-every-frame)
+5. [The reference night](#5-the-reference-night)
+6. [Measurements and outputs](#6-measurements-and-outputs)
+7. [Real/bogus: training the model and using it](#7-realbogus-training-the-model-and-using-it)
+
+## 1. Overview: one observation, start to finish
+
+`python observe.py <observation file>` does all of it. Each band (β, ρ) runs as its own process, both at once.
 
 ```mermaid
 flowchart TD
   classDef argus fill:#dbeafe,stroke:#1e40af,color:#0b1d4a
   classDef ours fill:#dcfce7,stroke:#166534,color:#052e16
   classDef hdps fill:#fde68a,stroke:#92400e,color:#3b1d02
-  classDef toy fill:#fecaca,stroke:#991b1b,color:#450a0a
   classDef out fill:#e5e7eb,stroke:#374151,color:#111827
 
-  LIB["star library<br/><small>make_stars.py · stars/lib*, libnm* (newton)</small>"]:::ours
-  OBS["observation file<br/><small>schema.py · runconfig.py: every parameter, limits, why</small>"]:::ours
-  SCENE["scene: field stars, placed + injected stars, dust<br/><small>observe.py · gaia.py · dust.py</small>"]:::ours
-  SURVEY["survey: which telescope sees the field when, band, tracking angle<br/><small>ArgusSim coverage_exact · mesa_argus/survey.py</small>"]:::argus
-  REF["reference night<br/><small>observe.py make_reference → chart 4</small>"]:::ours
-  EXP["each exposure → raw frame<br/><small>night_movie.py · sensor.py · camera.py → chart 2</small>"]:::ours
-  HDPS["hdps worker on every frame<br/><small>hdps_worker.py · GPUWorker → chart 3</small>"]:::hdps
-  MEAS["measurements from hdps products<br/><small>night_movie.py measure_frame, alert_table</small>"]:::ours
-  OUT["catalogues · photometry · alerts.csv · Avro packets<br/>light curves · movies"]:::out
-  TRAIN["real/bogus training<br/><small>rb_training_set.py · train_rb.py → chart 5</small>"]:::ours
+  LIB["Star library: each star's light over time (SED), built once<br/><small>make_stars.py → stars/ · MESA, PHOEBE, sncosmo, Gaia</small>"]:::ours
+  OBS["Observation file: field, night, stars, every setting<br/><small>examples/observations/*.toml · schema.py · runconfig.py</small>"]:::ours
 
-  LIB --> SCENE
+  SCENE["① The scene: stars on the sky, dust, the night's exposures<br/><small>observe.py → scene/ · chart 2</small>"]:::ours
+  REF["② The reference night: hdps coadds to subtract against<br/><small>observe.py make_reference · chart 5</small>"]:::ours
+
+  subgraph NIGHT["③ The science night, for each band"]
+    EXP["Every exposure rendered and written as a raw camera frame<br/><small>night_movie.py · chart 3</small>"]:::ours
+    HDPS["hdps processes every raw frame<br/><small>hdps_worker.py · hdps GPUWorker · chart 4</small>"]:::hdps
+    MEAS["Measurements read from hdps's products<br/><small>night_movie.py · chart 6</small>"]:::ours
+  end
+
+  LINK["④ Both bands' detections linked into light curves<br/><small>pipeline/lightcurves.py</small>"]:::ours
+  OUT["catalogues · photometry · alerts.csv · Avro alert packets<br/>light curves · movies"]:::out
+  TRAIN["Real/bogus training, over many observations<br/><small>chart 7</small>"]:::ours
+
+  LIB -->|"SEDs"| SCENE
   OBS --> SCENE
-  OBS --> SURVEY
-  SCENE --> REF
-  SCENE --> EXP
-  SURVEY --> EXP
-  REF -->|"reference coadds per tile"| HDPS
-  EXP -->|"raw FITS per exposure"| HDPS
-  HDPS -->|"solved FITS · tiles · alert_catalog · .avro"| MEAS
+  SCENE -->|"same field and stars, transients left out"| REF
+  SCENE -->|"stars, exposure list"| EXP
+  EXP -->|"raw FITS frames"| HDPS
+  REF -->|"reference coadds"| HDPS
+  HDPS -->|"hdps products"| MEAS
+  MEAS -->|"per-frame catalogues"| LINK
   MEAS --> OUT
-  OUT -->|"labelled alerts"| TRAIN
-  TRAIN -.->|"model_bundle"| HDPS
+  LINK --> OUT
+  OUT -.->|"labelled alerts"| TRAIN
+  TRAIN -.->|"trained model bundle"| HDPS
 ```
 
-## 2. One exposure: from the sky to a raw frame
+## 2. The scene: stars on the sky and the night's exposures
+
+`observe.py`, before anything is rendered. Everything it decides is written to `scene/`, which the engine reads.
 
 ```mermaid
-flowchart LR
+flowchart TD
+  classDef argus fill:#dbeafe,stroke:#1e40af,color:#0b1d4a
+  classDef ours fill:#dcfce7,stroke:#166534,color:#052e16
+  classDef out fill:#e5e7eb,stroke:#374151,color:#111827
+
+  OBS["Observation file<br/><small>field · night · stars · place entries · inject section</small>"]:::ours
+
+  DATE["The night: the nearest one the field is up ≥ 3 h<br/><small>observe.py choose_night · night.py · array minimum altitude 32.84°</small>"]:::ours
+  SURVEY["Every exposure of the field that night: time, telescope,<br/>tracking angle, band, field angle; seeing drawn per ratchet<br/><small>survey.py · ArgusSim coverage_exact.covering · draw_seasonal_seeing</small>"]:::argus
+
+  FIELD["Field stars: every Gaia DR3 source within 0.52° of the field<br/><small>stars/&lt;field&gt;_field · observe.py refuses a set built smaller</small>"]:::ours
+  BG["Constant stars: a template SED from each one's Gaia colour, at its distance,<br/>at their real positions (layout real) or scattered (layout random)<br/><small>observe.py write_background</small>"]:::ours
+  PLACE["Placed stars: the variables and transients the file names<br/><small>place entries</small>"]:::ours
+  INJ["Injected stars: random library stars over the readout window,<br/>transients timed into the night, periodic stars at a drawn brightness<br/><small>inject section · observe.py inject (training data)</small>"]:::ours
+  LIB["Star library<br/><small>stars/</small>"]:::ours
+
+  DUST["Dust: E(B−V) in front of each star, at its distance<br/><small>dust.py · Bayestar19 3D map, capped at SFD</small>"]:::ours
+  SCN["scene/: field stars, placed and injected stars, exposure list<br/><small>gaia_dr3_core.ecsv · sources.json · exposures.ecsv · field.json</small>"]:::out
+
+  OBS --> DATE --> SURVEY
+  OBS --> FIELD --> BG
+  OBS --> PLACE
+  OBS -.->|"if inject number > 0"| INJ
+  LIB --> PLACE
+  LIB --> INJ
+  BG --> DUST
+  PLACE --> DUST
+  INJ --> DUST
+  DUST --> SCN
+  SURVEY -->|"exposures.ecsv"| SCN
+```
+
+## 3. One exposure: from the sky to a raw camera frame
+
+`night_movie.py`, once per exposure in the band. Only a readout window of the telescope's sensor around the field is
+made, not the whole 11,648 × 8,742 px sensor.
+
+```mermaid
+flowchart TD
   classDef argus fill:#dbeafe,stroke:#1e40af,color:#0b1d4a
   classDef ours fill:#dcfce7,stroke:#166534,color:#052e16
   classDef toy fill:#fecaca,stroke:#991b1b,color:#450a0a
+  classDef out fill:#e5e7eb,stroke:#374151,color:#111827
 
-  SED["each star's SED now<br/><small>MESA RSP · PHOEBE · sncosmo · templates</small>"]:::ours
-  PHOT["electrons in the band at this airmass<br/><small>ArgusSim ABPhot · SystemThroughput</small>"]:::argus
-  SKY["sky + dark, seeing<br/><small>ArgusSim sky model · seasonal seeing</small>"]:::argus
-  GEOM["star → sensor pixel<br/><small>sensor.Projector: CIRS → array frame → focal plane</small>"]:::ours
-  LAYOUT["telescope layout and axes<br/><small>ArgusSim Layout</small>"]:::argus
-  WIN["readout window, N × N minipix<br/><small>sensor.window · field.window</small>"]:::ours
-  PSF["PSF at each star's field angle<br/><small>ArgusSim ZemaxPSF.with_seeing</small>"]:::argus
-  RENDER["image: PSFs + sky, Poisson, full well, read noise<br/><small>sensor.render</small>"]:::ours
-  CAM["raw frame: uint16, AEGIS header keys<br/><small>camera.py · toy gain, no bias</small>"]:::toy
+  ROW["This exposure: time, telescope, tracking angle, band, seeing, field angle<br/><small>scene/exposures.ecsv</small>"]:::ours
 
-  SED --> PHOT --> RENDER
-  SKY --> RENDER
-  LAYOUT --> GEOM --> WIN --> RENDER
-  PSF --> RENDER
-  RENDER -->|"electrons"| CAM
+  SED["Each star's SED at this moment, reddened by its dust<br/><small>pulsation phase · binary phase · transient light curve · constant template</small>"]:::ours
+  PHOT["Electrons from each star: SED × band throughput × atmosphere at this airmass<br/><small>ArgusSim ABPhot · SystemThroughput</small>"]:::argus
+  SKY["Sky and dark current per pixel: airglow, zodiacal light, starlight, moon<br/><small>ArgusSim sky_components_at · SpectralSky</small>"]:::argus
+
+  GEOM["Where each star lands on this telescope's sensor:<br/>sky → telescope frame (tracking angle) → focal plane → pixel<br/><small>sensor.py Projector · ArgusSim Layout</small>"]:::ours
+  WIN["The readout window: N × N minipixes around the field, kept on the sensor<br/><small>sensor.window · field.window (default 56 ≈ 26′)</small>"]:::ours
+  PSF["Each star's PSF at its own field angle, with this seeing<br/><small>ArgusSim ZemaxPSF.with_seeing · sensor.PSFs</small>"]:::argus
+
+  RENDER["The image in electrons: stars + sky, Poisson noise, full-well clip, read noise<br/><small>sensor.render</small>"]:::ours
+  CAM["The raw camera frame: 16-bit ADU, real AEGIS header keys,<br/>toy gain (full well / 58,000), no bias or overscan<br/><small>camera.py · night_movie.py write_raw_frame</small>"]:::toy
+  RAW["hdps/&lt;band&gt;/raw/&lt;camera&gt;_&lt;UTC&gt;.fits"]:::out
+  PREV["4 × 4-binned preview, for the pipeline movie<br/><small>movie data · chart 6</small>"]:::out
+
+  ROW --> SED --> PHOT -->|"electrons per star"| RENDER
+  ROW --> SKY -->|"electrons per pixel"| RENDER
+  ROW --> GEOM -->|"sensor pixels"| WIN -->|"window pixels"| RENDER
+  ROW --> PSF --> RENDER
+  RENDER -->|"electrons"| CAM -->|"ADU"| RAW
+  RENDER -.-> PREV
 ```
 
-## 3. hdps: the Task chain on each frame
+## 4. hdps on every frame
 
-All of it is hdps's own code, run by its `GPUWorker` on the CPU through the `hdps_full_cpu` branch. The chain is
-`[[hdps.tasks]]` in the observation file.
+hdps's own worker (`GPUWorker`) running hdps's production Task chain, unchanged, on the CPU through the
+`hdps_full_cpu` branch. One worker per band. The chain and every setting are `[[hdps.tasks]]` in the observation file.
+A frame that a Task fails on is skipped; the rest carry on.
 
 ```mermaid
 flowchart TD
@@ -91,56 +153,54 @@ flowchart TD
   classDef toy fill:#fecaca,stroke:#991b1b,color:#450a0a
   classDef out fill:#e5e7eb,stroke:#374151,color:#111827
 
-  MAN["ratchet manifests, one source per camera<br/><small>group_images_by_ratchet_camera · ManifestSource</small>"]:::hdps
-  VALKEY["valkey cache: WCS per camera and ratchet<br/><small>fakeredis</small>"]:::toy
-  T1["DataCleanup → ImageReduction"]:::hdps
-  T2["SourceDetection → SourceFilter"]:::hdps
-  T3["ReferenceRetrieval (ATLAS-Refcat2)"]:::hdps
-  T4["LinearWCSSolver → SourceMatching → TPVWCSSolver<br/><small>+ zero point coadd_magzp</small>"]:::hdps
-  T5["LightweightFITSOutput"]:::hdps
-  T6["Reprojection onto hdps tiles"]:::hdps
-  T7["CoaddTap: ratchet coadd per tile"]:::hdps
-  T8["SFFTSubtraction vs reference coadd<br/><small>mask_no_coverage_in_fit · mask_bright_stars</small>"]:::hdps
-  T9["DiffDetection → TransientOutput"]:::hdps
-  T10["AlertVetting: detect, features, real/bogus score"]:::hdps
-  RB["real/bogus model<br/><small>AllReal (score 1) or a trained RF bundle</small>"]:::toy
-  KAFKA["Kafka stream<br/><small>Avro files: alert_files.py</small>"]:::toy
-  T11["TileImageOutput"]:::hdps
-  P1["solved FITS: SOURCES, WCS, magzp"]:::out
-  P2["ratchet coadds"]:::out
-  P3["transient_catalog"]:::out
-  P4["alert_catalog + alert_stamps"]:::out
-  P5["science + difference tiles"]:::out
+  RAW["Raw frames<br/><small>chart 3</small>"]:::out
+  MAN["Frames grouped by camera and ratchet<br/><small>group_images_by_ratchet_camera · ManifestSource</small>"]:::hdps
+  CACHE["WCS cache: each camera's solution, reused within a ratchet<br/><small>worker · valkey → fakeredis</small>"]:::toy
 
-  MAN --> T1 --> T2 --> T3 --> T4 --> T5 --> T6 --> T7 --> T8 --> T9 --> T10 --> T11
-  VALKEY <-.-> T4
+  subgraph CHAIN["hdps's Task chain, in order: each Task hands the frame, then its tiles, to the next"]
+    T1["Clean and reduce: ADU → electrons, saturated pixels flagged<br/><small>DataCleanup · ImageReduction</small>"]:::hdps
+    T2["Find sources on the frame<br/><small>SourceDetection · SourceFilter</small>"]:::hdps
+    T3["Load reference stars around the frame<br/><small>ReferenceRetrieval · ATLAS-Refcat2</small>"]:::hdps
+    T4["Solve the WCS, with distortion; fit the zero point<br/><small>LinearWCSSolver · SourceMatching · TPVWCSSolver</small>"]:::hdps
+    T5["Write the solved frame<br/><small>LightweightFITSOutput</small>"]:::hdps
+    T6["Resample onto hdps's fixed sky tiles (30′ each; a frame touches 4–9)<br/><small>Reprojection</small>"]:::hdps
+    T7["Add each tile to this camera's ratchet coadd<br/><small>CoaddTap</small>"]:::hdps
+    T8["Subtract the reference coadd: fit a matching kernel and the sky,<br/>keeping no-data pixels out of the fit;<br/>bright-star footprints hidden from detection<br/><small>SFFTSubtraction</small>"]:::hdps
+    T9["Detect candidates on the difference<br/><small>DiffDetection · TransientOutput</small>"]:::hdps
+    T10["Vet alerts: its own detection on the difference, features,<br/>real/bogus score, keep those above the cut<br/><small>AlertVetting</small>"]:::hdps
+    T11["Write the movie tile's science and difference images<br/><small>TileImageOutput</small>"]:::hdps
+    T1 --> T2 --> T3 --> T4 --> T5 --> T6 --> T7 --> T8 --> T9 --> T10 --> T11
+  end
+
+  REFC["Reference coadds<br/><small>chart 5</small>"]:::out
+  RB["Real/bogus model: no bundle → every score 1;<br/>a trained bundle → hdps's RFBundleClassifier<br/><small>hdps_worker.py AllReal · chart 7</small>"]:::toy
+  FIN["Ratchet coadds closed at each ratchet change and at the end<br/><small>worker finalize_ratchet · CoaddWriter</small>"]:::hdps
+  KAFKA["Alert packets for the accepted alerts only: Avro, the public<br/>argus.alert schema, one file per exposure<br/><small>alert_files.py, in place of Kafka</small>"]:::toy
+
+  subgraph PRODUCTS["Written to hdps/&lt;band&gt;/"]
+    P1["solved frames: sources, WCS, zero point<br/><small>solved/*_solved.fits</small>"]:::out
+    P2["ratchet coadds<br/><small>ratchet_*_coadd.fits</small>"]:::out
+    P3["transient_catalog<br/><small>transients_*.parquet</small>"]:::out
+    P4["alert_catalog + alert stamps<br/><small>alerts_*.parquet · alerts_stamps_*.npz</small>"]:::out
+    P5["science + difference tiles<br/><small>epoch_*_tile_*.fits</small>"]:::out
+    P6["alert packets<br/><small>alerts/&lt;exposure&gt;.avro</small>"]:::out
+  end
+
+  RAW --> MAN --> T1
+  CACHE <-.-> T4
+  REFC -->|"reference_dir"| T8
   RB -.-> T10
-  T10 -.->|"packets"| KAFKA
   T5 --> P1
-  T7 -->|"finalize at ratchet change"| P2
+  T7 --> FIN --> P2
   T9 --> P3
   T10 --> P4
+  T10 --> KAFKA --> P6
   T11 --> P5
 ```
 
-## 4. The reference night
+## 5. The reference night
 
-```mermaid
-flowchart LR
-  classDef ours fill:#dcfce7,stroke:#166534,color:#052e16
-  classDef hdps fill:#fde68a,stroke:#92400e,color:#3b1d02
-  classDef out fill:#e5e7eb,stroke:#374151,color:#111827
-
-  RN["the night before: same field and stars,<br/>transients and injection left out<br/><small>observe.py make_reference</small>"]:::ours
-  RX["exposures → raw frames<br/><small>chart 2</small>"]:::ours
-  RH["hdps worker up to CoaddTapTask<br/><small>hdps_worker.run(stop_after)</small>"]:::hdps
-  RC["ratchet coadds per (camera, ratchet, tile)<br/><small>reference/hdps/&lt;band&gt;/coadds</small>"]:::out
-  PICK["one coadd per tile: the deepest<br/><small>CoaddReferenceProvider</small>"]:::hdps
-
-  RN --> RX --> RH --> RC --> PICK -->|"SFFT reference_dir"| SCI["science night, chart 3"]
-```
-
-## 5. Outputs, truth and real/bogus training
+What SFFT subtracts against. Made only when `output.alerts` is on (the default), before the science night.
 
 ```mermaid
 flowchart TD
@@ -148,33 +208,88 @@ flowchart TD
   classDef hdps fill:#fde68a,stroke:#92400e,color:#3b1d02
   classDef out fill:#e5e7eb,stroke:#374151,color:#111827
 
-  SOLVED["solved FITS"]:::out
-  ALERTS["alert_catalog · stamps · .avro"]:::out
-  TILES["science + difference tiles"]:::out
-  CAT["per-frame catalogues: mag = coadd_magzp − 2.5 log10 flux<br/><small>measure_frame</small>"]:::ours
-  TRUTH["truth labels: simulated star, class, true flux change<br/><small>pipeline/truth.py</small>"]:::ours
-  LC["catalogue.csv + light curves<br/><small>pipeline/lightcurves.py</small>"]:::ours
-  AT["&lt;name&gt;_night_&lt;band&gt;.alerts.csv<br/><small>alert_table + label_alerts</small>"]:::out
-  MOV["field movie + pipeline movie<br/><small>night_movie.py · pipeline_movie.py</small>"]:::out
-  INJ["many injected observations<br/><small>make_training_data.py</small>"]:::ours
-  SET["training_set.parquet<br/><small>rb_training_set.py</small>"]:::ours
-  RF["random forest → hdps bundle<br/><small>train_rb.py</small>"]:::ours
-  USE["AlertVettingTask model_bundle, score_cut fa10"]:::hdps
+  RN["The night(s) before: same field and stars;<br/>transients left out; injected variables kept, no new injection<br/><small>observe.py make_reference · night.reference_nights (default 1)</small>"]:::ours
+  RX["Exposures rendered as raw frames<br/><small>chart 3</small>"]:::ours
+  RH["hdps up to the coadd step, nothing after<br/><small>hdps_worker.run(stop_after=CoaddTapTask)</small>"]:::hdps
+  RC["Ratchet coadds, one per camera, ratchet and tile<br/><small>reference/hdps/&lt;band&gt;/coadds/</small>"]:::out
+  PICK["For each tile, SFFT takes one coadd: the deepest<br/><small>hdps CoaddReferenceProvider</small>"]:::hdps
+  SCI["Science night's subtraction<br/><small>chart 4, SFFTSubtraction</small>"]:::hdps
 
-  SOLVED --> CAT --> LC
-  TRUTH --> CAT
-  ALERTS --> AT
-  TRUTH --> AT
-  TILES --> MOV
-  CAT --> MOV
-  INJ --> AT
-  AT --> SET --> RF --> USE
+  RN --> RX --> RH --> RC --> PICK -->|"reference tile"| SCI
+```
+
+## 6. Measurements and outputs
+
+Per band, `night_movie.py` reads hdps's products once its worker has finished; after both bands, `observe.py` links
+the light curves. hdps's bulky per-frame files (raw frames, solved frames, tile images) are deleted once read, unless
+`output.raw` is on.
+
+```mermaid
+flowchart TD
+  classDef ours fill:#dcfce7,stroke:#166534,color:#052e16
+  classDef out fill:#e5e7eb,stroke:#374151,color:#111827
+
+  subgraph IN["From hdps (chart 4) and the render (chart 3)"]
+    SOLVED["solved frames"]:::out
+    ALERTCAT["alert_catalog · alert stamps · Avro packets"]:::out
+    TILES["science + difference tiles"]:::out
+    PREV["raw-frame previews"]:::out
+  end
+  TRUTH["Truth: which simulated star is where, its true brightness and change<br/><small>pipeline/truth.py · the scene</small>"]:::ours
+
+  CAL["Each frame's catalogue: RA/Dec from hdps's WCS,<br/>mag = hdps zero point − 2.5 log10 flux, each detection's simulated star<br/><small>night_movie.py measure_frame</small>"]:::ours
+  ATAB["Every alert candidate with its features, alertId, stamps<br/>location and truth class (transient, variable, constant, none)<br/><small>night_movie.py alert_table · truth.label_alerts</small>"]:::ours
+  MD["Movie data: block cut-outs, raw previews, detections, WCS,<br/>measurements, alert marks<br/><small>output.movie_data</small>"]:::ours
+  LC["Both bands linked by position into objects<br/><small>pipeline/lightcurves.py · after both bands</small>"]:::ours
+
+  O1["catalogues/&lt;name&gt;_&lt;band&gt;_NNNN.parquet<br/>&lt;name&gt;_night_&lt;band&gt;.photometry.csv"]:::out
+  O2["&lt;name&gt;_night_&lt;band&gt;.alerts.csv"]:::out
+  O3["&lt;name&gt;_night_&lt;band&gt;.movie.joblib"]:::out
+  O4["field movie + pipeline movie (.mp4)<br/><small>now if output.movie; later with tools/render_movies.py</small>"]:::out
+  O5["catalogue.csv + lightcurves/NNNNNN.csv"]:::out
+
+  SOLVED --> CAL
+  TRUTH --> CAL
+  CAL --> O1
+  ALERTCAT --> ATAB
+  TRUTH --> ATAB
+  ATAB --> O2
+  TILES --> MD
+  PREV --> MD
+  CAL --> MD
+  ALERTCAT -->|"accepted alerts"| MD
+  MD --> O3 -.-> O4
+  O1 --> LC --> O5
+```
+
+## 7. Real/bogus: training the model and using it
+
+Without a model every candidate scores 1, so every star that subtracts imperfectly becomes an alert. The simulation
+knows what is real, so it can make the training set.
+
+```mermaid
+flowchart TD
+  classDef ours fill:#dcfce7,stroke:#166534,color:#052e16
+  classDef hdps fill:#fde68a,stroke:#92400e,color:#3b1d02
+  classDef out fill:#e5e7eb,stroke:#374151,color:#111827
+
+  RUNS["Many training observations: one night per real Gaia field,<br/>200 injected library stars each, no movies, several at once<br/><small>tools/make_training_data.py → observe.py</small>"]:::ours
+  AT["Every candidate with its truth, per band<br/><small>&lt;name&gt;_night_&lt;band&gt;.alerts.csv · chart 6</small>"]:::out
+  LABEL["Label each candidate. Real: a transient or variable whose true change<br/>is ≥ 3 flux errors. Bogus: a constant-star residual, or nothing there.<br/>Anything else: left out<br/><small>tools/rb_training_set.py</small>"]:::ours
+  SET["training_set.parquet + .json<br/><small>hdps's feature names and order; missing values as −999</small>"]:::out
+  TRAIN["Train a random forest; test it on whole fields it never saw<br/>(whole exposures if fewer than 4 fields); set the cuts: fa1 / fa10 / fa100 false alerts per deg² per exposure<br/><small>tools/train_rb.py · scikit-learn</small>"]:::ours
+  BUNDLE["hdps model bundle: manifest.json + model.joblib<br/><small>data/rb/…/bundle</small>"]:::out
+  USE["In an observation file: AlertVetting model_bundle and score_cut = fa10<br/><small>hdps RFBundleClassifier scores every candidate · chart 4</small>"]:::hdps
+
+  RUNS --> AT --> LABEL --> SET --> TRAIN --> BUNDLE --> USE
 ```
 
 ## Editing
 
-- **A new step:** add a node with the right colour class, and arrows in and out. Write the code in `<small>`, and
-  the data handed on as the arrow's label.
-- **A stand-in replaced by the real thing** (a trained model, real camera electronics): change its class from `toy`
-  to `hdps` or `ours`.
-- **Keep the overview small.** Detail goes in the stage charts.
+- **A new step:** add a box with its colour class, and arrows in and out. Write what it does first, then the code in
+  `<small>`; label each arrow with the data handed on.
+- **A stand-in replaced by the real thing** (a trained model, real camera electronics, a valkey server, Kafka): change
+  its class from `toy` to `hdps` or `ours`.
+- **Keep the overview small.** Detail belongs in the stage charts.
+- **Check it renders** before committing: `npx -y @mermaid-js/mermaid-cli -i docs/PIPELINE.md -o /tmp/pipeline.md`
+  writes one image per chart.

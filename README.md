@@ -43,6 +43,8 @@ Kafka, every real/bogus score 1 until a model bundle is given (`tools/train_rb.p
 | block | 9 × 9 minipix = 253″ | the movie's image panels only |
 | science / difference image | per tile | a frame reprojected onto a tile; minus the matched reference |
 
+The whole flow, step by step and with the code for each step: [docs/PIPELINE.md](docs/PIPELINE.md) (flow charts).
+
 ## Setup
 
 Requirements: a working MESA install with `$MESA_DIR` set and its colors data, ArgusSim installed in the same
@@ -398,6 +400,7 @@ studies/                characterisation studies (the photometric offset study)
 demo/                   the interactive HTML page and its validation
 docs/ASSUMPTIONS.md     what the night movies model and assume
 docs/LIBRARY.md         the star library: what newton builds (MESA and non-MESA), coverage, limits
+docs/PIPELINE.md        flow charts of the whole pipeline, from the stars to the alerts and the real/bogus model
 config.toml             machine settings          analysis.toml   Fisher-analysis inputs
 templates/, vendor/     the 3D CMD page's template and its bundled plotly
 stars/                  built stars (not in git; rebuilt from the star files)
