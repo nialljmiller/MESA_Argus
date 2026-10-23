@@ -4,9 +4,14 @@ image), and the airmass offset applied to them.
 Stand-ins, each stated on screen:
 - the star's PSF: ArgusSim's (ZemaxPSF at the frame's seeing and field angle) resampled onto hdps's tile grid
   (0.879"), without the small rotation between the sensor and the tile;
-- its noise: Poisson in the electrons it adds, the same draw in the science and the difference image (the reference
-  is deep); the frame's own noise is hdps's;
+- its brightness on hdps's tile: hdps's reprojection keeps surface brightness (electrons per sensor-pixel area), so a
+  star's light summed over the tile is its electrons x (sensor pixel / tile pixel)^2 = 1.31; found by comparing an
+  injected star hdps rendered with the same light added here;
+- its noise: photon noise with the variance-to-level ratio of the frame's own sky (hdps's interpolation smooths the
+  noise: about 0.67), the same draw in the science and the difference image (the reference is deep);
 - in the difference image it adds (now - reference) x PSF: SFFT's match taken as perfect for it;
+- saturation: a tile pixel (surface brightness, so on the sensor's scale) holds at most the sensor's full well; the
+  light cut off a saturated core is missing from the difference image too;
 - airmass offset dX >= 0 (observing it lower): every frame dimmed by the band's extinction, blurred to the seeing at
   the new airmass (X^0.6), and given the extra sky noise (sky ~ X); the field's own alerts and photometry stay as
   observed.
@@ -31,6 +36,12 @@ def plate():
     from argus_sim import c as cfg
 
     return float(cfg.telescope.plate_scale)
+
+
+def fullwell():
+    from argus_sim import c as cfg
+
+    return float(cfg.telescope.fullwell)
 
 
 @lru_cache(maxsize=4096)
@@ -87,34 +98,54 @@ def _extinction_ratio(band, x0, x1):
     return float(e1 / e0)
 
 
-def frame(cut, band, seeing, field_angle, airmass, star_e, ref_e, dx, dy, d_airmass=0.0, seed=0, sky=None):
+def area_ratio():
+    """Sensor pixel area over tile pixel area: a star of N electrons sums to N x this on hdps's tile."""
+    return (plate() / SKY_PX) ** 2
+
+
+def noise_ratio(cut):
+    """(sky level, its noise variance / level) of a frame's science cut-out: what the photon noise of light added
+    to it must have."""
+    S = np.asarray(cut["science"], np.float64)
+    S = S[np.isfinite(S)]
+    sky = float(np.median(S))
+    return sky, float((1.4826 * np.median(np.abs(S - sky))) ** 2 / max(sky, 1e-9))
+
+
+def frame(cut, band, seeing, field_angle, airmass, star_e, ref_e, dx, dy, d_airmass=0.0, seed=0, sky=None, q=None):
     """One frame's cut-outs with the edited star added (and the airmass offset): dict(science, difference, extent,
-    psf (rows, cols, values), added (star electrons per pixel), seeing (now), keep (the extinction factor applied)). star_e / ref_e: the star's electrons in this exposure
-    and in the reference (already at the offset airmass); sky: the science cut-out's sky level (its median if not
-    given)."""
+    psf (rows, cols, values), added (star electrons per pixel), seeing (now), keep (the extinction factor applied),
+    saturated (the star's core reached the full well)). star_e / ref_e: the star's electrons in this exposure
+    and in the reference (already at the offset airmass); sky, q: the science cut-out's sky level and its noise
+    variance / level (noise_ratio, computed if not given)."""
     from scipy.ndimage import gaussian_filter
 
     rng = np.random.default_rng(seed)
+    if sky is None or q is None:
+        sky, q = noise_ratio(cut)
     sci = np.array(cut["science"], dtype=np.float64)
     diff = np.array(cut["difference"], dtype=np.float64)
     extent, shape = cut["extent"], sci.shape
     seeing_now, keep = seeing, 1.0
     if d_airmass > 0:  # observed lower: extinction, broader seeing, more sky
         x1 = airmass + d_airmass
-        sky = float(np.nanmedian(sci)) if sky is None else float(sky)
         keep = extinction_ratio(band, airmass, x1)
         seeing_now = seeing * (x1 / airmass) ** 0.6
         sigma = np.sqrt(max(seeing_now ** 2 - seeing ** 2, 0.0)) / 2.3548 / SKY_PX
         stars = np.nan_to_num(sci - sky)
         sci = gaussian_filter(stars, sigma) * keep + sky * (x1 / airmass)
         diff = gaussian_filter(np.nan_to_num(diff), sigma) * keep
-        extra = rng.normal(0.0, np.sqrt(max(sky * (x1 / airmass - 1.0), 0.0)), shape)
+        extra = rng.normal(0.0, np.sqrt(max(q * sky * (x1 / airmass - 1.0), 0.0)), shape)
         sci += extra
         diff += extra
     rows, cols, psf = psf_on_tile(band, seeing_now, field_angle, dx, dy, extent, shape)
-    added = star_e * psf
-    noise = rng.normal(0.0, 1.0, psf.shape) * np.sqrt(np.clip(added, 0.0, None))
+    area = area_ratio()
+    added = star_e * area * psf
+    noise = rng.normal(0.0, 1.0, psf.shape) * np.sqrt(q * np.clip(added, 0.0, None))
     sci[rows, cols] += added + noise
-    diff[rows, cols] += (star_e - ref_e) * psf + noise
+    diff[rows, cols] += (star_e - ref_e) * area * psf + noise
+    excess = np.clip(sci[rows, cols] - fullwell(), 0.0, None)  # the sensor's full well: a saturated core is cut off
+    sci[rows, cols] -= excess
+    diff[rows, cols] -= excess
     return dict(science=sci, difference=diff, extent=extent, psf=(rows, cols, psf), added=added,
-                seeing=seeing_now, keep=keep)
+                seeing=seeing_now, keep=keep, saturated=bool(excess.any()))

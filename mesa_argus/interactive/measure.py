@@ -104,10 +104,32 @@ def window_stats(cut, dx, dy):
     return float((1.4826 * np.median(np.abs(D - med))) ** 2), float(np.nanmedian(np.asarray(cut["science"])[ys, xs]))
 
 
-def candidate(composed, dx, dy, fwhm_px, plane_rms=None, stats=None):
+def bright_star_mask(science, reference, threshold, base, growth):
+    """hdps's bright-star detection mask (SFFTSubtractionTask._bright_star_mask, with mask_bright_stars): True where
+    detection is suppressed. Pixels above threshold in the science or the reference, grown by base px; then each
+    magnitude brighter in the reference grows its pixels' mask by growth px more."""
+    from scipy.ndimage import maximum_filter
+
+    def dilate(m, r):
+        return maximum_filter(m, size=2 * int(r) + 1) if r > 0 else m
+
+    bad = dilate((reference > threshold) | (science > threshold), base)
+    step, k, peak = 10 ** 0.4, 1, float(np.nanmax(reference)) if np.isfinite(reference).any() else 0.0
+    while growth > 0 and threshold * step ** k < peak and k <= 12:
+        bad |= dilate(reference > threshold * step ** k, base + growth * k)
+        k += 1
+    return bad
+
+
+def candidate(composed, dx, dy, fwhm_px, plane_rms=None, stats=None, mask=None):
     """hdps's alert features of the candidate within 2" of the star on the composed difference image, or None.
     fwhm_px, plane_rms: what hdps used and recorded for the frame (the field's candidates' fwhm_est and
-    plane_rms_norm); stats: window_stats of the frame (computed here if not given)."""
+    plane_rms_norm); stats: window_stats of the frame (computed here if not given); mask: (threshold, base, growth)
+    of hdps's bright-star detection mask when the run used it. hdps compares the tiles as they reach it, sky
+    included (its docstring says sky-subtracted; fitted on a real run: this way the mask covers an injected dwarf nova
+    hdps never detected in every frame, and none of the 441 places hdps did make a candidate; sky-subtracted, the
+    dwarf nova in only half the frames). The reference is taken as science - difference (the PSF-matched reference
+    the difference was made with)."""
     from hdps.alerts.features import detect_and_featurize
 
     diff = np.asarray(composed["difference"], np.float64)
@@ -120,6 +142,11 @@ def candidate(composed, dx, dy, fwhm_px, plane_rms=None, stats=None):
     if valid.sum() < 600 or not np.isfinite(noise2):
         return None
     var = noise2 + SOURCE_VARIANCE * np.clip(np.nan_to_num(S - sky), 0.0, None)
+    if mask is not None:  # hdps gives these pixels infinite variance: no detection there
+        science = np.nan_to_num(S)
+        valid &= ~bright_star_mask(science, science - np.nan_to_num(D), *mask)
+        if valid.sum() < 600:
+            return None
     if plane_rms is not None and np.isfinite(plane_rms) and plane_rms > 0:
         zn = np.where(valid, D, np.nan) / np.sqrt(var)
         var = var * (float(np.nanstd(zn[np.abs(zn) < 10])) / plane_rms) ** 2

@@ -62,7 +62,9 @@ class Night:
         self.span = (float(p["bjd"][0]), float(p["bjd"][-1]))
         self.field_alerts = self._score_field()
         self.hdps_fwhm, self.hdps_plane = self._hdps_frame_values()
-        self.sky = np.array([np.nan if c is None else float(np.nanmedian(c["science"])) for c in p["cutouts"]])
+        sky_q = [(np.nan, np.nan) if c is None else compose.noise_ratio(c) for c in p["cutouts"]]
+        self.sky, self.q = np.array([a for a, _ in sky_q]), np.array([b for _, b in sky_q])
+        self.mask = self._mask_settings()
         self._stats = {}  # (frame, window, airmass offset) -> the frame's noise and sky there (measure.window_stats)
         self._light = {}  # state -> the star's light at every frame (EditableStar.evaluate)
         self.state = self.d = self.result = None
@@ -81,6 +83,18 @@ class Night:
             fwhm.append(float(np.median(F[:, i_f])) if len(F) else fwhm_from_seeing(None))
             plane.append(float(np.median(F[:, i_p])) if len(F) else np.nan)
         return np.array(fwhm), np.array(plane)
+
+    def _mask_settings(self):
+        """(threshold, base px, growth px) of hdps's bright-star detection mask as the run had it (the pack's SFFT
+        settings, else the observation defaults), or None when the run did not mask."""
+        from mesa_argus import schema
+
+        sfft = self.p.get("sfft") or next(t["config"] for t in schema.TASKS if t["type"] == "SFFTSubtractionTask")
+        if not sfft.get("mask_bright_stars", False):
+            return None
+        base = sfft.get("mask_dilation")
+        base = int(base) if isinstance(base, (int, float)) else int(sfft.get("kernel_half_width", 6))
+        return float(sfft.get("bright_star_threshold", 5000.0)), base, int(sfft.get("mask_dilation_growth", 4))
 
     def _score_field(self):
         """Per frame: the field's candidates the model accepts at the cut, as the movie's (key, dx, dy)."""
@@ -126,17 +140,17 @@ class Night:
         return compose.frame(c, self.band, float(p["seeing"][j]), float(p["survey"]["field_angle"][j]),
                              float(p["airmass"][j]), float(star["electrons"][self.band][n]),
                              float(star["reference"][self.band][n]), s.dx, s.dy, d_airmass=d_airmass,
-                             seed=seed * 100_003 + n, sky=self.sky[n])
+                             seed=seed * 100_003 + n, sky=self.sky[n], q=self.q[n])
 
     def measure_frames(self, state, ns):
-        """[(n, (mag, err), candidate features or None)] of the star in frames ns, measured as hdps would."""
+        """[(n, (mag, err, saturated), candidate features or None)] of the star in frames ns, measured as hdps would."""
         s, d_airmass, _ = state
         p = self.p
         out = []
         for n in ns:
             comp = self.compose(state, n)
             if comp is None:
-                out.append((n, (np.nan, np.nan), None))
+                out.append((n, (np.nan, np.nan, 0.0), None))
                 continue
             j, c = self.frames[n], p["cutouts"][n]
             zp = p["zp"][n] + 2.5 * np.log10(comp["keep"])  # hdps recalibrates every frame: extinction is absorbed
@@ -146,7 +160,8 @@ class Night:
             key = (n, ys.start, xs.start, round(d_airmass, 3))
             if key not in self._stats:
                 self._stats[key] = measure.window_stats(c if d_airmass == 0 else comp, s.dx, s.dy)
-            out.append((n, (m, e), measure.candidate(comp, s.dx, s.dy, fwhm, self.hdps_plane[n], self._stats[key])))
+            out.append((n, (m, e, float(comp["saturated"])), measure.candidate(comp, s.dx, s.dy, fwhm, self.hdps_plane[n], self._stats[key],
+                                                     self.mask)))
         return out
 
     def update(self, s: Settings, d_airmass=0.0, seed=0, workers=None):
@@ -234,7 +249,8 @@ class Night:
         self.state, self._exposure = state, {}
         self.result = dict(mag=meas[:, 0], err=meas[:, 1], true=true[B][E], score=np.array([sc for sc, _ in scored]),
                            alerted=np.array([a for _, a in scored]), template=star["template"],
-                           n_field_alerts=np.array([len(a) for a in self.field_alerts]), meas=meas, cands=cands)
+                           n_field_alerts=np.array([len(a) for a in self.field_alerts]), meas=meas, cands=cands,
+                           saturated=meas[:, 2] > 0)
         return self.result
 
     def exposure(self, n):

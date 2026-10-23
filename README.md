@@ -332,8 +332,14 @@ photon noise, and measured with hdps's own source detector and alert features. I
 catalogue of each frame. The real/bogus model then scores E and the field's candidates.
 
 The feature inputs that the cut-outs lack (variance plane, FWHM, window) are fitted to reproduce hdps's features.
-Fitted this way, the same code gives hdps's own accept/reject on 96% of hdps's candidates in a real run. The note
-under the controls lists every simplification. A change recomputes the night in about 1 s; worker processes draw
+Fitted this way, the same code gives hdps's own accept/reject on 96% of hdps's candidates in a real run. E itself was
+checked against stars injected into a real run and measured by hdps: the same light, on empty sky next to them, gives
+the same photometry within 0.01 mag (median and scatter) and the same alert decisions (97% and 100% of frames).
+Two things that check found, both now reproduced:
+- hdps's tiles carry surface brightness, so a star's flux on a tile is its electrons × 1.31 (the pixel-area ratio).
+- hdps's bright-star mask compares tiles with the sky still in them. Anything brighter than about β 15 cannot alert.
+
+The note under the controls lists every simplification. A change recomputes the night in about 1 s; worker processes draw
 the frames for Play.
 
 ```bash

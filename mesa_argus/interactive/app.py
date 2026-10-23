@@ -34,11 +34,14 @@ WORDS = {  # each type's slider names: magnitude, amplitude, period/timescale
 }
 STAND_INS = ("Everything except star E is one real hdps night (reduction, WCS, reprojection, SFFT difference, "
              "detection, alert features). Star E is added to hdps's images afterwards: ArgusSim's PSF at each frame's "
-             "seeing on hdps's tile grid, with its photon noise; in the difference image as (now − reference) × PSF "
-             "(SFFT's match taken as perfect for it). It is measured with hdps's source detector (zero point from "
-             "hdps's own catalogue of the frame) and alerted by hdps's alert features and the real/bogus model. "
-             "Airmass +: every image dimmed by the extra extinction, blurred to the worse seeing (∝ X^0.6) and given "
-             "the extra sky noise; the field's own alerts and light curves stay as observed.")
+             "seeing on hdps's tile grid, with its photon noise, up to the sensor's full well; in the difference image "
+             "as (now − reference) × PSF (SFFT's match taken as perfect for it). It is measured with hdps's source "
+             "detector (zero point from hdps's own catalogue of the frame) and alerted by hdps's alert features, "
+             "hdps's bright-star mask and the real/bogus model. Checked against injected stars hdps measured itself: "
+             "the same photometry within 0.01 mag and the same alerts (97% and 100% of frames). As in hdps with its "
+             "bright-star mask, a source brighter than about β 15 does not alert. Airmass +: every image dimmed by "
+             "the extra extinction, blurred to the worse seeing (∝ X^0.6) and given the extra sky noise; the field's "
+             "own alerts and light curves stay as observed.")
 
 
 def available():
@@ -98,7 +101,7 @@ class App:
                                     style={"description_width": "120px", "button_width": "60px"})
         self.kind = W.Dropdown(options=list(templates.TYPES), value="RR Lyrae (RRab)", description="Star type",
                                layout=layout, style=style)
-        self.mag = W.FloatSlider(value=15.0, min=11.0, max=20.0, step=0.1, description="", layout=layout, style=style,
+        self.mag = W.FloatSlider(value=16.5, min=11.0, max=20.0, step=0.1, description="", layout=layout, style=style,
                                  continuous_update=False, readout_format=".1f")
         self.amp = W.FloatSlider(value=0.8, min=0.05, max=3.0, step=0.05, description="", layout=layout, style=style,
                                  continuous_update=False, readout_format=".2f")
@@ -291,6 +294,7 @@ class App:
             f"detected by hdps in {int(found.sum())}/{len(found)} frames"
             + (f" (measured − true {np.median(resid):+.2f} mag, scatter {1.4826 * np.median(np.abs(resid - np.median(resid))):.3f})"
                if found.any() else "")
+            + (f" · saturated in {int(r['saturated'].sum())} frames" if r["saturated"].any() else "")
             + f" · alerted in {int(r['alerted'].sum())} frames · field alerts per frame {np.mean(r['n_field_alerts']):.1f} "
             f"(real/bogus model {Path(self.night.model).parent.name if self.night.model else 'none'}, cut {self.night.cut}) · "
             f"{band} · recomputed in {took:.1f} s" + ("" if workers is not None else " (worker processes loading)"))

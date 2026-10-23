@@ -149,6 +149,15 @@ def cutout_zero_points(out, args, d, frames, mag_max=17.0, match_arcsec=1.5):
     return np.array(zps)
 
 
+def sfft_settings(out):
+    """The run's SFFTSubtractionTask settings that shape what can alert (its bright-star detection mask)."""
+    from mesa_argus import runconfig
+
+    obs = runconfig.resolve(runconfig.load(Path(out) / "observation.toml"))
+    task = next((t for t in obs["hdps"]["tasks"] if t["type"] == "SFFTSubtractionTask"), None)
+    return dict(task["config"]) if task is not None else {}
+
+
 def build(out, band, pack_name):
     """Capture one observation's band and write data/interactive/packs/<pack_name>_<band>.joblib."""
     import joblib
@@ -182,6 +191,7 @@ def build(out, band, pack_name):
         rgb=d["rgb"], dlim=float(d["dlim"]), centre=d["centre"],
         candidates=candidates(nm, out, args, d, frames),
         zp=cutout_zero_points(out, args, d, frames),
+        sfft=sfft_settings(out),
     )
     PACKS.mkdir(parents=True, exist_ok=True)
     path = PACKS / f"{pack_name}_{band}.joblib"
