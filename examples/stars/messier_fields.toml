@@ -1,0 +1,17 @@
+[[set]]
+name = "m3_field"
+generator = "Gaia field"
+ra = 205.548
+dec = 28.377
+
+[[set]]
+name = "m67_field"
+generator = "Gaia field"
+ra = 132.825
+dec = 11.8
+
+[[set]]
+name = "m45_field"
+generator = "Gaia field"
+ra = 56.75
+dec = 24.117

@@ -315,6 +315,38 @@ rerun on its own with `observe.py`; a rerun of the batch skips observations alre
 `make_stars.py --gaia-list RA DEC [--gaia-list RA DEC ...] --write stars.toml --write-batch batch.toml` writes the
 star file and the observation batch for any number of real fields.
 
+### Live notebook
+
+`notebooks/argus_night_live.ipynb` is the field movie, live, with one star you edit. The window is the movie itself
+(`night_movie.draw`): CMD, light curves, hdps's exposure and difference image with the alerts, SEDs. Below it:
+
+- the field: M3, M67 or M45 (the Pleiades), each one precomputed hdps night; the band, β or ρ;
+- star E's type (RRab, RRc, contact binary, detached binary, dwarf nova, SN Ia, microlensing) and its sliders:
+  magnitude, amplitude (a supernova: none), period or timescale; a click on either image moves it;
+- an airmass offset (the same night observed lower);
+- Play, at the movie's frame rate, and a frame slider.
+
+Everything except star E keeps its photometry and alerts from the real hdps run. E is a library template whose
+sliders are exact arithmetic on its integrated tables. It is added to hdps's cut-outs with ArgusSim's PSF and its
+photon noise, and measured with hdps's own source detector and alert features. Its zero point comes from hdps's own
+catalogue of each frame. The real/bogus model then scores E and the field's candidates.
+
+The feature inputs that the cut-outs lack (variance plane, FWHM, window) are fitted to reproduce hdps's features.
+Fitted this way, the same code gives hdps's own accept/reject on 96% of hdps's candidates in a real run. The note
+under the controls lists every simplification. A change recomputes the night in about 1 s; worker processes draw
+the frames for Play.
+
+```bash
+python3 -m ipykernel install --user --name mesa-argus --display-name "MESA_ARGUS (Python 3.14)"   # once
+python observe.py examples/observations/interactive_m3.toml        # one night through hdps, every candidate kept
+python -m mesa_argus.interactive.pack outputs/pseudo_real/interactive_m3 --pack m3   # -> data/interactive/packs/
+python -m mesa_argus.interactive.precompute_templates               # star E's templates (else made when chosen)
+jupyter lab notebooks/argus_night_live.ipynb
+```
+
+A pack is captured from the engine's own movie setup, one band at a time (about 15 minutes). The observation must
+have kept its movie data (`output.movie_data`) and every alert candidate (AlertVettingTask `emit_all_candidates`).
+
 ### Interactive page
 
 `demo/` builds a single offline HTML page of one observation (real Gaia stars, for now) with a control panel,
@@ -376,6 +408,7 @@ mesa_argus/             the Python package (python -m mesa_argus ...)
   alert_files.py          hdps's alert packets written as Avro files (in place of Kafka)
   pipeline_movie.py       the pipeline movie
   pipeline/               what is added after hdps: lightcurves (detections linked into objects), truth (scoring)
+  interactive/            the live notebook: templates, the edited star, its measurement, field packs, the app
   sep_photometry.py       the earlier SExtractor (SEP) photometry (the demo's validation, the offset study)
   rsp.py                  MESA RSP pulsator models
   binary.py               PHOEBE eclipsing-binary models
@@ -398,6 +431,7 @@ examples/               star files (examples/stars/) and observation files (exam
 tools/                  batch runner, star-library grid, newton job queue, dust-map download
 studies/                characterisation studies (the photometric offset study)
 demo/                   the interactive HTML page and its validation
+notebooks/              the live notebook (argus_night_live.ipynb)
 docs/ASSUMPTIONS.md     what the night movies model and assume
 docs/LIBRARY.md         the star library: what newton builds (MESA and non-MESA), coverage, limits
 docs/PIPELINE.md        flow charts of the whole pipeline, from the stars to the alerts and the real/bogus model

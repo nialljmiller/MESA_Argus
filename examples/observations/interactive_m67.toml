@@ -1,0 +1,69 @@
+# Interactive field pack: M67, an old open cluster. One real night through hdps, both bands, nothing placed or injected; the
+# movie data saved, every alert candidate kept with its features (the app re-scores them with any model).
+[field]
+name = "interactive_m67"
+ra = 132.825
+dec = 11.8
+block = 9
+
+[night]
+date = "2026-02-01"
+nights = 1
+
+[stars]
+background = "m67_field"
+layout = "real"
+
+[output]
+movie = false
+pipeline_movie = false
+
+[[hdps.tasks]]
+type = "DataCleanupTask"
+
+[[hdps.tasks]]
+type = "ImageReductionTask"
+
+[[hdps.tasks]]
+type = "SourceDetectionTask"
+
+[[hdps.tasks]]
+type = "SourceFilterTask"
+
+[[hdps.tasks]]
+type = "ReferenceRetrievalTask"
+
+[[hdps.tasks]]
+type = "LinearWCSSolverTask"
+
+[[hdps.tasks]]
+type = "SourceMatchingTask"
+
+[[hdps.tasks]]
+type = "TPVWCSSolverTask"
+
+[[hdps.tasks]]
+type = "LightweightFITSOutputTask"
+
+[[hdps.tasks]]
+type = "ReprojectionTask"
+
+[[hdps.tasks]]
+type = "CoaddTapTask"
+
+[[hdps.tasks]]
+type = "SFFTSubtractionTask"
+
+[[hdps.tasks]]
+type = "DiffDetectionTask"
+
+[[hdps.tasks]]
+type = "TransientOutputTask"
+
+[[hdps.tasks]]
+type = "AlertVettingTask"
+[hdps.tasks.config]
+emit_all_candidates = true
+
+[[hdps.tasks]]
+type = "TileImageOutputTask"

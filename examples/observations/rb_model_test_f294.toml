@@ -1,0 +1,75 @@
+# The early real/bogus model (data/rb/early/bundle) in hdps's AlertVettingTask, at the "fa10" operating point
+# (10 false alerts per deg2 per exposure), on f294 (not in its training set) with 60 injected library stars.
+# Every other Task and setting: the production chain's defaults (template.toml).
+[field]
+name = "rb_model_test_f294"
+ra = 294.7844
+dec = -11.6235
+block = 9
+
+[night]
+date = "2026-07-30"
+nights = 1
+
+[stars]
+background = "f294_784m11_623_field"
+layout = "real"
+
+[inject]
+number = 60
+seed = 7
+
+[output]
+stride = 10
+
+[[hdps.tasks]]
+type = "DataCleanupTask"
+
+[[hdps.tasks]]
+type = "ImageReductionTask"
+
+[[hdps.tasks]]
+type = "SourceDetectionTask"
+
+[[hdps.tasks]]
+type = "SourceFilterTask"
+
+[[hdps.tasks]]
+type = "ReferenceRetrievalTask"
+
+[[hdps.tasks]]
+type = "LinearWCSSolverTask"
+
+[[hdps.tasks]]
+type = "SourceMatchingTask"
+
+[[hdps.tasks]]
+type = "TPVWCSSolverTask"
+
+[[hdps.tasks]]
+type = "LightweightFITSOutputTask"
+
+[[hdps.tasks]]
+type = "ReprojectionTask"
+
+[[hdps.tasks]]
+type = "CoaddTapTask"
+
+[[hdps.tasks]]
+type = "SFFTSubtractionTask"
+
+[[hdps.tasks]]
+type = "DiffDetectionTask"
+
+[[hdps.tasks]]
+type = "TransientOutputTask"
+
+[[hdps.tasks]]
+type = "AlertVettingTask"
+[hdps.tasks.config]
+model_bundle = "data/rb/early/bundle"
+score_cut = "fa10"
+emit_all_candidates = true
+
+[[hdps.tasks]]
+type = "TileImageOutputTask"
