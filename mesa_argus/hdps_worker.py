@@ -9,7 +9,8 @@ orchestrator run it, without Ray (the class itself, which Ray only wraps):
 
 Toys, each standing in for a piece hdps runs against that does not exist here:
 - valkey: an in-process fakeredis server (hdps's own tests use fakeredis) behind the worker's cache, DLQ and metrics;
-- real/bogus: AllReal, every candidate scored 1 (no trained model; decision 2026-10-20);
+- real/bogus: with no model_bundle, AllReal (every candidate scored 1); with one (tools/train_rb.py), hdps's own
+  RFBundleClassifier loads it;
 - Kafka: mesa_argus.alert_files.AvroFileProducer, hdps's packets written as Avro files.
 """
 from pathlib import Path
@@ -90,7 +91,8 @@ def run(obs, raw_dir, out_dir, reference_dir=None, stop_after=None, worker_id="m
     stream = AvroFileProducer()
     for task in worker._pipeline._tasks:
         if type(task).__name__ == "AlertVettingTask":
-            task._classifier = AllReal()
+            if not task.model_bundle:  # no trained bundle: every candidate scores 1; else hdps's RFBundleClassifier
+                task._classifier = AllReal()
             task._producer = stream  # hdps builds the packets; the file sink replaces Kafka
     groups, skipped = group_images_by_ratchet_camera(sorted(Path(raw_dir).glob("*.fits")))
     if skipped:

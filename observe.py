@@ -175,6 +175,64 @@ def placed_distance(p, folder, meta):
     return 10 ** (dm / 5 + 1)
 
 
+def inject(obs, night_start_bjd, night_end_bjd, half_block):
+    """[inject]: library stars scattered over the readout window, as [[place]] entries (their positions in percent of
+    the block, beyond 0..100 where outside it): a random template from each family in turn; a position in the disc
+    margin_arcsec inside the window's half-width (inside every telescope's window at any rotation) and
+    separation_arcsec from the others; a transient's t0 so the nights fall inside
+    its model (its peak within the nights where the model allows), a periodic star's phase at random and its distance
+    for a mean G drawn from mag_min..mag_max. Returns [(placement, folder, meta)]."""
+    import h5py
+
+    import night_movie
+
+    c = obs["inject"]
+    if not c["number"]:
+        return []
+    rng = np.random.default_rng(c["seed"])
+    pools = {f: sorted(d.name for d in STARS.glob(f"{f}_*") if (d / "meta.json").exists() and (d / "sed.h5").exists())
+             for f in c["families"]}
+    pools = {f: names for f, names in pools.items() if names}
+    if not pools:
+        raise SystemExit(f"[inject]: no built library stars for {c['families']}")
+    half_window = obs["field"]["window"] * night_movie.MINIPIX_PX * night_movie.SKY_PX / 2 - c["margin_arcsec"]
+    families = list(pools)
+    chosen, positions = [], []
+    while len(chosen) < c["number"]:
+        family = families[len(chosen) % len(families)]
+        name = pools[family][rng.integers(len(pools[family]))]
+        folder, meta = built_star(name)
+        for _ in range(100):  # a position clear of the others
+            r, angle = half_window * np.sqrt(rng.uniform()), rng.uniform(0, 2 * np.pi)  # uniform in the disc that
+            dx, dy = r * np.cos(angle), r * np.sin(angle)  # every telescope's window holds, whatever its rotation
+            if all(np.hypot(dx - a, dy - b) >= c["separation_arcsec"] for a, b in positions):
+                break
+        else:
+            raise SystemExit(f"[inject]: {c['number']} stars do not fit {c['separation_arcsec']}\" apart")
+        p = dict(star=name, x=float(50 + dx / (2 * half_block) * 100), y=float(50 + dy / (2 * half_block) * 100), t0=None,
+                 epoch=None, distance=None)
+        with h5py.File(folder / "sed.h5") as h:
+            first, last = float(h["time_days"][0]), float(h["time_days"][-1])
+            wave = h["wavelength"]
+            covers = float(wave[0]) <= 3000.0 and float(wave[-1]) >= 10000.0  # Angstrom: ArgusSim's beta and rho curves
+        if not covers:  # a template ending inside a band (some sncosmo/SALT sources stop at ~9200 A): not this one
+            continue
+        if meta["timing"] == "transient":
+            lo, hi = night_end_bjd - last, night_start_bjd - first  # the nights inside the model
+            if lo > hi:
+                continue  # a model shorter than the nights: not this one
+            peak = float(meta.get("peak_days") or 0.0)
+            want_lo, want_hi = max(lo, night_start_bjd - 3.0 - peak), min(hi, night_end_bjd + 1.0 - peak)
+            p["t0"] = float(rng.uniform(want_lo, want_hi) if want_lo < want_hi else rng.uniform(lo, hi))
+        else:
+            p["epoch"] = float(night_start_bjd + rng.uniform(0, meta["period"]))
+            absolute = catalogue_entry(folder / "sed.h5", 0.0, 10.0)[0]  # mean G at 10 pc, no dust
+            p["distance"] = float(10.0 * 10 ** ((rng.uniform(c["mag_min"], c["mag_max"]) - absolute) / 5))
+        chosen.append((p, folder, meta))
+        positions.append((dx, dy))
+    return chosen
+
+
 def place_stars(placements, scene_dir, night_info, half_width, rng):
     """One row per placed star for the engine (sources.json): its SED file, position, timing and dust (the 3D map at
     its distance on the pointing's sightline; a real star, at its own position and distance); and the
@@ -283,6 +341,7 @@ def make_reference(obs, out, placements):
     n = obs["night"]["reference_nights"]
     reference["night"].update(date=(Date.fromisoformat(obs["night"]["date"]) - timedelta(days=n)).isoformat(), nights=n)
     reference["place"] = [place for place, folder, meta in placements if meta["timing"] != "transient"]
+    reference["inject"]["number"] = 0  # the injected periodic stars are in [[place]] above; no transients
     reference["output"].update(movie=False, pipeline_movie=False, catalogues=False, lightcurves=False)
     ref_out = out / "reference"
     print(f"reference: {n} night(s) from {reference['night']['date']} through hdps's coadd -> {ref_out.relative_to(REPO)}/",
@@ -330,6 +389,11 @@ def observe(obs, out, scene_only=False, engine_options=None):
     start = Time(exposures[0], format="jd", scale="utc")
     night_start_bjd = float(night.bjd_tdb(start, ra, dec, site))
     night_end_bjd = float(night.bjd_tdb(Time(exposures[-1], format="jd", scale="utc"), ra, dec, site)) + 10 / 1440
+    half_block = f["block"] / 2 * night_movie.MINIPIX_PX * night_movie.SKY_PX  # as set_block below makes HALF
+    injected = inject(obs, night_start_bjd, night_end_bjd, half_block)
+    placements += injected
+    if injected:
+        print(f"[inject]: {len(injected)} library stars over the readout window", flush=True)
 
     # the field: HDPS tile and block, dust, background, placed stars
     tile_id, minipix = skymap_shim.radec_to_composite_id(np.array([ra]), np.array([dec]))

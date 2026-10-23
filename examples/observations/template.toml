@@ -370,11 +370,15 @@ type = "AlertVettingTask"
 # allowed: false | true. hdps docker/demo/config.yaml has false (no classifier deployed); true here: the alerts are an
 # output.
 enabled = true
-# allowed: any. "": no real/bogus model exists; every candidate scores 1 (decision 2026-10-20).
+# allowed: any. "": no model, every candidate scores 1 (decision 2026-10-20); else a bundle directory
+# (tools/train_rb.py, or hdps's own), which hdps's RFBundleClassifier loads; score_cut may then name an operating
+# point ("fa10").
 model_bundle = ""
 # allowed: > 0. hdps docker/demo/config.yaml. A threshold in sigma: positive.
 detect_sigma = 3.0
-# allowed: 0.0 .. 1.0. A real/bogus score is a probability. With every score 1, any cut accepts every candidate.
+# allowed: a positive odd integer. A real/bogus score is a probability: a number 0..1, or with a model bundle one of
+# its operating points ("fa10": 10 false alerts per deg2 per exposure, as hdps's production config). With every score
+# 1, any number accepts every candidate.
 score_cut = 0.5
 # allowed: false | true. hdps default.
 emit_all_candidates = false
@@ -454,9 +458,11 @@ noise_seed = 3
 
 # [[place]]: any number of built stars placed in the field (each key below).
 # star: [] allowed any. A built star (stars/<name>/).
-# x: [%] allowed 0 .. 100 | -1. Position across the block, percent from its left edge; -1: random. Ignored for a real
-# Gaia star (its own position).
-# y: [%] allowed 0 .. 100 | -1. Position up the block, percent from its bottom edge; -1: random.
+# x: [%] allowed -1000 .. 1000 | -1. Position across the block, percent from its left edge (outside 0..100: beyond the
+# block, in the readout window, as [inject] places them); -1: random in the block. Ignored for a real Gaia star (its
+# own position).
+# y: [%] allowed -1000 .. 1000 | -1. Position up the block, percent from its bottom edge (as x); -1: random in the
+# block.
 # t0: [] allowed any. Transients: the model's t0 (ISO UTC, "start+D" days after the first exposure, or BJD).
 # epoch: [] allowed any. Periodic stars: a primary eclipse / maximum (as t0).
 # distance: [pc] allowed 0.0 .. 10000000.0. Distance for the dust in front of it (the 3D map); none: behind all the

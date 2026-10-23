@@ -91,8 +91,8 @@ def plate_scale(o):
 def resolve(observation):
     """The observation with every default filled and every value checked (SystemExit naming every problem)."""
     errors = []
-    sections = set(observation) - {"field", "night", "stars", "argussim", "camera", "hdps", "lightcurves", "truth",
-                                   "output", "place"}
+    sections = set(observation) - {"field", "night", "stars", "inject", "argussim", "camera", "hdps", "lightcurves",
+                                   "truth", "output", "place"}
     if sections:
         errors.append(f"unknown sections {sorted(sections)}")
     out = {name: _fill(f"[{name}]", observation.get(name, {}), params, errors) for name, params in S.SECTIONS.items()}

@@ -129,11 +129,13 @@ STARS = [
 
 PLACE = [
     P("star", REQUIRED, "", None, "A built star (stars/<name>/)."),
-    P("x", 50.0, "%", lambda v, r: None if v == -1 or 0 <= v <= 100 else "0..100, or -1 (random)",
-      "Position across the block, percent from its left edge; -1: random. Ignored for a real Gaia star (its own "
-      "position).", allowed_text="0 .. 100 | -1"),
-    P("y", 50.0, "%", lambda v, r: None if v == -1 or 0 <= v <= 100 else "0..100, or -1 (random)",
-      "Position up the block, percent from its bottom edge; -1: random.", allowed_text="0 .. 100 | -1"),
+    P("x", 50.0, "%", lambda v, r: None if v == -1 or -1000 <= v <= 1000 else "-1000..1000, or -1 (random)",
+      "Position across the block, percent from its left edge (outside 0..100: beyond the block, in the readout "
+      "window, as [inject] places them); -1: random in the block. Ignored for a real Gaia star (its own position).",
+      allowed_text="-1000 .. 1000 | -1"),
+    P("y", 50.0, "%", lambda v, r: None if v == -1 or -1000 <= v <= 1000 else "-1000..1000, or -1 (random)",
+      "Position up the block, percent from its bottom edge (as x); -1: random in the block.",
+      allowed_text="-1000 .. 1000 | -1"),
     P("t0", NONE, "", None, "Transients: the model's t0 (ISO UTC, \"start+D\" days after the first exposure, or BJD).",
       optional=True),
     P("epoch", NONE, "", None, "Periodic stars: a primary eclipse / maximum (as t0).", optional=True),
@@ -162,6 +164,26 @@ TRUTH = [
     P("alert_radius", 2.0, "arcsec", (0.5, 6.0), "Scoring only: an alert is the simulated star within this of its "
       "position (hdps's tile WCS against the true position; the median WCS error is ~0.1\"). About two pixels; "
       "below the 6 px de-dup radius so a neighbour is not taken."),
+]
+
+FAMILIES = ["libnm_sncosmo", "libnm_salt_shape", "libnm_microlensing", "libnm_dwarf_nova", "libnm_contact",
+            "libnm_detached_ms", "libnm_detached_evolved", "lib_rrab", "lib_rrc"]
+INJECT = [  # library stars scattered over the readout window: labelled real sources for a real/bogus training set
+    P("number", 0, "", (0, 5000), "Library stars injected at random (0: none). For training data: many per window, "
+      "so each exposure holds many labelled real sources; not a sky abundance."),
+    P("families", FAMILIES, "", lambda v, r: None if isinstance(v, list) and v else "a non-empty list of star-name "
+      "prefixes", "Library families drawn from, equally per family (stars/<prefix>_*: supernovae, microlensing, "
+      "dwarf novae, eclipsing and contact binaries, RR Lyrae).", allowed_text="list of stars/ name prefixes"),
+    P("mag_min", 13.0, "mag", (5.0, 25.0), "Periodic stars: mean Gaia G drawn uniformly from mag_min..mag_max (the "
+      "distance set to give it, then the 3D dust at that distance). 13: below the 60 s saturation (~11-12)."),
+    P("mag_max", 19.5, "mag", (5.0, 25.0), "Periodic stars: faintest mean G; ~19.5 is about a single frame's limit, "
+      "so the faint end is mostly undetected (labelled, dropped from training). Transients keep their model's own "
+      "brightness (redshift, baseline, distance)."),
+    P("margin_arcsec", 60.0, "arcsec", (0.0, 600.0), "Kept from the readout window's edge (hdps's detector and SFFT "
+      "edges)."),
+    P("separation_arcsec", 20.0, "arcsec", (0.0, 300.0), "Least separation between injected stars: ~20 px, beyond "
+      "hdps's de-dup radius and the alert stamp, so each candidate is one injected star."),
+    P("seed", 1, "", (0, None), "Random draws (templates, positions, times)."),
 ]
 
 OUTPUT = [
@@ -412,11 +434,18 @@ TASK_RULES = {
     ("TransientOutputTask", "fmt"): ({"parquet", "csv"}, f"{_H}. hdps checks."),
     ("AlertVettingTask", "enabled"): ({True, False}, f"{_H} has false (no classifier deployed); true here: the "
                                       "alerts are an output."),
-    ("AlertVettingTask", "model_bundle"): (None, "\"\": no real/bogus model exists; every candidate scores 1 "
-                                           "(decision 2026-10-20)."),
+    ("AlertVettingTask", "model_bundle"): (None, "\"\": no model, every candidate scores 1 (decision 2026-10-20); "
+                                           "else a bundle directory (tools/train_rb.py, or hdps's own), which hdps's "
+                                           "RFBundleClassifier loads; score_cut may then name an operating point "
+                                           "(\"fa10\")."),
     ("AlertVettingTask", "detect_sigma"): (POSITIVE, f"{_H}. {_SIG}"),
-    ("AlertVettingTask", "score_cut"): ((0.0, 1.0), "A real/bogus score is a probability. With every score 1, any "
-                                        "cut accepts every candidate."),
+    ("AlertVettingTask", "score_cut"): (lambda v, r: None if (isinstance(v, str) and v) or (not isinstance(v, bool) and
+                                         isinstance(v, (int, float)) and 0 <= v <= 1) else "0..1, or an operating "
+                                         "point of the bundle (\"fa10\")",
+                                         "A real/bogus score is a probability: a number 0..1, or with a model bundle "
+                                         "one of its operating points (\"fa10\": 10 false alerts per deg2 per "
+                                         "exposure, as hdps's production config). With every score 1, any number "
+                                         "accepts every candidate."),
     ("AlertVettingTask", "emit_all_candidates"): ({True, False}, "hdps default."),
     ("AlertVettingTask", "emit_stamps"): ({True, False}, "true (hdps default false): ref/sci/diff stamps with each "
                                           "alert."),
@@ -441,7 +470,7 @@ TASK_RULES = {
     ("TileImageOutputTask", "filename_prefix"): (None, "hdps default."),
 }
 
-SECTIONS = {"field": FIELD, "night": NIGHT, "stars": STARS, "camera": CAMERA, "lightcurves": LIGHTCURVES,
+SECTIONS = {"field": FIELD, "night": NIGHT, "stars": STARS, "inject": INJECT, "camera": CAMERA, "lightcurves": LIGHTCURVES,
             "truth": TRUTH, "output": OUTPUT}
 
 

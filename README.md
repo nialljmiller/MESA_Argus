@@ -2,15 +2,46 @@
 
 Stellar models from MESA, seen through the **Argus Array**. The repo does two things:
 
-1. **Night movies of Argus fields.** One simulated night of Argus 60 s exposures on any pointing: every star an SED
-   (MESA pulsation models, PHOEBE eclipsing binaries, supernovae and other transients), turned into images with
-   ArgusSim's instrument, sky and noise, as hdps sky tiles, then put through the Argus pipeline (hdps) as if real:
-   source detection and photometry of every star in every frame, calibration against ATLAS-Refcat2, difference
-   imaging against a reference, and alert packets. The outputs: photometry, alerts, and a movie.
+1. **Simulated Argus data through the real pipeline.** Nights (or weeks) of Argus 60 s exposures of any field, every
+   star an SED (MESA pulsation models, PHOEBE eclipsing binaries, supernovae, microlensing, dwarf novae, ...), each
+   exposure made as the camera would read it out and put through hdps itself: photometry, difference images, alerts
+   (Avro packets), light curves, movies, and labelled real/bogus training data.
 2. **How much stellar physics Argus photometry can recover**, compared with Gaia and SDSS: MESA tracks with synthetic
    photometry in all three systems, an interactive 3D CMD, and a Fisher-information analysis.
 
 Both use the same MESA install and the same Argus throughputs, from ArgusSim.
+
+## What is simulated, and how
+
+**Argus.** 1,190 telescopes (ArgusSim's layout), each with one filter (599 β, 591 ρ) and a 3.25° × 2.44° field
+(11,648 × 8,742 px of 1.007″). They point at different parts of the sky, side by side like tiles: together about
+8,000 deg² at once, each spot seen by one telescope in one band (neighbouring fields overlap along their edges,
+~14% of a field). Each telescope tracks for a 15-minute ratchet, then resets; as the sky drifts, a spot passes from
+telescope to telescope through the night, alternating β and ρ.
+
+**One patch of sky, followed through the night.** An observation is a field (RA, Dec). ArgusSim's survey says which
+telescope sees it at each 60 s exposure, in which band, with which tracking angle. Every exposure is rendered on that
+telescope's sensor with ArgusSim's geometry and PSF (at the field's position on that sensor), sky and noise.
+
+**Each frame is a cut-down camera readout.** Not the whole 3.3° × 2.4° sensor: a readout window of N × N minipixes
+around the field (`field.window`, default 56 ≈ 26′), written as that camera's raw frame (its ID, the window's place
+on its sensor). Whole-frame quantities (WCS solve, zero point) are fitted from the window alone.
+
+**The pipeline is hdps.** All frames go through one hdps worker (`GPUWorker`, the production Task chain, on the CPU
+via the `hdps_full_cpu` branch), as real frames would: each frame reduced, detected, astrometrically solved and
+reprojected onto hdps's fixed sky tiles; each camera's frames stacked per ratchet into coadds (the only combining);
+each frame's tiles differenced (SFFT) against a reference coadd (the night before, transients left out) and its
+candidates vetted into alerts. Where hdps has no piece, the simplest stand-in: fakeredis for valkey, Avro files for
+Kafka, every real/bogus score 1 until a model bundle is given (`tools/train_rb.py`).
+
+| Term | Size | What it is |
+|---|---|---|
+| sensor pixel / tile pixel | 1.007″ / 0.879″ | a camera pixel / a pixel of hdps's sky grid |
+| minipix | 32 tile px = 28.1″ | hdps's basic sky cell |
+| hdps tile | 64 × 64 minipix = 30′ | hdps's fixed sky tiling; coadds, references, SFFT and alerts are per tile |
+| readout window / raw frame | 56 minipix ≈ 26′ | the part of one telescope's sensor simulated per exposure |
+| block | 9 × 9 minipix = 253″ | the movie's image panels only |
+| science / difference image | per tile | a frame reprojected onto a tile; minus the matched reference |
 
 ## Setup
 
@@ -158,6 +189,9 @@ file's name:
 - `reference/`: the reference night (the night before, transients left out) through the same chain; its coadds in
   `reference/hdps/<band>/coadds/` are SFFT's references.
 - `<name>_night_<band>.photometry.csv`: the placed stars' measurements, with the true model magnitude beside it.
+- `<name>_night_<band>.alerts.csv`: every candidate hdps's AlertVettingTask found, its features, its Avro `alertId`,
+  where its stamps are, and the truth (the simulated star there: transient / variable / constant / none, its true
+  flux now and in the reference): a real/bogus training set.
 - `<name>_night_<band>.mp4`: the field movie (CMD, exposure, hdps's difference image, light curves, SEDs, alerts);
   `<name>_night_<band>_pipeline.mp4`: the pipeline movie (each raw frame on its sensor, hdps's detections and WCS).
 - `output.raw = true` keeps the raw camera frames (`hdps/<band>/raw/`) and hdps's bulky per-frame products (the solved
@@ -229,6 +263,22 @@ observe.py observation file      → outputs/<category>/<name>/scene/  (field, b
 
 Every assumption (what comes from ArgusSim, what is written here, what is assumed) is in
 [docs/ASSUMPTIONS.md](docs/ASSUMPTIONS.md).
+
+### Real/bogus training data
+
+`[inject] number = N` scatters N library stars (supernovae, microlensing, dwarf novae, eclipsing and contact binaries,
+RR Lyrae from `stars/lib*`) over the readout window: transients timed into the night, periodic stars at a random
+phase and a mean G in `mag_min..mag_max`. Their candidates are the labelled real ones; residuals at the field's own
+stars the bogus ones.
+
+```bash
+python tools/make_training_data.py --fields all --inject 200 --parallel 4   # one night per field, no movies
+python tools/rb_training_set.py outputs/pseudo_real/rb_* -o data/rb             # -> data/rb/training_set.parquet
+python tools/train_rb.py data/rb/training_set.parquet -o data/rb/bundle_v1      # -> an hdps model bundle
+```
+
+The bundle is what hdps's `RFBundleClassifier` loads: set `model_bundle` for AlertVettingTask in `[[hdps.tasks]]`
+and `score_cut = "fa10"` (10 false alerts per deg² per exposure, as hdps's production config).
 
 ### Batches
 
