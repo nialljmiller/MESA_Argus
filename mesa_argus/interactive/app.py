@@ -24,7 +24,7 @@ from mesa_argus.interactive.worker import Workers, quiet_argus_sim
 
 quiet_argus_sim()
 
-FIELD_NAMES = {"m3": "M3 (globular cluster)", "m67": "M67 (old open cluster)", "m45": "M45, the Pleiades (young open cluster)"}
+FIELD_NAMES = {"f294test": "f294, test field (injected stars)", "m3": "M3 (globular cluster)", "m67": "M67 (old open cluster)", "m45": "M45, the Pleiades (young open cluster)"}
 BANDS = (("β", "beta"), ("ρ", "rho"))
 WORDS = {  # each type's slider names: magnitude, amplitude, period/timescale
     "periodic": ("Mean mag", "Amplitude", "Period (d)"),
