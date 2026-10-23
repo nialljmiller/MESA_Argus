@@ -37,6 +37,7 @@ envelope either cools below the opacity tables (logT < 2.7) or diverges within ~
 """
 
 from concurrent.futures import ThreadPoolExecutor
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -109,6 +110,40 @@ EXTRA_CONTROLS = {"HADS": ["RSP_alfa = 0d0"],
 MODE_TOL = 0.02
 MODE_WINDOW = 0.10  # within this, a limit cycle is in the star's mode and its Teff is corrected
 MAX_CORRECTIONS = 2
+MAX_NONLINEAR_ATTEMPTS = 4  # per star, across luminosities, Teff corrections and kick trials
+
+
+class NonlinearAttemptLimit(RuntimeError):
+    """The star has used its full nonlinear-search budget."""
+
+
+def _attempt_budget(base, stage=None):
+    """Read or claim a persistent attempt, locked across threads/processes.
+
+    Older runs have no ledger: seed their count from recorded rejected attempts.
+    A claimed attempt remains counted after interruption/restart. Linear tuning
+    and final SED extraction do not consume nonlinear-search attempts.
+    """
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / "nonlinear_attempts.json"
+    with (base / ".nonlinear_attempts.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if path.exists():
+            budget = json.loads(path.read_text())
+        else:
+            rejected = base / "rejected.json"
+            legacy = len(json.loads(rejected.read_text())) if rejected.exists() else 0
+            budget = dict(legacy_rejected=legacy, attempts=[])
+        used = budget["legacy_rejected"] + len(budget["attempts"])
+        if stage is not None:
+            if used >= MAX_NONLINEAR_ATTEMPTS:
+                raise NonlinearAttemptLimit(f"{used} nonlinear attempts used; limit {MAX_NONLINEAR_ATTEMPTS}")
+            budget["attempts"].append(dict(stage=stage, started=time.strftime("%Y-%m-%d %H:%M:%S")))
+            temp = path.with_suffix(".tmp")
+            temp.write_text(json.dumps(budget, indent=1) + "\n")
+            os.replace(temp, path)
+            used += 1
+        return max(0, MAX_NONLINEAR_ATTEMPTS - used)
 # weakly unstable models (growth ~1e-5 per period: HADS, some RRc) meet the GREKM stop at once and would need
 # ~1e5 periods to reach their limit cycle: bracket instead, from these multiples of the kind's kick, over
 # BRACKET_PERIODS periods each (in parallel); the limit cycle lies where the amplitude drift changes sign
@@ -281,6 +316,8 @@ def give_cores(n):
 def run(directory: Path, text: str, log="out.txt", limit_s=RUN_LIMIT_S):
     """Run MESA in directory; every RSP run goes through here, so the core pool covers all stars, convection sets
     and kicks of this process. The thread count used is written to directory/omp_threads."""
+    if directory.name == "limit" or directory.name.startswith(("bracket_", "dm_")):
+        _attempt_budget(directory.parent, directory.name)
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "inlist").write_text(text)
     n = take_cores()
@@ -425,11 +462,17 @@ def accept_double_mode(label, target, base):
                  kick=KICK["RRd"], limit_periods=DM_PERIODS, grekm="0d0", history_interval=20, limit_steps=300)
         d = base / f"dm_{name}"
         shutil.rmtree(d, ignore_errors=True)
-        text = run(d, inlist(p, "limit"), limit_s=DM_RUN_LIMIT_S)
+        try:
+            text = run(d, inlist(p, "limit"), limit_s=DM_RUN_LIMIT_S)
+        except NonlinearAttemptLimit:
+            return dict(set=name, ok=False, reason="nonlinear attempt budget exhausted")
         if "NO CONVERGENCE IN RELAX_ENV" in text:  # MESA's own suggestion: a looser envelope-relaxation tolerance
             p["extra_controls"] = p["extra_controls"] + ["RSP_relax_dm_tolerance = 1d-5"]
             shutil.rmtree(d, ignore_errors=True)
-            text = run(d, inlist(p, "limit"), limit_s=DM_RUN_LIMIT_S)
+            try:
+                text = run(d, inlist(p, "limit"), limit_s=DM_RUN_LIMIT_S)
+            except NonlinearAttemptLimit:
+                return dict(set=name, ok=False, reason="nonlinear attempt budget exhausted")
         lines = period_lines(text)
         if len(lines) < 200 or not (d / "limit.mod").exists():
             return dict(set=name, ok=False, reason="run failed")
@@ -468,6 +511,9 @@ def bracket_limit(label, target, base, params):
     """Limit cycle of a weakly unstable model by bracketing (see BRACKET_FACTORS). Returns the accepted params, with
     base/limit/limit.mod taken from the run nearest the drift's sign change, or None if the period is not the star's."""
     kicks = [round(KICK[target["kind"]] * f, 3) for f in BRACKET_FACTORS]
+    kicks = kicks[:_attempt_budget(base)]
+    if not kicks:
+        raise NonlinearAttemptLimit(f"nonlinear attempt budget exhausted (limit {MAX_NONLINEAR_ATTEMPTS})")
     print(f"  {label}: weakly unstable (convergence stop met at once): bracketing kicks {kicks} km/s, "
           f"{BRACKET_PERIODS} periods each", flush=True)
 
@@ -543,6 +589,8 @@ def accept_nonlinear(label, target, base):
             print(f"  {label}: L x {params['L_factor']}, Teff {params['teff']:.0f} K: {why}", flush=True)
             rejected.append(dict(L_factor=params["L_factor"], teff=params["teff"], reason=why))
             (base / "rejected.json").write_text(json.dumps(rejected, indent=1))
+            if _attempt_budget(base) == 0:
+                raise NonlinearAttemptLimit(f"nonlinear attempt budget exhausted (limit {MAX_NONLINEAR_ATTEMPTS})")
             if not ran or abs(p_nl / target["period"] - 1) > MODE_WINDOW or attempt == MAX_CORRECTIONS:
                 break
             params["teff"] *= (p_nl / target["period"]) ** (1 / 3.48)
@@ -566,6 +614,9 @@ def model_star(label, target):
         return
     try:
         build(label, target, base, done)
+    except NonlinearAttemptLimit as err:
+        (base / "FAILED").write_text(f"{label}: {err}\n")
+        print(f"  {label}: FAILED, {err}", flush=True)
     except subprocess.TimeoutExpired:
         (base / "FAILED").write_text(f"{label}: a MESA run exceeded its time limit\n")
         print(f"  {label}: FAILED, a MESA run exceeded its time limit", flush=True)

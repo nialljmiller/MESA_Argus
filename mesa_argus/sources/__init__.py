@@ -29,9 +29,9 @@ class Generator:
 
 
 def all_generators():
-    from . import binaries, gaia, pulsators, transients
+    from . import binaries, evolution, gaia, pulsators, transients
 
-    MODULES = (transients, pulsators, binaries, gaia)
+    MODULES = (transients, pulsators, binaries, gaia, evolution)
     return {g.name: g for module in MODULES for g in module.GENERATORS}
 
 

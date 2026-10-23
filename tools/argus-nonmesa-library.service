@@ -1,0 +1,24 @@
+[Unit]
+Description=Argus non-MESA stellar and transient coverage library
+
+[Service]
+Type=simple
+WorkingDirectory=%h/MESA_Argus
+Environment=MESA_DIR=%h/MESA/mesa
+Environment=MESASDK_ROOT=%h/MESA/mesasdk-26.6.1
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+ExecStart=/usr/local/bin/python3 %h/MESA_Argus/tools/nonmesa_library.py run
+CPUQuota=200%
+MemoryHigh=24G
+MemoryMax=28G
+Nice=10
+IOWeight=10
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=20
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

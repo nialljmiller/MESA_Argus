@@ -7,6 +7,7 @@ tracks that are in progress, including ones started by another runner.
 """
 
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -27,6 +28,13 @@ def track_name(mass, feh, alpha, max_age=DEFAULT_MAX_AGE):
 
 def render_inlist(track, mag_system="Vega"):
     tpl = (C.INLISTS / "physics.inlist").read_text()
+    helium_stop = ("" if track.get("continue_past_he_burning") else
+                   "      xa_central_lower_limit_species(1) = 'he4'\n"
+                   "      xa_central_lower_limit(1) = 1d-4\n")
+    star_job_extra = list(track.get("star_job_extra", []))
+    star_job_extra += ([f"save_model_filename = '{track['save_model']}'"] if track.get("save_model") else [])
+    star_job_extra += (["load_saved_model = .true.", f"load_model_filename = '{track['load_model']}'"]
+                       if track.get("load_model") else [])
     return tpl.format(
         mass=f"{track['mass']:.5f}d0", z=f"{track['Z']:.6e}", y=f"{track['Y']:.6f}d0",
         # 10 digits: staged runs stop on windows of ~1e-4 of the age
@@ -36,13 +44,13 @@ def render_inlist(track, mag_system="Vega"):
         mag_system=mag_system,
         make_csv=".true." if track.get("save_seds") else ".false.",
         extra_controls="".join(f"      {ln}\n" for ln in track.get("extra_controls", [])),
+        helium_stop=helium_stop,
+        history_interval=int(track.get("history_interval", 1)),
+        photo_interval=int(track.get("photo_interval", 10000000)),
         # staged runs: save the final model, or start from a saved one
         create_pms=".false." if track.get("load_model") else ".true.",
         save_model=".true." if track.get("save_model") else ".false.",
-        star_job_extra="".join(f"      {ln}\n" for ln in (
-            ([f"save_model_filename = '{track['save_model']}'"] if track.get("save_model") else [])
-            + (["load_saved_model = .true.", f"load_model_filename = '{track['load_model']}'"]
-               if track.get("load_model") else []))),
+        star_job_extra="".join(f"      {ln}\n" for ln in star_job_extra),
     )
 
 
@@ -99,10 +107,18 @@ def prepare(track, mag_system="Vega", run_dir=None):
     return d
 
 
-def run_dir(d, threads=None):
+def run_dir(d, threads=None, resume_from_photo=False):
     """Run MESA in directory d (which must contain `inlist`). Returns (ok, minutes, termination)."""
     threads = threads or C.config()["run"]["omp_threads"]
     env = dict(os.environ, OMP_NUM_THREADS=str(threads))
+    if resume_from_photo:
+        photos = d / "photos"
+        available = [p for p in photos.iterdir() if p.is_file()] if photos.is_dir() else []
+        if available:
+            latest = max(available, key=lambda p: (p.stat().st_mtime_ns, p.name))
+            shutil.copy2(latest, d / "restart_photo")
+        else:
+            (d / "restart_photo").unlink(missing_ok=True)
     t0 = time.time()
     with _launch_lock:
         _wait_for_slot()
@@ -130,7 +146,7 @@ def run_tracks(tracks, workers=None, threads=None, rerun_failed=False):
     workers = workers or C.config()["run"]["workers"]
 
     def one(t):
-        ok, minutes, term = run_dir(prepare(t), threads)
+        ok, minutes, term = run_dir(prepare(t), threads, resume_from_photo=t.get("resume_from_photo", False))
         print(f"  {'OK ' if ok else 'BAD'} {t['name']:<30s} {minutes:7.1f} min  {term or 'no termination code'}", flush=True)
         if ok and t.get("save_seds"):
             from .seds import pack

@@ -49,8 +49,7 @@
       max_age = {max_age}
 {extra_controls}
       ! --- stopping: core He depletion (or max_age above) ---
-      xa_central_lower_limit_species(1) = 'he4'
-      xa_central_lower_limit(1) = 1d-4
+{helium_stop}
 
       ! --- convection ---
       use_Ledoux_criterion = .false.
@@ -81,9 +80,9 @@
       delta_lgTeff_limit = 0.005d0
       delta_lgL_limit = 0.02d0
       delta_HR_limit = 0.01d0
-      history_interval = 1
+      history_interval = {history_interval}
       write_profiles_flag = .false.
-      photo_interval = 10000000
+      photo_interval = {photo_interval}
       terminal_interval = 500
       write_header_frequency = 100000
 /

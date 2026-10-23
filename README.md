@@ -397,6 +397,7 @@ tools/                  batch runner, star-library grid, newton job queue, dust-
 studies/                characterisation studies (the photometric offset study)
 demo/                   the interactive HTML page and its validation
 docs/ASSUMPTIONS.md     what the night movies model and assume
+docs/LIBRARY.md         the star library: what newton builds (MESA and non-MESA), coverage, limits
 config.toml             machine settings          analysis.toml   Fisher-analysis inputs
 templates/, vendor/     the 3D CMD page's template and its bundled plotly
 stars/                  built stars (not in git; rebuilt from the star files)

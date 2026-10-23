@@ -29,3 +29,4 @@ demo/argus_demo.html
 # newton job queue (tools/newton_queue.sh) and the Gaia catalogues the library grid is drawn from
 /queue/
 data/library/
+.claude/
