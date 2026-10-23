@@ -67,6 +67,8 @@ def main(argv=None):
     p.add_argument("--stride", type=int, default=1, help="every Nth exposure")
     p.add_argument("--parallel", type=int, default=4, help="observations at once (each runs both bands: 2 processes)")
     p.add_argument("--out", type=Path, default=REPO / "data" / "rb")
+    p.add_argument("--setup-timeout", type=float, default=1800.0,
+                   help="seconds to wait for an observation's scenes before starting the next anyway")
     args = p.parse_args(argv)
 
     fields = sorted(d.name for d in (REPO / "stars").glob("*_field")) if args.fields == ["all"] else args.fields
@@ -93,9 +95,18 @@ def main(argv=None):
         while jobs and len(running) < args.parallel:
             name, path = jobs.pop(0)
             log = open(log_dir / f"{name}.log", "w")
-            running.append((name, log, subprocess.Popen([sys.executable, "observe.py", str(path)], cwd=REPO,
-                                                         stdout=log, stderr=subprocess.STDOUT), time.time()))
+            proc = subprocess.Popen([sys.executable, "observe.py", str(path)], cwd=REPO, stdout=log,
+                                    stderr=subprocess.STDOUT)
+            running.append((name, log, proc, time.time()))
             print(f"started {name}", flush=True)
+            # one scene build at a time: building a scene loads the 3D dust map (~10 GB), twice (the science night,
+            # then the reference night); the next observation starts once this one's engines are running ("observing"
+            # in its log, the dust map released), or it has ended. Several at once ran newton out of memory.
+            t_start = time.time()
+            while proc.poll() is None and time.time() - t_start < args.setup_timeout:
+                if "observing " in (log_dir / f"{name}.log").read_text(errors="replace"):
+                    break
+                time.sleep(10)
         for item in list(running):
             name, log, proc, t0 = item
             if proc.poll() is not None:
