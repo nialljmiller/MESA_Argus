@@ -1072,7 +1072,7 @@ def main(argv=None):
         if not args.no_render:
             draw_data = movie_data(args, stars, scene, follow, transient, models, follow_sed, follow_rate, follow_cycle,
                                    ref_rate, static_mag, rates_at, true_mag, measured, frames, times, bjd, ut, airmass,
-                                   seeing, G, in_block, ab, cutouts)
+                                   seeing, G, in_block, ab, cutouts, alerted=alerted)
             draw_data.update(alerted=alerted, frame_j=list(frames), labels=labels, pulsators=pulsators, source=source,
                              gaia_var=gaia_var, templates=templates, survey=survey, cutouts=cutouts)
             render(args, draw_data, frames)
@@ -1271,10 +1271,32 @@ def model_hours(ut):
     return np.linspace(ut[0], ut[-1], n)
 
 
+MAX_SHOWN = 6  # followed stars the movie draws (an injected run follows hundreds; all are measured and labelled)
+
+
+def choose_shown(follow, stars, rel, alerted):
+    """The followed stars the movie draws: those inside the block shown (all, if none is) that hdps measured (all, if
+    none was), at most MAX_SHOWN: those that alerted first, then by how much they change over the night; in their
+    followed order."""
+    dx, dy = np.asarray(stars["dx"], float), np.asarray(stars["dy"], float)
+    in_view = [k for k in follow if abs(dx[k]) <= HALF and abs(dy[k]) <= HALF]
+    pool = in_view or list(follow)
+    alerted_keys = {key for frame in (alerted or []) for key, _, _ in frame}
+
+    def change(k):
+        lo, hi = rel[k]["span"]
+        return float(hi - lo) if np.isfinite(lo) and np.isfinite(hi) else 0.0
+
+    measured = [k for k in pool if np.isfinite(rel[k]["measured"])]  # one never measured has no light curve to show
+    pool = measured or pool
+    keep = set(sorted(pool, key=lambda k: (k not in alerted_keys, -change(k)))[:MAX_SHOWN])
+    return [k for k in follow if k in keep]
+
+
 def movie_data(args, stars, scene, follow, transient, models, follow_sed, follow_rate, follow_cycle, ref_rate, static_mag,
-               rates_at, true_mag, measured, frames, times, bjd, ut, airmass, seeing, G, in_block, ab, cutouts):
+               rates_at, true_mag, measured, frames, times, bjd, ut, airmass, seeing, G, in_block, ab, cutouts, alerted=None):
     """Everything draw() needs that stays fixed through the movie: models, display limits, colours, each star's
-    mean over the night."""
+    mean over the night; which followed stars it draws (choose_shown)."""
     B = args.band
     # transients' model light curves on the light-curve panel's time grid (periodic models are drawn from their cycle)
     model_curve = {}
@@ -1293,13 +1315,6 @@ def movie_data(args, stars, scene, follow, transient, models, follow_sed, follow
     rgb = dict(w_beta=1.0, vmax=float(np.nanpercentile(values, 99.95)), lw=float(max(noise, 1.0)))
     dvals = np.concatenate([np.abs(a[np.isfinite(a)]).ravel() for a in diffs]) if diffs else np.array([1.0])
     dlim = float(max(np.nanpercentile(dvals, 99.9), 3 * noise, 1.0))
-    fixed = np.nonzero(in_block & (G < 20) & ~np.isin(np.arange(len(stars)), follow))[0]
-    cmd_c = np.r_[[static_mag["beta"][k] - static_mag["rho"][k] for k in fixed],
-                  np.concatenate([follow_cycle[k]["beta"] - follow_cycle[k]["rho"] for k in follow])]
-    cmd_m = np.r_[[static_mag[B][k] for k in fixed], np.concatenate([follow_cycle[k][B] for k in follow])]
-    if transient:  # a transient has no light (nan) before its model starts
-        lit = np.isfinite(cmd_c) & np.isfinite(cmd_m)
-        cmd_c, cmd_m = cmd_c[lit], cmd_m[lit]
     # each star's mean over the night: the measurements' own, and the model's (a transient: where it is lit); the
     # light-curve axes cover 99.5% of the measurements (a rare bad cross-match must not flatten the rest; it is drawn
     # at the edge)
@@ -1315,20 +1330,28 @@ def movie_data(args, stars, scene, follow, transient, models, follow_sed, follow
         rel[k] = dict(measured=float(np.nanmean(meas)) if lit else np.nan, model=float(mean(model)),
                       span=(np.nanmin(np.r_[meas_rel, model - mean(model)]), np.nanmax(np.r_[meas_rel, model - mean(model)])),
                       resid=float(np.nanpercentile(np.abs(meas - model), 99.75)) if lit else np.nan)
-    # the SED axis: every followed star's SED (300-1000 nm) over the night
+    shown = choose_shown(follow, stars, rel, alerted)
+    fixed = np.nonzero(in_block & (G < 20) & ~np.isin(np.arange(len(stars)), shown))[0]
+    cmd_c = np.r_[[static_mag["beta"][k] - static_mag["rho"][k] for k in fixed],
+                  np.concatenate([follow_cycle[k]["beta"] - follow_cycle[k]["rho"] for k in shown] or [np.array([])])]
+    cmd_m = np.r_[[static_mag[B][k] for k in fixed], np.concatenate([follow_cycle[k][B] for k in shown] or [np.array([])])]
+    if transient:  # a transient has no light (nan) before its model starts
+        lit = np.isfinite(cmd_c) & np.isfinite(cmd_m)
+        cmd_c, cmd_m = cmd_c[lit], cmd_m[lit]
+    # the SED axis: every shown star's SED (300-1000 nm) over the night
     sed_values = np.concatenate([follow_sed[k][:, (models[k].wave.to_value(u.nm) >= 300) & (models[k].wave.to_value(u.nm) <= 1000)].ravel()
-                                 for k in follow]) if follow else np.array([1e-16, 1e-14])
+                                 for k in shown]) if shown else np.array([1e-16, 1e-14])
     sed_values = sed_values[sed_values > 0]
     if sed_values.size == 0:  # nothing lit all night (e.g. a transient after the window)
         sed_values = np.array([1e-16, 1e-14])
     palette = [BLUE, RED, "#2ca02c", "#9467bd", "#8c564b", "#e377c2", "#bcbd22", "#17becf"]  # the brand's dots first
-    return dict(stars=stars, scene=scene, follow=follow, transient=transient, models=models, follow_sed=follow_sed,
+    return dict(stars=stars, scene=scene, follow=follow, shown=shown, transient=transient, models=models, follow_sed=follow_sed,
                 follow_cycle=follow_cycle, model_curve=model_curve, static_mag=static_mag, true_mag=true_mag,
                 times=times, bjd=bjd, ut=ut, airmass=airmass, seeing=seeing, G=G, in_block=in_block, ab=ab,
-                colour_of={k: palette[i % len(palette)] for i, k in enumerate(follow)}, rgb=rgb, dlim=dlim, cmd_c=cmd_c, cmd_m=cmd_m,
+                colour_of={k: palette[i % len(palette)] for i, k in enumerate(shown)}, rgb=rgb, dlim=dlim, cmd_c=cmd_c, cmd_m=cmd_m,
                 rel=rel, sed_ylim=(float(np.percentile(sed_values, 3)) / 1.5, float(sed_values.max()) * 1.5),
                 centre=block_centre_label(), measured=measured,
-                history={k: {"t": [], "m": [], "e": [], "true": []} for k in follow})
+                history={k: {"t": [], "m": [], "e": [], "true": []} for k in shown})
 
 
 def render(args, d, frames):
@@ -1345,7 +1368,7 @@ def render(args, d, frames):
             c = d["cutouts"][n]
             exposures = {B: None if c is None else dict(image=c["science"], difference=c["difference"],
                                                        background=float(np.nanmedian(c["science"])), extent=c["extent"])}
-            for k in d["follow"]:
+            for k in d["shown"]:
                 h = d["history"][k]
                 h["t"].append(d["ut"][j])
                 h["true"].append(d["true_mag"](B, k, j))
@@ -1363,7 +1386,7 @@ def render(args, d, frames):
 def draw(fig, args, exposures, j, d):
     """One movie frame: CMD, light curves, colour exposure, difference image, SEDs."""
     B = args.band
-    follow, colour_of, labels, scene, stars = d["follow"], d["colour_of"], d["labels"], d["scene"], d["stars"]
+    follow, colour_of, labels, scene, stars = d["shown"], d["colour_of"], d["labels"], d["scene"], d["stars"]
     true_mag, pulsators, source = d["true_mag"], d["pulsators"], d["source"]
     grid = fig.add_gridspec(2, 2, width_ratios=[5.4, 4.6], height_ratios=[6, 4], wspace=0.16, hspace=0.3,
                             left=0.055, right=0.975, bottom=0.06, top=0.88)
@@ -1440,8 +1463,8 @@ def draw(fig, args, exposures, j, d):
         ax.axvline(ut[j], color=NAVY, lw=0.8, alpha=0.35)
         ax.grid(alpha=0.15)
         ax.set_xlim(ut[0] - 0.1, ut[-1] + 0.1)
-    lo = np.nanmin([d["rel"][k]["span"][0] for k in follow])
-    hi = np.nanmax([d["rel"][k]["span"][1] for k in follow])
+    lo = np.nanmin([d["rel"][k]["span"][0] for k in follow] or [np.nan])
+    hi = np.nanmax([d["rel"][k]["span"][1] for k in follow] or [np.nan])
     if not np.isfinite(lo):  # nothing lit all night
         lo, hi = -0.5, 0.5
     pad = 0.08 * max(hi - lo, 0.05)
@@ -1484,7 +1507,8 @@ def draw(fig, args, exposures, j, d):
     image_ax.add_patch(Rectangle((-step / 2, -step / 2), step, step, fill=False, ec=BLUE, lw=1.2))  # the central minipix
     for k in follow:
         image_ax.add_patch(Circle((stars["dx"][k], stars["dy"][k]), 3.0, fill=False, ec=colour_of[k], lw=1.2))
-        image_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold")
+        image_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold",
+                      clip_on=True)
     edge = HALF + 2
     image_ax.set(xlim=(-edge, edge), ylim=(-edge, edge), xlabel="Offset (arcsec)", ylabel="Offset (arcsec)")
     if d["survey"] is None:
@@ -1512,7 +1536,8 @@ def draw(fig, args, exposures, j, d):
                           cmap=diverging, norm=dnorm, extent=extent)
     for k in follow:
         diff_ax.add_patch(Circle((stars["dx"][k], stars["dy"][k]), 3.0, fill=False, ec=colour_of[k], lw=1.0))
-        diff_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold")
+        diff_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold",
+                     clip_on=True)
     marks = alert_marks(d, d["n"], args.fps)
     draw_alert_marks(image_ax, marks)
     draw_alert_marks(diff_ax, marks)
@@ -1553,11 +1578,16 @@ def draw(fig, args, exposures, j, d):
     sed_ax.legend(loc="upper right", fontsize=8, frameon=False)
     sed_ax.grid(alpha=0.12)
 
-    what = pulsator_title(follow, pulsators, source)  # a long list of stars: smaller, and on further lines
-    what = "\n" + "\n".join(textwrap.wrap(what, 150, break_long_words=False)) if len(what) > 70 else " — " + what
+    # the title: where and when on one line; what is shown on a second (the shown stars, and how many more are simulated)
+    what = pulsator_title(follow, pulsators, source) if follow else "no modelled variables in the block"
+    more = len(d["follow"]) - len(follow)
+    if more:
+        what += f" · {more} more simulated outside this view or not shown"
     add_logo(fig, (0.012, 0.925, 0.15, 0.065))
-    fig.suptitle(f"{d['centre']} ({FIELDS[args.field]['name']}) — {block_label()} — {args.date} — 60 s exposures"
-                 + what, fontsize=13.5 if len(what) <= 48 else 11.5, x=0.58)
+    fig.suptitle(f"{d['centre']} ({FIELDS[args.field]['name']}) — {block_label()} — {args.date} — "
+                 f"{args.exptime:g} s exposures — {SYMBOLS[B]}", fontsize=13.5, x=0.58, y=0.985)
+    fig.text(0.58, 0.935, "\n".join(textwrap.wrap(what, 120, break_long_words=False)), ha="center", va="top",
+             fontsize=10.5, color=NAVY)
 
 
 if __name__ == "__main__":
