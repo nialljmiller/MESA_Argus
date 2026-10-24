@@ -7,7 +7,7 @@ dec = 11.8
 block = 9
 
 [night]
-date = "2026-02-01"
+date = "2026-02-17"  # new moon (2026-02-01 was full, the Moon 12 deg from M67: a sky of ~3550 e- per tile pixel above the bright-star mask's threshold, no alert candidate all night)
 nights = 1
 
 [stars]

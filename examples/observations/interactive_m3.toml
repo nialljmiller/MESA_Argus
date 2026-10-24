@@ -7,7 +7,7 @@ dec = 28.377
 block = 9
 
 [night]
-date = "2026-05-01"
+date = "2026-05-16"  # new moon (2026-05-01 was full, the Moon 46 deg from M3)
 nights = 1
 
 [stars]
