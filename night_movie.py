@@ -37,7 +37,10 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.axis as maxis  # noqa: E402
+import matplotlib.text as mtext  # noqa: E402
 from matplotlib.animation import FFMpegWriter  # noqa: E402
+from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
 from matplotlib.colors import AsinhNorm  # noqa: E402
 from matplotlib.patches import Circle, Rectangle  # noqa: E402
 import numpy as np  # noqa: E402
@@ -1261,12 +1264,21 @@ def alert_marks(d, n, fps):
 
 def draw_alert_marks(ax, marks):
     """Metal Gear Solid style: a red exclamation mark, white-outlined, above the object (clipped to the panel: the
-    cut-out alerts are made on is larger than the block shown)."""
+    cut-out alerts are made on is larger than the block shown). The marks' Text artists."""
     from matplotlib import patheffects
 
-    for dx, dy, alpha, scale in marks:
-        ax.text(dx, dy + 4.5, "!", ha="center", va="bottom", fontsize=24 * scale, weight="heavy", color=RED, alpha=alpha,
-                zorder=10, clip_on=True, path_effects=[patheffects.withStroke(linewidth=3.5, foreground="white", alpha=alpha)])
+    return [ax.text(dx, dy + 4.5, "!", ha="center", va="bottom", fontsize=24 * scale, weight="heavy", color=RED, alpha=alpha,
+                    zorder=10, clip_on=True,
+                    path_effects=[patheffects.withStroke(linewidth=3.5, foreground="white", alpha=alpha)])
+            for dx, dy, alpha, scale in marks]
+
+
+def set_alert_mark(text, dx, dy, alpha, scale):
+    """An alert mark (draw_alert_marks) moved and faded in place."""
+    from matplotlib import patheffects
+
+    text.set(position=(dx, dy + 4.5), fontsize=24 * scale, alpha=alpha, visible=True,
+             path_effects=[patheffects.withStroke(linewidth=3.5, foreground="white", alpha=alpha)])
 
 
 def alert_spans(d, k, n):
@@ -1374,15 +1386,24 @@ def movie_data(args, stars, scene, follow, transient, models, follow_sed, follow
                 history={k: {"t": [], "m": [], "e": [], "true": []} for k in shown})
 
 
+class _FrameWriter(FFMpegWriter):
+    """matplotlib's ffmpeg writer, fed frames already drawn (MovieFrame.render): the same ffmpeg command and encoding
+    as grab_frame, without drawing the figure again."""
+
+    def write_rgba(self, rgba):
+        self._proc.stdin.write(rgba)
+
+
 def render(args, d, frames):
     """The field movie: per frame, hdps's tile and difference image around the block (saved by the engine), and the
-    panels."""
+    panels (MovieFrame: the figure built once, each frame drawn over it)."""
     B = args.band
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    writer = FFMpegWriter(fps=args.fps, extra_args=["-vcodec", "libx264", "-pix_fmt", "yuv420p",
+    writer = _FrameWriter(fps=args.fps, extra_args=["-vcodec", "libx264", "-pix_fmt", "yuv420p",
                                                      "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"])
     apply_style()
-    fig = plt.figure(figsize=(16, 10))
+    fig = plt.figure(figsize=(16, 10), dpi=args.dpi)
+    movie = MovieFrame(fig, args, d)
     with writer.saving(fig, str(args.output), dpi=args.dpi):
         for n, j in enumerate(frames):
             c = d["cutouts"][n]
@@ -1394,220 +1415,386 @@ def render(args, d, frames):
                 h["true"].append(d["true_mag"](B, k, j))
                 h["m"].append(d["measured"][n][k][0])
                 h["e"].append(d["measured"][n][k][1])
-            fig.clear()
             d["n"] = n
-            draw(fig, args, exposures, j, d)
-            writer.grab_frame()
+            movie.update(exposures, j)
+            writer.write_rgba(movie.render())
             if (n + 1) % max(1, len(frames) // 20) == 0:
                 print(f"  {n + 1}/{len(frames)}", flush=True)
     plt.close(fig)
 
 
 def draw(fig, args, exposures, j, d):
-    """One movie frame: CMD, light curves, colour exposure, difference image, SEDs."""
-    B = args.band
-    follow, colour_of, labels, scene, stars = d["shown"], d["colour_of"], d["labels"], d["scene"], d["stars"]
-    true_mag, pulsators, source = d["true_mag"], d["pulsators"], d["source"]
-    grid = fig.add_gridspec(2, 2, width_ratios=[5.4, 4.6], height_ratios=[6, 4], wspace=0.16, hspace=0.3,
-                            left=0.055, right=0.975, bottom=0.06, top=0.88)
-    cmd = fig.add_subplot(grid[0, 0])
-    pair = grid[0, 1].subgridspec(1, 2, wspace=0.06)
-    image_ax = fig.add_subplot(pair[0])
-    diff_ax = fig.add_subplot(pair[1], sharex=image_ax, sharey=image_ax)
-    sed_ax = fig.add_subplot(grid[1, 1])
-    light = grid[1, 0].subgridspec(2, 1, height_ratios=[2, 1], hspace=0.08)
-    lc = fig.add_subplot(light[0])
-    resid_ax = fig.add_subplot(light[1], sharex=lc)
+    """One movie frame: CMD, light curves, colour exposure, difference image, SEDs (all of it built on fig, for a
+    caller that then saves or shows the figure; a movie builds its MovieFrame once and renders each frame)."""
+    MovieFrame(fig, args, d).update(exposures, j)
 
-    # CMD: the constant stars in the block, each followed star's cycle (a transient: its track) and where it is now
-    others = np.nonzero(d["in_block"] & (d["G"] < 20) & ~np.isin(np.arange(len(d["G"])), follow))[0]
-    static_mag = d["static_mag"]
-    cmd.scatter([static_mag["beta"][k] - static_mag["rho"][k] for k in others], [static_mag[B][k] for k in others],
-                s=4, color="#b9c4cc", zorder=1, label="Constant stars")
-    for k in follow:
-        cyc = d["follow_cycle"][k]
-        if k in d["model_curve"]:
-            cmd.plot(cyc["beta"] - cyc["rho"], cyc[B], color=colour_of[k], lw=1.3, alpha=0.9, zorder=3)
-        else:  # a closed cycle
-            cmd.plot(np.r_[cyc["beta"] - cyc["rho"], cyc["beta"][0] - cyc["rho"][0]], np.r_[cyc[B], cyc[B][0]],
-                     color=colour_of[k], lw=1.3, alpha=0.9, zorder=3)
-        cmd.scatter(true_mag("beta", k, j) - true_mag("rho", k, j), true_mag(B, k, j), s=60, color=colour_of[k],
-                    edgecolor=NAVY, linewidth=0.6, zorder=5)
-    cmd.set(xlim=(np.percentile(d["cmd_c"], 0.5) - 0.15, np.percentile(d["cmd_c"], 99.5) + 0.15),
-            ylim=(min(20.2, np.max(d["cmd_m"]) + 0.3), np.min(d["cmd_m"]) - 0.5),
-            xlabel=r"$\beta-\rho$ (AB mag)", ylabel=rf"$m_{{\{B}}}$ (AB mag)")
-    cmd.set_title("CMD", loc="left", weight="bold")
-    cmd.legend(loc="lower left", fontsize=9, framealpha=0.85, edgecolor="none").set_zorder(2)
-    cmd.grid(alpha=0.15)
 
-    # light curves: measured points (hdps source detector, 4 px aperture) and the model behind, each relative to its own mean over the night
-    ut = d["ut"]
-    model_t = model_hours(ut)
-    model_bjd = d["bjd"][0] + (model_t - ut[0]) / 24.0
-    shown_m, shown_r = {}, {}  # what is drawn, to mark points beyond the axes
-    for k in follow:
-        h = d["history"][k]
-        t = np.array(h["t"])
-        v = pulsators[int(source[k])]
-        if k in d["model_curve"]:
-            model = d["model_curve"][k]
-        else:
-            cyc = d["follow_cycle"][k][B]
-            model = np.interp(((model_bjd - v["epoch"]) / v["period"]) % 1.0, np.linspace(0, 1, len(cyc) + 1), np.r_[cyc, cyc[0]])
-        lc.plot(model_t, model - d["rel"][k]["model"], color=colour_of[k], lw=1.0, alpha=0.35)
-        m, e = np.array(h["m"]), np.array(h["e"])
-        ok = np.isfinite(m)
-        if k in d["model_curve"]:
-            label = f"{labels[k]} {v['kind']}" + (f" z {v['transient']['z']:g}" if np.isfinite(v["transient"]["z"]) else "")
-        else:
-            label = f"{labels[k]} {v['kind']} {v['period']:.3f} d"
-        lc.errorbar(t[ok], m[ok] - d["rel"][k]["measured"], yerr=e[ok], fmt="o", ms=2.5, lw=0.5, color=colour_of[k], label=label)
-        shown_m[k] = (t[ok], m[ok] - d["rel"][k]["measured"])
-        resid = np.array(h["m"]) - np.array(h["true"])
-        if d["survey"] is not None:  # not across the gaps between ratchets
-            gap = np.r_[False, np.diff(t) > 0.1]
-            t, resid = np.insert(t, np.nonzero(gap)[0], np.nan), np.insert(resid, np.nonzero(gap)[0], np.nan)
-        resid_ax.plot(t, resid, color=colour_of[k], lw=0.8)
-        shown_r[k] = (t, resid)
-    engines = [engine_of(pulsators[int(source[k])]) for k in follow]
-    model_name = " / ".join([e for e in ("MESA RSP", "PHOEBE") if e in engines]
-                            + list(dict.fromkeys(e for e in engines if e not in ("MESA RSP", "PHOEBE"))))
-    lc.plot([], [], color="0.5", lw=1.0, alpha=0.5, label=f"{model_name} model")
-    if any(any(key in follow for key, _, _ in frame) for frame in d["alerted"]):  # each alert: a band in the star's colour
+class MovieFrame:
+    """The field movie's figure for one movie's draw data (movie_data): the panels, axes, labels, colour bars and
+    everything that stays the same through the movie made once; update() sets what changes from frame to frame, in
+    place (the images, where each followed star is now, the light curves so far, the alerts, the SEDs, the time).
+
+    render() draws a frame without drawing what stays the same again: the figure without the changing parts is kept
+    as an image (the background, made on the first render), and each frame is drawn over it panel by panel, from the
+    panel's lowest changing layer up (FLOORS), every artist there in matplotlib's own order (zorder, then the order
+    they were made in, the order draw() always made them in). Tick marks and labels, titles and colour bars lie
+    outside the panels' data areas and stay in the background; grid lines are redrawn where something changing lies
+    beneath them. A rendered frame is the image a full redraw gives."""
+
+    def __init__(self, fig, args, d):
+        self.fig, self.args, self.d = fig, args, d
+        B = args.band
+        follow, colour_of, labels, stars = d["shown"], d["colour_of"], d["labels"], d["stars"]
+        pulsators, source = d["pulsators"], d["source"]
+        self.follow = follow
+        grid = fig.add_gridspec(2, 2, width_ratios=[5.4, 4.6], height_ratios=[6, 4], wspace=0.16, hspace=0.3,
+                                left=0.055, right=0.975, bottom=0.06, top=0.88)
+        cmd = fig.add_subplot(grid[0, 0])
+        pair = grid[0, 1].subgridspec(1, 2, wspace=0.06)
+        image_ax = fig.add_subplot(pair[0])
+        diff_ax = fig.add_subplot(pair[1], sharex=image_ax, sharey=image_ax)
+        sed_ax = fig.add_subplot(grid[1, 1])
+        light = grid[1, 0].subgridspec(2, 1, height_ratios=[2, 1], hspace=0.08)
+        lc = fig.add_subplot(light[0])
+        resid_ax = fig.add_subplot(light[1], sharex=lc)
+        self.cmd, self.image_ax, self.diff_ax, self.sed_ax, self.lc, self.resid_ax = cmd, image_ax, diff_ax, sed_ax, lc, resid_ax
+        # each panel's titles (the only text a new Axes holds): outside the panel, so in the background
+        self.titles = [a for ax in (cmd, image_ax, diff_ax, sed_ax, lc, resid_ax) for a in ax.get_children()
+                       if isinstance(a, mtext.Text)]
+
+        # CMD: the constant stars in the block, each followed star's cycle (a transient: its track) and where it is now
+        others = np.nonzero(d["in_block"] & (d["G"] < 20) & ~np.isin(np.arange(len(d["G"])), follow))[0]
+        static_mag = d["static_mag"]
+        cmd.scatter([static_mag["beta"][k] - static_mag["rho"][k] for k in others], [static_mag[B][k] for k in others],
+                    s=4, color="#b9c4cc", zorder=1, label="Constant stars")
+        self.now = {}
         for k in follow:
-            for lo_t, hi_t in alert_spans(d, k, d["n"]):
-                for ax in (lc, resid_ax):
-                    ax.axvspan(lo_t, hi_t, color=colour_of[k], alpha=0.16, lw=0, zorder=0)
-        lc.fill_between([], [], color="0.5", alpha=0.25, lw=0, label="alert")
-    for ax in (lc, resid_ax):
-        ax.axvline(ut[j], color=NAVY, lw=0.8, alpha=0.35)
-        ax.grid(alpha=0.15)
-        ax.set_xlim(ut[0] - 0.1, ut[-1] + 0.1)
-    lo = np.nanmin([d["rel"][k]["span"][0] for k in follow] or [np.nan])
-    hi = np.nanmax([d["rel"][k]["span"][1] for k in follow] or [np.nan])
-    if not np.isfinite(lo):  # nothing lit all night
-        lo, hi = -0.5, 0.5
-    pad = 0.08 * max(hi - lo, 0.05)
-    lc.set(ylim=(hi + pad, lo - 2.5 * pad), ylabel=rf"$\Delta m_{{\{B}}}$ (mag)")
-    resid_lim = max(0.05, 1.3 * np.nanmax([d["rel"][k]["resid"] for k in follow] + [0.0]))
-    resid_ax.set_ylim(-resid_lim, resid_lim)
-    for k in follow:  # points beyond the axes: a triangle at the edge
-        for ax, (t, y), lo_edge, hi_edge in ((lc, shown_m[k], lo - 2.5 * pad, hi + pad), (resid_ax, shown_r[k], -resid_lim, resid_lim)):
-            for beyond, edge, marker in ((y > hi_edge, hi_edge, "v"), (y < lo_edge, lo_edge, "^")):
-                if np.any(beyond):
-                    ax.plot(t[beyond], np.full(int(np.sum(beyond)), edge), marker, ms=6, mfc="none", color=colour_of[k], clip_on=False)
-    lc.legend(loc="upper left", ncol=4, fontsize=7.5, frameon=True, framealpha=0.85, edgecolor="none", columnspacing=0.8,
-              handletextpad=0.3)
-    lc.set_title("Light curves (hdps source detector)", loc="left", weight="bold")
-    lc.set_title(f"UT {d['times'][j].iso[11:16]} · airmass {d['airmass'][j]:.2f} · seeing {d['seeing'][j]:.2f}″", loc="right",
-                 fontsize=11, color=NAVY)
-    plt.setp(lc.get_xticklabels(), visible=False)
-    resid_ax.axhline(0, color="0.5", lw=0.6, ls=":")
-    span_days = (d["times"][-1].jd - d["times"][0].jd) > 1
-    resid_ax.set(xlabel=f"UT hours since {d['times'][0].iso[:10]} 0h" if span_days else f"UT hours ({args.date} night)",
-                 ylabel="measured − true\n(mag)")
-    lc.yaxis.set_label_coords(-0.075, 0.5)
-    resid_ax.yaxis.set_label_coords(-0.075, 0.5)
-    resid_ax.invert_yaxis()
+            cyc = d["follow_cycle"][k]
+            if k in d["model_curve"]:
+                cmd.plot(cyc["beta"] - cyc["rho"], cyc[B], color=colour_of[k], lw=1.3, alpha=0.9, zorder=3)
+            else:  # a closed cycle
+                cmd.plot(np.r_[cyc["beta"] - cyc["rho"], cyc["beta"][0] - cyc["rho"][0]], np.r_[cyc[B], cyc[B][0]],
+                         color=colour_of[k], lw=1.3, alpha=0.9, zorder=3)
+            self.now[k] = cmd.scatter([np.nan], [np.nan], s=60, color=colour_of[k], edgecolor=NAVY, linewidth=0.6,
+                                      zorder=5)
+        cmd.set(xlim=(np.percentile(d["cmd_c"], 0.5) - 0.15, np.percentile(d["cmd_c"], 99.5) + 0.15),
+                ylim=(min(20.2, np.max(d["cmd_m"]) + 0.3), np.min(d["cmd_m"]) - 0.5),
+                xlabel=r"$\beta-\rho$ (AB mag)", ylabel=rf"$m_{{\{B}}}$ (AB mag)")
+        cmd.set_title("CMD", loc="left", weight="bold")
+        cmd.legend(loc="lower left", fontsize=9, framealpha=0.85, edgecolor="none").set_zorder(2)
+        cmd.grid(alpha=0.15)
 
-    # the exposure as hdps sees it: its reprojected tile around the block (sky level removed), on an asinh stretch
-    rgb, e = d["rgb"], exposures[B]
-    norm = AsinhNorm(linear_width=rgb["lw"], vmin=0.0, vmax=rgb["vmax"])
-    extent = e["extent"] if e is not None else (-HALF, HALF, -HALF, HALF)
-    if e is not None:
-        image_ax.imshow(np.clip(norm(np.maximum(e["image"] - e["background"], 0.0)), 0, 1), origin="lower",
-                        interpolation="nearest", extent=extent, cmap="gray", vmin=0, vmax=1)
-    else:
-        image_ax.set_facecolor(NAVY)
-        image_ax.text(0, 0, "hdps could not process\nthis frame", color="white", ha="center", va="center", fontsize=11)
-    step = MINIPIX_PX * SKY_PX
-    for v in np.arange(-HALF, HALF + 1e-6, step):  # the minipix grid
-        image_ax.plot([v, v], [-HALF, HALF], color="white", lw=0.5, alpha=0.35)
-        image_ax.plot([-HALF, HALF], [v, v], color="white", lw=0.5, alpha=0.35)
-    image_ax.add_patch(Rectangle((-step / 2, -step / 2), step, step, fill=False, ec=BLUE, lw=1.2))  # the central minipix
-    for k in follow:
-        image_ax.add_patch(Circle((stars["dx"][k], stars["dy"][k]), 3.0, fill=False, ec=colour_of[k], lw=1.2))
-        image_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold",
-                      clip_on=True)
-    edge = HALF + 2
-    image_ax.set(xlim=(-edge, edge), ylim=(-edge, edge), xlabel="Offset (arcsec)", ylabel="Offset (arcsec)")
-    if d["survey"] is None:
-        image_ax.set_title(f"Exposure ({SYMBOLS['beta']} blue, {SYMBOLS['rho']} red)", loc="left", weight="bold")
-    else:
-        image_ax.set_title(f"Exposure ({SYMBOLS[B]})", loc="left", weight="bold")
-        image_ax.text(0.97, 0.97, f"telescope {int(d['survey']['tel_id'][j])}\n{float(d['survey']['field_angle'][j]):.2f}° off-axis",
-                      transform=image_ax.transAxes, va="top", ha="right", fontsize=8, color="white",
-                      bbox={"facecolor": NAVY, "alpha": 0.65, "edgecolor": "none", "pad": 3})
-    bar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap="gray"), ax=image_ax, orientation="horizontal", fraction=0.05,
-                       pad=0.13, label=f"{SYMBOLS[B]} electrons / pixel above sky")
-    bar.set_ticks([v for v in (0, 10, 100, 1000, 10000) if v <= rgb["vmax"]])
-    bar.ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:,.0f}"))
-    bar.ax.tick_params(labelsize=7)
-    image_ax.text(0.03, 0.97, f"{args.exptime:g} s · exposure {j + 1}", transform=image_ax.transAxes, va="top",
-                  fontsize=8, color="white", bbox={"facecolor": NAVY, "alpha": 0.65, "edgecolor": "none", "pad": 3})
+        # light curves: measured points (hdps source detector, 4 px aperture) and the model behind, each relative to its own mean over the night
+        ut = d["ut"]
+        model_t = model_hours(ut)
+        model_bjd = d["bjd"][0] + (model_t - ut[0]) / 24.0
+        self.points, self.resid = {}, {}
+        for k in follow:
+            v = pulsators[int(source[k])]
+            if k in d["model_curve"]:
+                model = d["model_curve"][k]
+            else:
+                cyc = d["follow_cycle"][k][B]
+                model = np.interp(((model_bjd - v["epoch"]) / v["period"]) % 1.0, np.linspace(0, 1, len(cyc) + 1), np.r_[cyc, cyc[0]])
+            lc.plot(model_t, model - d["rel"][k]["model"], color=colour_of[k], lw=1.0, alpha=0.35)
+            if k in d["model_curve"]:
+                label = f"{labels[k]} {v['kind']}" + (f" z {v['transient']['z']:g}" if np.isfinite(v["transient"]["z"]) else "")
+            else:
+                label = f"{labels[k]} {v['kind']} {v['period']:.3f} d"
+            self.points[k] = lc.errorbar([], [], yerr=[], fmt="o", ms=2.5, lw=0.5, color=colour_of[k], label=label)
+            self.resid[k] = resid_ax.plot([], [], color=colour_of[k], lw=0.8)[0]
+        engines = [engine_of(pulsators[int(source[k])]) for k in follow]
+        model_name = " / ".join([e for e in ("MESA RSP", "PHOEBE") if e in engines]
+                                + list(dict.fromkeys(e for e in engines if e not in ("MESA RSP", "PHOEBE"))))
+        lc.plot([], [], color="0.5", lw=1.0, alpha=0.5, label=f"{model_name} model")
+        self.alerts_shown = any(any(key in follow for key, _, _ in frame) for frame in d["alerted"])
+        if self.alerts_shown:  # each alert: a band in the star's colour (made each frame: update)
+            lc.fill_between([], [], color="0.5", alpha=0.25, lw=0, label="alert")
+        self.spans = []
+        self.now_line = []
+        for ax in (lc, resid_ax):
+            self.now_line.append(ax.axvline(ut[0], color=NAVY, lw=0.8, alpha=0.35))
+            ax.grid(alpha=0.15)
+            ax.set_xlim(ut[0] - 0.1, ut[-1] + 0.1)
+        lo = np.nanmin([d["rel"][k]["span"][0] for k in follow] or [np.nan])
+        hi = np.nanmax([d["rel"][k]["span"][1] for k in follow] or [np.nan])
+        if not np.isfinite(lo):  # nothing lit all night
+            lo, hi = -0.5, 0.5
+        pad = 0.08 * max(hi - lo, 0.05)
+        lc.set(ylim=(hi + pad, lo - 2.5 * pad), ylabel=rf"$\Delta m_{{\{B}}}$ (mag)")
+        resid_lim = max(0.05, 1.3 * np.nanmax([d["rel"][k]["resid"] for k in follow] + [0.0]))
+        resid_ax.set_ylim(-resid_lim, resid_lim)
+        self.beyond = []  # points beyond the axes: a triangle at the edge
+        for k in follow:
+            for ax, series, lo_edge, hi_edge in ((lc, "m", lo - 2.5 * pad, hi + pad), (resid_ax, "r", -resid_lim, resid_lim)):
+                for side, edge, marker in ((1, hi_edge, "v"), (-1, lo_edge, "^")):
+                    line = ax.plot([], [], marker, ms=6, mfc="none", color=colour_of[k], clip_on=False)[0]
+                    self.beyond.append((k, series, side, edge, line))
+        lc.legend(loc="upper left", ncol=4, fontsize=7.5, frameon=True, framealpha=0.85, edgecolor="none", columnspacing=0.8,
+                  handletextpad=0.3)
+        lc.set_title("Light curves (hdps source detector)", loc="left", weight="bold")
+        self.when = lc.set_title("", loc="right", fontsize=11, color=NAVY)
+        plt.setp(lc.get_xticklabels(), visible=False)
+        resid_ax.axhline(0, color="0.5", lw=0.6, ls=":")
+        span_days = (d["times"][-1].jd - d["times"][0].jd) > 1
+        resid_ax.set(xlabel=f"UT hours since {d['times'][0].iso[:10]} 0h" if span_days else f"UT hours ({args.date} night)",
+                     ylabel="measured − true\n(mag)")
+        lc.yaxis.set_label_coords(-0.075, 0.5)
+        resid_ax.yaxis.set_label_coords(-0.075, 0.5)
+        resid_ax.invert_yaxis()
 
-    # the difference image (saturated pixels grey)
-    diverging = plt.get_cmap("RdBu_r").copy()
-    diverging.set_bad("#bfbfbf")
-    # asinh stretch, linear out to the sky noise: the noise, faint residuals and the large variables all show
-    dnorm = AsinhNorm(linear_width=d["rgb"]["lw"], vmin=-d["dlim"], vmax=d["dlim"])
-    blank = np.full((2, 2), np.nan)
-    diff = diff_ax.imshow(e["difference"] if e is not None else blank, origin="lower", interpolation="nearest",
-                          cmap=diverging, norm=dnorm, extent=extent)
-    for k in follow:
-        diff_ax.add_patch(Circle((stars["dx"][k], stars["dy"][k]), 3.0, fill=False, ec=colour_of[k], lw=1.0))
-        diff_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold",
-                     clip_on=True)
-    marks = alert_marks(d, d["n"], args.fps)
-    draw_alert_marks(image_ax, marks)
-    draw_alert_marks(diff_ax, marks)
-    diff_ax.set_title("Difference (PSF-matched)", loc="left", weight="bold")
-    diff_ax.text(0.03, 0.97, "hdps SFFT against its coadd reference" + ("\n(transients left out)" if d["model_curve"] else ""),
-                 transform=diff_ax.transAxes, va="top", fontsize=7.5, color=NAVY,
-                 bbox={"facecolor": "white", "alpha": 0.7, "edgecolor": "none", "pad": 2})
-    diff_ax.set(xlim=(-edge, edge), ylim=(-edge, edge), xlabel="Offset (arcsec)")
-    plt.setp(diff_ax.get_yticklabels(), visible=False)
-    dbar = fig.colorbar(diff, ax=diff_ax, orientation="horizontal", fraction=0.05, pad=0.13,
-                        label="difference (electrons / pixel)")
-    ticks = [v for v in (10, 100, 1000, 10000) if v <= d["dlim"]]
-    dbar.set_ticks([-v for v in ticks[::-1]] + [0] + ticks)
-    dbar.ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:,.0f}"))
-    dbar.ax.tick_params(labelsize=7)
+        # the exposure as hdps sees it: its reprojected tile around the block (sky level removed), on an asinh stretch
+        rgb = d["rgb"]
+        self.norm = norm = AsinhNorm(linear_width=rgb["lw"], vmin=0.0, vmax=rgb["vmax"])
+        self.face = image_ax.get_facecolor()
+        whole = (-HALF, HALF, -HALF, HALF)
+        self.image = image_ax.imshow(np.zeros((2, 2)), origin="lower", interpolation="nearest", extent=whole, cmap="gray",
+                                     vmin=0, vmax=1)
+        self.missing = image_ax.text(0, 0, "hdps could not process\nthis frame", color="white", ha="center", va="center",
+                                     fontsize=11, visible=False)
+        step = MINIPIX_PX * SKY_PX
+        for v in np.arange(-HALF, HALF + 1e-6, step):  # the minipix grid
+            image_ax.plot([v, v], [-HALF, HALF], color="white", lw=0.5, alpha=0.35)
+            image_ax.plot([-HALF, HALF], [v, v], color="white", lw=0.5, alpha=0.35)
+        image_ax.add_patch(Rectangle((-step / 2, -step / 2), step, step, fill=False, ec=BLUE, lw=1.2))  # the central minipix
+        for k in follow:
+            image_ax.add_patch(Circle((stars["dx"][k], stars["dy"][k]), 3.0, fill=False, ec=colour_of[k], lw=1.2))
+            image_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold",
+                          clip_on=True)
+        edge = HALF + 2
+        image_ax.set(xlim=(-edge, edge), ylim=(-edge, edge), xlabel="Offset (arcsec)", ylabel="Offset (arcsec)")
+        self.telescope = None
+        if d["survey"] is None:
+            image_ax.set_title(f"Exposure ({SYMBOLS['beta']} blue, {SYMBOLS['rho']} red)", loc="left", weight="bold")
+        else:
+            image_ax.set_title(f"Exposure ({SYMBOLS[B]})", loc="left", weight="bold")
+            self.telescope = image_ax.text(0.97, 0.97, "", transform=image_ax.transAxes, va="top", ha="right", fontsize=8,
+                                           color="white", bbox={"facecolor": NAVY, "alpha": 0.65, "edgecolor": "none", "pad": 3})
+        bar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap="gray"), ax=image_ax, orientation="horizontal", fraction=0.05,
+                           pad=0.13, label=f"{SYMBOLS[B]} electrons / pixel above sky")
+        bar.set_ticks([v for v in (0, 10, 100, 1000, 10000) if v <= rgb["vmax"]])
+        bar.ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:,.0f}"))
+        bar.ax.tick_params(labelsize=7)
+        self.exposure = image_ax.text(0.03, 0.97, "", transform=image_ax.transAxes, va="top", fontsize=8, color="white",
+                                      bbox={"facecolor": NAVY, "alpha": 0.65, "edgecolor": "none", "pad": 3})
 
-    # SEDs of the followed stars now, and as each Argus band records them (x filter x optics x QE x atmosphere^airmass)
-    ab = d["ab"]
-    response_wave = ab.tp.wav.to_value(u.nm)
-    for k in follow:
-        wave, sed = d["models"][k].wave.to_value(u.nm), d["follow_sed"][k][j]
-        shown = (wave >= 300) & (wave <= 1000)
-        sed_ax.plot(wave[shown], sed[shown], color=colour_of[k], lw=0.9)
-        on_grid = np.interp(response_wave, wave, sed, left=0.0, right=0.0)
-        for name, band in BANDS.items():
-            recorded = on_grid * system_response(ab.tp, band, d["airmass"][j])
-            sed_ax.plot(response_wave[recorded > 0], recorded[recorded > 0], color=colour_of[k], lw=0.9, ls=":")
-    sed_ax.set(yscale="log", ylim=d["sed_ylim"], xlim=(300, 1000),
-               xlabel="Wavelength (nm)", ylabel=r"$f_\lambda$ at Argus (erg s$^{-1}$ cm$^{-2}$ Å$^{-1}$)")
-    sed_ax.set_title("SED", loc="left", weight="bold")
-    response_ax = sed_ax.twinx()
-    response_ax.spines["right"].set_visible(True)
-    for name, band in BANDS.items():
-        response_ax.fill_between(response_wave, system_response(ab.tp, band, d["airmass"][j]), color=COLORS[name], alpha=0.10)
-    response_ax.set(ylim=(0, 1), ylabel="Detected response")
-    sed_ax.plot([], [], color="0.4", lw=0.9, label="SED")
-    sed_ax.plot([], [], color="0.4", lw=0.9, ls=":", label=r"SED × $\beta$, $\rho$ system response")
-    sed_ax.legend(loc="upper right", fontsize=8, frameon=False)
-    sed_ax.grid(alpha=0.12)
+        # the difference image (saturated pixels grey)
+        diverging = plt.get_cmap("RdBu_r").copy()
+        diverging.set_bad("#bfbfbf")
+        # asinh stretch, linear out to the sky noise: the noise, faint residuals and the large variables all show
+        dnorm = AsinhNorm(linear_width=d["rgb"]["lw"], vmin=-d["dlim"], vmax=d["dlim"])
+        self.blank = np.full((2, 2), np.nan)
+        self.diff = diff = diff_ax.imshow(self.blank, origin="lower", interpolation="nearest", cmap=diverging, norm=dnorm,
+                                          extent=whole)
+        for k in follow:
+            diff_ax.add_patch(Circle((stars["dx"][k], stars["dy"][k]), 3.0, fill=False, ec=colour_of[k], lw=1.0))
+            diff_ax.text(stars["dx"][k] + 3.2, stars["dy"][k] + 3.2, labels[k], fontsize=8, color=colour_of[k], weight="bold",
+                         clip_on=True)
+        self.marks = {image_ax: [], diff_ax: []}  # each image's alert marks (Text artists kept from frame to frame)
+        diff_ax.set_title("Difference (PSF-matched)", loc="left", weight="bold")
+        diff_ax.text(0.03, 0.97, "hdps SFFT against its coadd reference" + ("\n(transients left out)" if d["model_curve"] else ""),
+                     transform=diff_ax.transAxes, va="top", fontsize=7.5, color=NAVY,
+                     bbox={"facecolor": "white", "alpha": 0.7, "edgecolor": "none", "pad": 2})
+        diff_ax.set(xlim=(-edge, edge), ylim=(-edge, edge), xlabel="Offset (arcsec)")
+        plt.setp(diff_ax.get_yticklabels(), visible=False)
+        dbar = fig.colorbar(diff, ax=diff_ax, orientation="horizontal", fraction=0.05, pad=0.13,
+                            label="difference (electrons / pixel)")
+        ticks = [v for v in (10, 100, 1000, 10000) if v <= d["dlim"]]
+        dbar.set_ticks([-v for v in ticks[::-1]] + [0] + ticks)
+        dbar.ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:,.0f}"))
+        dbar.ax.tick_params(labelsize=7)
 
-    # the title: where and when on one line; what is shown on a second (the shown stars, and how many more are simulated)
-    what = pulsator_title(follow, pulsators, source) if follow else "no modelled variables in the block"
-    more = len(d["follow"]) - len(follow)
-    if more:
-        what += f" · {more} more simulated outside this view or not shown"
-    add_logo(fig, (0.012, 0.925, 0.15, 0.065))
-    fig.suptitle(f"{d['centre']} ({FIELDS[args.field]['name']}) — {block_label()} — {args.date} — "
-                 f"{args.exptime:g} s exposures — {SYMBOLS[B]}", fontsize=13.5, x=0.58, y=0.985)
-    fig.text(0.58, 0.935, "\n".join(textwrap.wrap(what, 120, break_long_words=False)), ha="center", va="top",
-             fontsize=10.5, color=NAVY)
+        # SEDs of the followed stars now, and as each Argus band records them (x filter x optics x QE x atmosphere^airmass)
+        ab = d["ab"]
+        self.response_wave = response_wave = ab.tp.wav.to_value(u.nm)
+        self.seds = {}
+        for k in follow:
+            line = sed_ax.plot([], [], color=colour_of[k], lw=0.9)[0]
+            self.seds[k] = (line, [sed_ax.plot([], [], color=colour_of[k], lw=0.9, ls=":")[0] for _ in BANDS])
+        sed_ax.set(yscale="log", ylim=d["sed_ylim"], xlim=(300, 1000),
+                   xlabel="Wavelength (nm)", ylabel=r"$f_\lambda$ at Argus (erg s$^{-1}$ cm$^{-2}$ Å$^{-1}$)")
+        sed_ax.set_title("SED", loc="left", weight="bold")
+        self.response_ax = response_ax = sed_ax.twinx()
+        self.titles += [a for a in response_ax.get_children() if isinstance(a, mtext.Text)]
+        response_ax.spines["right"].set_visible(True)
+        self.response = [response_ax.fill_between(response_wave, np.zeros(len(response_wave)), color=COLORS[name], alpha=0.10)
+                         for name in BANDS]
+        response_ax.set(ylim=(0, 1), ylabel="Detected response")
+        sed_ax.plot([], [], color="0.4", lw=0.9, label="SED")
+        sed_ax.plot([], [], color="0.4", lw=0.9, ls=":", label=r"SED × $\beta$, $\rho$ system response")
+        sed_ax.legend(loc="upper right", fontsize=8, frameon=False)
+        sed_ax.grid(alpha=0.12)
+
+        # the title: where and when on one line; what is shown on a second (the shown stars, and how many more are simulated)
+        what = pulsator_title(follow, pulsators, source) if follow else "no modelled variables in the block"
+        more = len(d["follow"]) - len(follow)
+        if more:
+            what += f" · {more} more simulated outside this view or not shown"
+        add_logo(fig, (0.012, 0.925, 0.15, 0.065))
+        fig.suptitle(f"{d['centre']} ({FIELDS[args.field]['name']}) — {block_label()} — {args.date} — "
+                     f"{args.exptime:g} s exposures — {SYMBOLS[B]}", fontsize=13.5, x=0.58, y=0.985)
+        fig.text(0.58, 0.935, "\n".join(textwrap.wrap(what, 120, break_long_words=False)), ha="center", va="top",
+                 fontsize=10.5, color=NAVY)
+
+        # each panel's lowest changing layer (zorder): the images and alert bands lie at the bottom of theirs
+        self.floors = {cmd: 5, image_ax: 0, diff_ax: 0, lc: 0, resid_ax: 0, sed_ax: 2, response_ax: 1}
+        self.changing_titles = [self.when]  # the time above the light curves: drawn each frame
+        self._background = self._size = None
+        self._grids = {}  # each axis's grid lines drawn (as the background was drawn)
+
+    def update(self, exposures, j):
+        """Set frame j (survey row j; the frame's number among those shown is d["n"], and the light curves so far are
+        d["history"])."""
+        d, args, B = self.d, self.args, self.args.band
+        n, true_mag, colour_of = d["n"], d["true_mag"], d["colour_of"]
+        for k in self.follow:
+            self.now[k].set_offsets([[true_mag("beta", k, j) - true_mag("rho", k, j), true_mag(B, k, j)]])
+        shown = {}
+        for k in self.follow:
+            h = d["history"][k]
+            t = np.array(h["t"], float)
+            m, e = np.array(h["m"], float), np.array(h["e"], float)
+            ok = np.isfinite(m)
+            y = m[ok] - d["rel"][k]["measured"]
+            data, _, bars = self.points[k].lines
+            data.set_data(t[ok], y)
+            bars[0].set_segments([[(x, a - s), (x, a + s)] for x, a, s in zip(t[ok], y, e[ok])])
+            resid = m - np.array(h["true"], float)
+            if d["survey"] is not None:  # not across the gaps between ratchets
+                gap = np.r_[False, np.diff(t) > 0.1]
+                t, resid = np.insert(t, np.nonzero(gap)[0], np.nan), np.insert(resid, np.nonzero(gap)[0], np.nan)
+            self.resid[k].set_data(t, resid)
+            shown[k, "m"], shown[k, "r"] = (np.array(h["t"], float)[ok], y), (t, resid)
+        for span in self.spans:
+            span.remove()
+        self.spans = []
+        if self.alerts_shown:
+            for k in self.follow:
+                for lo_t, hi_t in alert_spans(d, k, n):
+                    for ax in (self.lc, self.resid_ax):
+                        self.spans.append(ax.axvspan(lo_t, hi_t, color=colour_of[k], alpha=0.16, lw=0, zorder=0))
+        for line in self.now_line:
+            line.set_xdata([d["ut"][j], d["ut"][j]])
+        for k, series, side, edge, line in self.beyond:
+            t, y = shown[k, series]
+            beyond = (y > edge) if side > 0 else (y < edge)
+            line.set_data(t[beyond], np.full(int(np.sum(beyond)), edge))
+        self.when.set_text(f"UT {d['times'][j].iso[11:16]} · airmass {d['airmass'][j]:.2f} · seeing {d['seeing'][j]:.2f}″")
+
+        e = exposures[B]
+        extent = e["extent"] if e is not None else (-HALF, HALF, -HALF, HALF)
+        if e is not None:
+            self.image.set_data(np.clip(self.norm(np.maximum(e["image"] - e["background"], 0.0)), 0, 1))
+            self.image.set_extent(extent)
+        self.image.set_visible(e is not None)
+        self.missing.set_visible(e is None)
+        self.image_ax.set_facecolor(self.face if e is not None else NAVY)
+        self.diff.set_data(e["difference"] if e is not None else self.blank)
+        self.diff.set_extent(extent)
+        if self.telescope is not None:
+            self.telescope.set_text(f"telescope {int(d['survey']['tel_id'][j])}\n"
+                                    f"{float(d['survey']['field_angle'][j]):.2f}° off-axis")
+        self.exposure.set_text(f"{args.exptime:g} s · exposure {j + 1}")
+        # the alert marks inside the images (most alerts lie elsewhere in hdps's readout window: drawn, a mark there
+        # would be clipped away entirely; a mark stands on its point, at most ~35" tall)
+        edge, margin = HALF + 2, 50.0
+        marks = [m for m in alert_marks(d, n, args.fps)
+                 if -edge - margin < m[0] < edge + margin and -edge - margin < m[1] + 4.5 < edge]
+        for ax, pool in self.marks.items():
+            if len(pool) < len(marks):  # the marks made as draw_alert_marks makes them, the same in both images
+                pool += draw_alert_marks(ax, marks[len(pool):])
+            for text, mark in zip(pool, marks):
+                set_alert_mark(text, *mark)
+            for text in pool[len(marks):]:
+                text.set_visible(False)
+
+        tp, airmass = d["ab"].tp, d["airmass"][j]
+        for k in self.follow:
+            wave, sed = d["models"][k].wave.to_value(u.nm), d["follow_sed"][k][j]
+            inside = (wave >= 300) & (wave <= 1000)
+            line, recorded_lines = self.seds[k]
+            line.set_data(wave[inside], sed[inside])
+            on_grid = np.interp(self.response_wave, wave, sed, left=0.0, right=0.0)
+            for (name, band), rec in zip(BANDS.items(), recorded_lines):
+                recorded = on_grid * system_response(tp, band, airmass)
+                rec.set_data(self.response_wave[recorded > 0], recorded[recorded > 0])
+        for (name, band), fill in zip(BANDS.items(), self.response):
+            fill.set_data(self.response_wave, system_response(tp, band, airmass), 0)
+
+    def _redrawn(self, ax):
+        """What a frame draws in panel ax: the artists from its floor up, in the order Axes.draw draws them, the axes'
+        grid lines in place of the axes (their tick marks and labels stay in the background)."""
+        floor = self.floors[ax]
+        out = []
+        for a in sorted(ax.get_children(), key=lambda a: a.get_zorder()):  # stable: equal zorders in the order made
+            if a is ax.patch or a.get_zorder() < floor or not a.get_visible():
+                continue
+            if any(a is t for t in self.titles) and not any(a is t for t in self.changing_titles):
+                continue
+            if isinstance(a, maxis.Axis):
+                if a not in self._grids:
+                    self._grids[a] = self._grid_lines(a)
+                out += self._grids[a]
+            else:
+                out.append(a)
+        return out
+
+    @staticmethod
+    def _grid_lines(axis):
+        """The visible grid lines an Axis draws (those of its ticks inside the view, as Axis._update_ticks picks
+        them)."""
+        lines = []
+        low, high = sorted(axis.get_transform().transform(np.asarray(axis.get_view_interval(), float)))
+        tolerance = 1e-10 * (high - low)
+        for ticks, locs in ((axis.get_major_ticks(len(axis.get_majorticklocs())), axis.get_majorticklocs()),
+                            (axis.get_minor_ticks(len(axis.get_minorticklocs())), axis.get_minorticklocs())):
+            for tick, loc in zip(ticks, locs):
+                at = float(axis.get_transform().transform(np.asarray([loc], float))[0])
+                if tick.gridline.get_visible() and low - tolerance <= at <= high + tolerance:
+                    lines.append(tick.gridline)
+        return lines
+
+    def _capture(self):
+        """The background: the figure drawn without what frames draw (Agg's draw, so an interactive canvas does not
+        show it)."""
+        canvas = self.fig.canvas
+        self._grids = {}
+        for ax, floor in self.floors.items():  # the ticks of each axis whose grid is redrawn, made now to hide their lines
+            for axis in (ax.xaxis, ax.yaxis):
+                if axis.get_zorder() >= floor:
+                    axis.get_gridlines()
+        # hidden while the background is drawn; a changing title is emptied instead (a hidden title would move the
+        # panel's other titles: Axes._update_title_position)
+        hidden = [a for ax in self.floors for a in self._redrawn(ax) if not any(a is t for t in self.changing_titles)]
+        hidden += [ax.patch for ax, floor in self.floors.items() if floor <= 0]  # redrawn first: its colour may change
+        was = [a.get_visible() for a in hidden]
+        texts = [t.get_text() for t in self.changing_titles]
+        for a in hidden:
+            a.set_visible(False)
+        for t in self.changing_titles:
+            t.set_text("")
+        FigureCanvasAgg.draw(canvas)
+        self._background = canvas.copy_from_bbox(self.fig.bbox)
+        for a, visible in zip(hidden, was):
+            a.set_visible(visible)
+        for t, text in zip(self.changing_titles, texts):
+            t.set_text(text)
+
+    def render(self):
+        """Draw the frame set by update(): the RGBA image of the whole figure (a memoryview of the canvas's buffer)."""
+        canvas = self.fig.canvas
+        size = (self.fig.dpi, *canvas.get_width_height(physical=True))
+        if self._background is None or size != self._size:
+            self._capture()
+            self._size = size
+        canvas.restore_region(self._background)
+        renderer = canvas.get_renderer()
+        for ax in sorted((a for a in self.fig.get_children() if a in self.floors), key=lambda a: a.get_zorder()):
+            if self.floors[ax] <= 0:  # (the figure's order: equal zorders as made)
+                ax.patch.draw(renderer)
+            for a in self._redrawn(ax):
+                a.draw(renderer)
+        return canvas.buffer_rgba()
 
 
 if __name__ == "__main__":
