@@ -703,6 +703,8 @@ def block_radec(dx, dy):
 
 
 PREVIEW_BIN = 4  # the pipeline movie's raw-frame preview: block means of 4 x 4 sensor pixels
+PHOTOMETRY_COLUMNS = ("exposure", "ut_hours", "airmass", "seeing", "star", "true_mag", "saturated", "measured_mag",
+                      "measured_err", "band", "tel_id", "ratchet", "field_angle", "time_utc")  # <name>_night_<band>.photometry.csv
 
 
 def binned(image, k):
@@ -767,23 +769,30 @@ def alert_table(work, stem):
     return table
 
 
-def write_raw_frame(folder, image, win, row, args):
-    """The exposure as a raw camera frame (mesa_argus.camera): <folder>/<CAMID>_<UTC start>.fits. The header's
-    pointing is the readout window's centre (the camera's pointing over what it reads out)."""
+def raw_frame_path(folder, row, args):
+    """Where an exposure's raw camera frame is written: (<folder>/<CAMID>_<UTC start>.fits, start, end)."""
     from datetime import timedelta
 
-    from argus_sim.coverage_exact import Layout
     from astropy.time import Time
 
-    from mesa_argus import camera, sensor
+    from mesa_argus import camera
 
     mid = Time(row["time"])
     start, end = mid - timedelta(seconds=args.exptime / 2), mid + timedelta(seconds=args.exptime / 2)
+    return folder / f"{camera.camera_id(int(row['tel_id']))}_{start.datetime:%Y%m%d_%H%M%S}.fits", start, end
+
+
+def write_raw_frame(folder, image, win, row, args):
+    """The exposure as a raw camera frame (mesa_argus.camera): <folder>/<CAMID>_<UTC start>.fits. The header's
+    pointing is the readout window's centre (the camera's pointing over what it reads out)."""
+    from argus_sim.coverage_exact import Layout
+
+    from mesa_argus import camera, sensor
+
+    path, start, end = raw_frame_path(folder, row, args)
     ra, dec = sensor.sky_at(win[0] + (win[2] - 1) / 2, win[1] + (win[3] - 1) / 2, row["time"], row["theta_deg"],
                             int(row["ota"]), Layout.from_config())
-    cam = camera.camera_id(int(row["tel_id"]))
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"{cam}_{start.datetime:%Y%m%d_%H%M%S}.fits"
     camera.write_raw(path, image, dict(utc_start=start.isot, utc_end=end.isot, exptime=args.exptime,
                                        ratchet=f"{start.datetime:%Y%m%d}_{int(row['ratchet'])}", tel_id=int(row["tel_id"]),
                                        target_ra=float(ra), target_dec=float(dec), band=row["band"], x_origin=win[0],
@@ -886,6 +895,9 @@ def parser():
     p.add_argument("--pipeline-movie", action="store_true", help="also draw the pipeline movie (mesa_argus.pipeline_movie)")
     p.add_argument("--reference", type=Path, help="hdps's reference coadds (the reference pass's coadds/): SFFT's reference_dir")
     p.add_argument("--no-render", action="store_true", help="measure (and write FITS) but draw no movie")
+    p.add_argument("--measure-only", action="store_true",
+                   help="measure again from the raw frames and hdps's products a run left in --work (a run that stopped "
+                        "after hdps): no rendering, no hdps; then the outputs as usual")
     p.add_argument("--render-only", action="store_true",
                    help="draw the movies from a finished run's <output>.movie.joblib (output.movie_data): no "
                         "rendering, no hdps; the scene is rebuilt as in the run")
@@ -1093,17 +1105,24 @@ def main(argv=None):
         return
 
     print(f"{'reference pass' if reference_pass else 'observing'}: {len(frames)} exposures ({B}) as raw frames "
-          f"({window_px} px window) -> {work / 'raw'}", flush=True)
+          f"({window_px} px window) -> {work / 'raw'}" + (" (already there: measuring them again)" if args.measure_only
+                                                           else ""), flush=True)
     records = []
     for n, j in enumerate(frames):  # 6. the camera: each exposure rendered and written as a raw frame
         row = survey[j]
         x, y, angle = projector.pixels(j, row["theta_deg"], row["ota"])
         win = sensor.window(x[0], y[0], window_px)
-        electrons = rates_at(B, j, reference=reference_pass) * args.exptime
-        image = sensor.render(x[1:], y[1:], electrons, angle[1:], B, seeing[j], scene.background(B, j), win, psfs,
-                              np.random.default_rng(seeds[j]), ARGUS_CONFIG.telescope.readnoise,
-                              ARGUS_CONFIG.telescope.fullwell)
-        path = write_raw_frame(work / "raw", image, win, row, args)
+        if args.measure_only:  # the frame the run wrote
+            from astropy.io import fits
+
+            path = raw_frame_path(work / "raw", row, args)[0]
+            image = fits.getdata(path).astype(np.float32)
+        else:
+            electrons = rates_at(B, j, reference=reference_pass) * args.exptime
+            image = sensor.render(x[1:], y[1:], electrons, angle[1:], B, seeing[j], scene.background(B, j), win, psfs,
+                                  np.random.default_rng(seeds[j]), ARGUS_CONFIG.telescope.readnoise,
+                                  ARGUS_CONFIG.telescope.fullwell)
+            path = write_raw_frame(work / "raw", image, win, row, args)
         sx, sy = x[1:] - win[0], y[1:] - win[1]  # every star in the window's pixels (truth)
         bright = (G < 17) & (sx > 20) & (sx < win[2] - 20) & (sy > 20) & (sy < win[3] - 20)  # for the WCS check
         records.append(dict(path=path, window=win, field_xy=(x[0], y[0]), j=j, sx=sx, sy=sy,
@@ -1123,8 +1142,9 @@ def main(argv=None):
         if not obs["output"]["raw"]:
             shutil.rmtree(work / "raw", ignore_errors=True)
         return
-    result = hdps_worker.run(obs, work / "raw", work, reference_dir=args.reference, worker_id=f"{FIELD}_{B}")
-    print(f"hdps worker: {result}", flush=True)
+    if not args.measure_only:
+        result = hdps_worker.run(obs, work / "raw", work, reference_dir=args.reference, worker_id=f"{FIELD}_{B}")
+        print(f"hdps worker: {result}", flush=True)
 
     # the measurements, from hdps's products: the solved frame's catalogue and zero point, the tile images, alerts
     rows, measured, alerted, cutouts, alert_rows = [], [], [], [], []
@@ -1202,8 +1222,8 @@ def main(argv=None):
         accepted = alerts[alerts["accepted"]]
         print("alert truth (accepted): " + ", ".join(f"{c} {n}" for c, n in accepted["truth_class"].value_counts().items()),
               flush=True)
-    with open(args.output.with_suffix(".photometry.csv"), "w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=rows[0].keys())
+    with open(args.output.with_suffix(".photometry.csv"), "w", newline="") as handle:  # (no rows: no star followed)
+        writer = csv.DictWriter(handle, fieldnames=rows[0].keys() if rows else PHOTOMETRY_COLUMNS)
         writer.writeheader()
         writer.writerows(rows)
 
