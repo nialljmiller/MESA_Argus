@@ -49,6 +49,11 @@ Each of these changes measurements: decide one at a time.
       across them). Report: AlertVettingTask reads `MAGZP`, which the chain never sets (it sets `coadd_magzp`), so
       alert magnitudes are empty; ffi-catalogs.md gives the rate-referenced recipe for `magzp`, the frame's
       `coadd_magzp` is electron-referenced.
+- [ ] Report: with `mask_bright_stars` on, SFFTSubtractionTask's `_bright_star_mask` thresholds the science tile with
+      its sky still in it (hdps's own convention: "science frames still carry sky", docker/demo/config.yaml), while
+      its docstring assumes sky-subtracted inputs. Effective threshold ~1500-1700 e- above sky instead of 3000, moving
+      with the sky; nothing brighter than about beta 15 can alert. Proposed fix: subtract the science tile's
+      background before thresholding. hdps's production config leaves the mask off; MESA_Argus turns it on.
 - [ ] Write our exposures as L2 `.arg` segments with hdps's own `hdps.archive.data_store.encode_frames` (same
       0.879"/px tile grid as ours), and a reference in `CoaddReferenceProvider`'s layout (synthref `render.py`).
 - [ ] SFFT fixes (kernel mirror, DC offset, spatially varying background) are on branches `origin/408/16..20`,
@@ -160,3 +165,10 @@ Each of these changes measurements: decide one at a time.
   (the GPU code has none; on a part-covered tile it shifted the difference by the sky, +1000 e-). On one frame:
   level 0-2 e-, swing across a tile 1-4 e- (was up to 1905), squares 45 e- (was 11644). Bright stars leave ~20%
   residuals (0.2 px registration, PSF from another telescope's reference), which alert with real/bogus off: accepted.
+- 2026-10-23: validating the live notebook's edited star against injected stars hdps measured
+  (tools/check_edited_star.py) found two facts about hdps as our chain runs it. (1) Tiles carry surface brightness:
+  a star's flux summed on a tile is its electrons x (1.007"/0.879")^2 = 1.31. (2) With `mask_bright_stars` on (our
+  config; off in hdps's production config) the mask is applied to the science tile with its sky in, so an injected
+  dwarf nova at beta 14.7 never became a candidate in 135 frames; reconstructed with the sky in, the mask covers it in
+  every frame and none of hdps's 441 candidates, sky-subtracted it covers it in half the frames. An hdps issue (the
+  mask's assumption against hdps's own sky convention); the simulation reproduces hdps as it is.
