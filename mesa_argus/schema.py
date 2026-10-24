@@ -81,7 +81,35 @@ FIELD = [
       "14/16 and 0/16, 40: 14/16 and 7/16, 80: 11/16 and 0/16; production processes whole frames). The field's Gaia "
       "stars must reach the window's far corner: radius ~0.5 deg for 56.",
       allowed_text="0, or 28 .. the sensor's short side (313 for ArgusSim's default sensor)"),
+    P("window_offset", [0.0, 0.0], "arcmin", lambda v, r: _window_offset_check(v, r),
+      "Where the readout window's centre lies from the field (the block's centre), [east, north]; the block stays on "
+      "the field, only the window moves. [0, 0]: the window centred on the field. A real Argus frame is centred on the "
+      "telescope's pointing, not on a target, so a target generally sits off-centre. hdps's linear WCS solver starts "
+      "from the detections in a circle about the frame centre; with a crowded target there (M3's core) it accepts "
+      "false alignments with the pixel scale 5-15x wrong and every tile is dropped (docs/ARGUS_INTEGRATION.md, "
+      "2026-10-24), so such a target is observed off-centre. Limits: the block stays inside the window, and the "
+      "window's far corner within the field's Gaia stars (0.52 deg); 0 for the whole sensor (window = 0).",
+      allowed_text="[east, north]: the block inside the window, the far corner within 0.52 deg"),
 ]
+
+
+def _window_offset_check(v, r):
+    if not (isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                                                        for x in v)):
+        return "[east, north] in arcmin"
+    section = (r or {}).get("field", {})
+    window, block = section.get("window", 56), section.get("block", 9)
+    if not window:
+        return None if v == [0, 0] else "[0, 0] with the whole sensor (window = 0)"
+    room = (window - block) / 2 * minipix_arcsec() / 60  # arcmin the block can move from the window's centre
+    if max(abs(v[0]), abs(v[1])) > room:
+        return f"each within {room:.1f}' (the {block}-minipix block inside the {window}-minipix window)"
+    import math
+
+    corner = math.hypot(abs(v[0]) + window / 2 * minipix_arcsec() / 60, abs(v[1]) + window / 2 * minipix_arcsec() / 60)
+    from mesa_argus.gaia import RADIUS_DEG
+
+    return None if corner <= RADIUS_DEG * 60 else f"the window's far corner {corner:.1f}' beyond the field's Gaia stars ({RADIUS_DEG * 60:.0f}')"
 
 
 def _window_check(v):

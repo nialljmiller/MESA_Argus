@@ -1071,6 +1071,9 @@ def main(argv=None):
     star_ra, star_dec = block_radec(np.asarray(stars["dx"]), np.asarray(stars["dy"]))
     centre_ra, centre_dec = block_radec(np.zeros(1), np.zeros(1))
     projector = sensor.Projector(np.r_[centre_ra, star_ra], np.r_[centre_dec, star_dec], times, Layout.from_config())
+    east, north = obs["field"]["window_offset"]  # where the readout window's centre lies from the field (arcmin)
+    window_ra, window_dec = block_radec(np.array([-60.0 * east]), np.array([60.0 * north]))  # the block's +x is west
+    window_projector = sensor.Projector(window_ra, window_dec, times, Layout.from_config())
     psfs = sensor.PSFs(ARGUS_CONFIG)
     work = args.work / B
     expected_flux = static_rate[B][:, 0] * args.exptime
@@ -1114,7 +1117,8 @@ def main(argv=None):
     for n, j in enumerate(frames):  # 6. the camera: each exposure rendered and written as a raw frame
         row = survey[j]
         x, y, angle = projector.pixels(j, row["theta_deg"], row["ota"])
-        win = sensor.window(x[0], y[0], window_px)
+        wx, wy, _ = window_projector.pixels(j, row["theta_deg"], row["ota"])
+        win = sensor.window(wx[0], wy[0], window_px)
         if args.measure_only:  # the frame the run wrote
             from astropy.io import fits
 
