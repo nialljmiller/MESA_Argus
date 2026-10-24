@@ -45,6 +45,11 @@ type = "SourceMatchingTask"
 
 [[hdps.tasks]]
 type = "TPVWCSSolverTask"
+[hdps.tasks.config]
+tpv_terms = 7  # second order: in M3's crowded field the 17-term fit, pulled by mismatched pairs, does not invert across
+# the tiles beyond the window and ReprojectionTask drops them. Test, window offset [0, -7], every 20th exposure of the
+# reference night: frames with tiles 17 terms 5/11 beta, 6/10 rho; 11 terms 9/11, 10/10; 7 terms 10/11, 10/10; median
+# TPV residual 1.16"/0.75" (17), 0.46"/0.21" (11), 0.42"/0.23" (7)
 
 [[hdps.tasks]]
 type = "LightweightFITSOutputTask"
