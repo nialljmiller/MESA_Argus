@@ -54,6 +54,17 @@ Each of these changes measurements: decide one at a time.
       its docstring assumes sky-subtracted inputs. Effective threshold ~1500-1700 e- above sky instead of 3000, moving
       with the sky; nothing brighter than about beta 15 can alert. Proposed fix: subtract the science tile's
       background before thresholding. hdps's production config leaves the mask off; MESA_Argus turns it on.
+      On a bright-sky night the whole tile is above the threshold: M67 beta (sky ~3550 e- per tile pixel) got no
+      alert candidate in any frame, its differences being normal (noise 49 e-, ~400 detections per frame).
+- [ ] Report: `LinearWCSSolver` accepts a false alignment in a crowded field. It takes the detections in a circle
+      about the frame centre; on M3's core the quad match locks onto a wrong solution (LLR 63, above the threshold
+      25) with the pixel scale wrong by 5-15x (0.06-0.20"/px against 1.007"). The TPV fit then contorts to it
+      (higher-order PV up to 1e8), the WCS does not invert even inside the frame, and ReprojectionTask drops every
+      tile ("non-finite WCS grid"). 13 of 228 beta and 52 of 186 rho frames of the M3 night came out at the right
+      scale. Nothing checks the affine scale against `pixscale`, which the solver is given. Proposed fix: reject an
+      alignment whose scale (or shear) differs from `pixscale` by more than a few percent and keep searching larger
+      subsets. Not reproducible with our settings: LinearWCSSolverTask n_stars 150/600/1500, TPV terms 7/11/17 and
+      no Chebyshev basis all leave the M3 frames without tiles.
 - [ ] Write our exposures as L2 `.arg` segments with hdps's own `hdps.archive.data_store.encode_frames` (same
       0.879"/px tile grid as ours), and a reference in `CoaddReferenceProvider`'s layout (synthref `render.py`).
 - [ ] SFFT fixes (kernel mirror, DC offset, spatially varying background) are on branches `origin/408/16..20`,
@@ -172,3 +183,10 @@ Each of these changes measurements: decide one at a time.
   dwarf nova at beta 14.7 never became a candidate in 135 frames; reconstructed with the sky in, the mask covers it in
   every frame and none of hdps's 441 candidates, sky-subtracted it covers it in half the frames. An hdps issue (the
   mask's assumption against hdps's own sky convention); the simulation reproduces hdps as it is.
+- 2026-10-24: the live notebook's Messier nights (newton). All six engines failed writing an empty photometry table
+  (fixed 3b55487; tools/remeasure.py measures again from hdps's products). Through hdps: M45 normal (frames not
+  processed 8% beta, 4% rho). M3: the linear WCS locks onto false solutions in the cluster core (see the hdps
+  checklist): no tile in beta, 18 frames with tiles in rho. M67: the linear solver finds no alignment in 46% of beta
+  and 32% of rho frames (LLR -5, "No alignable subset"; field angle and telescope do not explain it; the solved
+  frames have the right scale), and beta has no alert candidates because the bright-star mask covers its whole tile
+  (sky above the threshold). Training nights lose 2.1% of frames in hdps (20 band-nights, Mac).
