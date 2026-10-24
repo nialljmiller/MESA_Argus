@@ -5,7 +5,6 @@ Workers are spawned, not forked: a forked Jupyter kernel on macOS can crash in t
 Each loads the pack itself once (a few seconds, in the background, while the app is already usable: until the
 workers are ready the app measures with threads and draws frames itself).
 """
-import io
 import logging
 import multiprocessing as mp
 import os
@@ -59,24 +58,19 @@ def measure(key, state, ns):
     return _get(key).measure_frames(state, ns)
 
 
-def render(key, state, meas, cands, ns, dpi):
-    """[(n, PNG bytes)] of movie frames ns for a state, from its measurements."""
+def render(key, state, meas, cands, scored, ns, dpi):
+    """[(n, JPEG bytes)] of movie frames ns for a state, from its measurements and their scores."""
     global _fig
     import matplotlib.pyplot as plt
 
     night = _get(key)
     if night.state is None or repr(night.state) != repr(state):
-        night.assemble(state, meas, cands)
+        night.assemble(state, meas, cands, scored)
     if _fig is None:
         night.nm.apply_style()
-        _fig = plt.figure(figsize=(16, 10))
-    out = []
-    for n in ns:
-        night.draw(_fig, n)
-        buf = io.BytesIO()
-        _fig.savefig(buf, format="png", dpi=dpi)
-        out.append((n, buf.getvalue()))
-    return out
+        _fig = plt.figure(figsize=(16, 10), dpi=dpi)
+    _fig.set_dpi(dpi)
+    return [(n, night.frame_image(_fig, n)) for n in ns]
 
 
 class Workers:
@@ -124,10 +118,10 @@ class Workers:
             self.use(*self.key)
             return None
 
-    def render(self, state, meas, cands, ns, dpi, chunk=3):
-        """[future of [(n, PNG)]] for frames ns in order, a few frames per future (playback starts with the first)."""
+    def render(self, state, meas, cands, scored, ns, dpi, chunk=3):
+        """[future of [(n, JPEG)]] for frames ns in order, a few frames per future (playback starts with the first)."""
         ns = list(ns)
-        return [self.pool.submit(render, self.key, state, meas, cands, ns[i:i + chunk], dpi)
+        return [self.pool.submit(render, self.key, state, meas, cands, scored, ns[i:i + chunk], dpi)
                 for i in range(0, len(ns), chunk)]
 
     def close(self):

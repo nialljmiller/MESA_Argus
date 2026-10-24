@@ -4,7 +4,7 @@
     from mesa_argus.interactive.app import App
     App().show()
 
-The window is the field movie (night_movie.draw itself): CMD, light curves, hdps's exposure and difference image with
+The window is the field movie (night_movie.MovieFrame, the movie's own drawing): CMD, light curves, hdps's exposure and difference image with
 its alerts, SEDs. Below it: the field (a precomputed hdps night), the band, the star's type and its sliders, the
 airmass offset, and the frame and Play controls. Click the exposure or the difference image to move the star.
 
@@ -13,6 +13,7 @@ added to hdps's images and measured with hdps's own code (night.Night); the stan
 """
 import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -55,6 +56,14 @@ def available():
     return dict(sorted(out.items(), key=lambda kv: order.index(kv[0]) if kv[0] in order else len(order)))
 
 
+def _start(coro):
+    """Run a coroutine in the kernel's event loop (Jupyter's), or to its end where there is none (a plain script)."""
+    try:
+        return asyncio.get_running_loop().create_task(coro)
+    except RuntimeError:
+        return asyncio.run(coro)
+
+
 def words(kind):
     timing = templates.TYPES[kind]["timing"]
     return WORDS["periodic"] if timing == "periodic" else WORDS[kind]
@@ -91,7 +100,7 @@ class App:
                 setattr(canvas, attr, value)
         canvas.mpl_connect("button_press_event", self._click)
         size = W.Layout(width=f"{16 * dpi}px", height=f"{10 * dpi}px")
-        self.screen = W.Image(format="png", layout=size)  # the played frames
+        self.screen = W.Image(format="jpeg", layout=size)  # the played frames
         self.screen.layout.display = "none"
 
         layout = W.Layout(width="420px")
@@ -121,8 +130,10 @@ class App:
         self._busy = False
         self._quiet = False  # set while the app changes its own controls: their handlers do nothing
         self._task = None
-        self._frames = {}  # rendered frames (n -> PNG) for the current night and star
+        self._frames = {}  # rendered frames (n -> JPEG) for the current night and star
         self._renders = []  # their futures
+        self._generation = 0  # changes made; a measurement for an older one is dropped
+        self._measuring = ThreadPoolExecutor(max_workers=1)  # measurements run here, off the kernel's own thread
 
         self.field.observe(self._field_changed, "value")
         self.band.observe(self._quietly(self._load), "value")
@@ -200,10 +211,13 @@ class App:
     def _play_changed(self, change):
         self.play.icon = "pause" if change["new"] else "play"
         self.play.description = "Pause" if change["new"] else "Play"
+        if change["new"] and (self.night is None or self.night.d is None):  # nothing measured yet
+            self._set((self.play, "value", False))
+            return
         if change["new"]:
             if self.frame.value >= self.frame.max:
                 self._set((self.frame, "value", 0))
-            self._task = asyncio.ensure_future(self._run())
+            self._task = _start(self._run())
 
     async def _run(self):
         """The night from the current frame at the movie's frame rate: frames drawn by the workers (rendered once
@@ -219,8 +233,8 @@ class App:
             if missing:
                 r = self.night.result
                 try:
-                    self._renders = self.workers.render(self.night.state, r["meas"], r["cands"], missing,
-                                                        self.render_dpi)
+                    self._renders = self.workers.render(self.night.state, r["meas"], r["cands"], r["scored"],
+                                                        missing, self.render_dpi)
                 except Exception:  # the pool broke: play by drawing here, and restart the workers meanwhile
                     self.workers.use(*self.workers.key)
                     while self.play.value and self.frame.value < self.frame.max:
@@ -228,18 +242,18 @@ class App:
                         await asyncio.sleep(0.02)
                     return
             fps = float(self.night.args.fps)
-            self._playing(True)
             futures, frames = list(self._renders), self._frames
             for n in range(start, self.frame.max + 1):
                 while n not in frames:  # not drawn yet: take the next finished batch
                     if not futures:
                         return
-                    for m, png in await asyncio.wrap_future(futures.pop(0)):
-                        frames[m] = png
+                    for m, jpeg in await asyncio.wrap_future(futures.pop(0)):
+                        frames[m] = jpeg
                 if not self.play.value or frames is not self._frames:  # paused, or the star changed meanwhile
                     return
                 shown = time.time()
                 self.screen.value = self._frames[n]
+                self._playing(True)  # (from the first frame drawn: the live figure stays until then)
                 self._set((self.frame, "value", n))
                 await asyncio.sleep(max(0.0, 1.0 / fps - (time.time() - shown)))
         except Exception as error:  # a worker failed mid-way: say so, and stop
@@ -278,16 +292,40 @@ class App:
                         dx=self.where[0], dy=self.where[1])
 
     def _recompute(self):
+        """A change: the night measured again without holding up the controls (in the worker processes, or threads
+        while they load), then drawn; the newest change wins."""
         if self.night is None:
             return
+        self._stop_playing()
+        self._generation += 1
+        self.status.value = f"<b>Star E</b> at ({self.where[0]:+.0f}″, {self.where[1]:+.0f}″) · measuring …"
+        _start(self._measure(self._generation))
+
+    async def _measure(self, generation):
         t = time.time()
-        self._set((self.play, "value", False))  # a change stops the playback
-        for f in self._renders:  # frames rendered for the previous star are no longer wanted
+        night, s, d_airmass = self.night, self.settings(), float(self.airmass.value)
+        workers = self.workers if self.workers is not None and self.workers.ready() else None
+
+        def measure():  # (skipped if a newer change came while it waited)
+            return None if generation != self._generation else night.measure(s, d_airmass, self.seed, workers)
+
+        measured = await asyncio.get_running_loop().run_in_executor(self._measuring, measure)
+        if measured is None or generation != self._generation or night is not self.night:
+            return
+        self._stop_playing()  # (frames played meanwhile were of the previous star)
+        r = night.assemble(*measured)
+        took = time.time() - t
+        self._report(r, took, workers is not None)
+        self._draw()
+
+    def _stop_playing(self):
+        """Stop the playback and drop the frames rendered for it: the star is changing."""
+        self._set((self.play, "value", False))
+        for f in self._renders:
             f.cancel()
         self._frames, self._renders = {}, []
-        workers = self.workers if self.workers is not None and self.workers.ready() else None
-        r = self.night.update(self.settings(), d_airmass=float(self.airmass.value), seed=self.seed, workers=workers)
-        took = time.time() - t
+
+    def _report(self, r, took, with_workers):
         found = np.isfinite(r["mag"])
         resid = r["mag"][found] - r["true"][found]
         band = dict((v, k) for k, v in BANDS)[self.band.value]
@@ -299,15 +337,14 @@ class App:
             + (f" · saturated in {int(r['saturated'].sum())} frames" if r["saturated"].any() else "")
             + f" · alerted in {int(r['alerted'].sum())} frames · field alerts per frame {np.mean(r['n_field_alerts']):.1f} "
             f"(real/bogus model {Path(self.night.model).parent.name if self.night.model else 'none'}, cut {self.night.cut}) · "
-            f"{band} · recomputed in {took:.1f} s" + ("" if workers is not None else " (worker processes loading)"))
-        self._draw()
+            f"{band} · recomputed in {took:.1f} s" + ("" if with_workers else " (worker processes loading)"))
 
     def _draw(self):
         if self.night is None or self.night.d is None or self._busy:
             return
         self._busy = True
         try:
-            self.night.draw(self.fig, int(self.frame.value))
-            self.fig.canvas.draw_idle()
+            self.night.draw(self.fig, int(self.frame.value))  # into the canvas's own image
+            self.fig.canvas.blit(self.fig.bbox)  # shown (an interactive canvas sends it to the browser)
         finally:
             self._busy = False

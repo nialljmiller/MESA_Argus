@@ -2,7 +2,7 @@
 app (data/interactive/packs/<pack>_<band>.joblib).
 
 The engine's own setup runs once (night_movie.py --render-only on the run's movie data) and its draw data is kept:
-the dict night_movie.draw reads, with what cannot be saved replaced by tables (true magnitudes of the stars it
+the dict the movie's drawing (night_movie.MovieFrame) reads, with what cannot be saved replaced by tables (true magnitudes of the stars it
 shows, at every frame) and the module's settings (the block, the tile) alongside. Added for the app:
 
 - candidates: every hdps alert candidate of each frame (the run kept them all: AlertVettingTask's
@@ -15,8 +15,10 @@ shows, at every frame) and the module's settings (the block, the tile) alongside
 """
 import argparse
 import json
+import os
 import pickle
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,6 +26,7 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
 PACKS = REPO / "data" / "interactive" / "packs"
+CACHE = PACKS / "cache"  # per pack (and its file's time stamp): an uncompressed copy to memory-map, derived values
 BANDS = ("beta", "rho")
 VERSION = 1
 
@@ -203,19 +206,59 @@ def build(out, band, pack_name):
     return path
 
 
+def _replace_into(path, write):
+    """write(part) a file beside path, then move it into place whole (several processes may make it at once)."""
+    part = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.part")
+    write(part)
+    os.replace(part, path)
+
+
 def load(pack_name, band):
-    """A pack, with night_movie's module settings restored as they were when it was made (draw() reads them)."""
+    """A pack, with night_movie's module settings restored as they were when it was made (draw() reads them). Read
+    memory-mapped from an uncompressed copy (made on its first load, in pack.CACHE): instant, and the cut-outs are
+    shared between the processes that read them rather than copied into each. pack["stamp"] names this version of
+    the pack (its file's modification time), for values derived from it (cached)."""
     import joblib
 
     import night_movie as nm
 
-    pack = joblib.load(PACKS / f"{pack_name}_{band}.joblib")
+    path = PACKS / f"{pack_name}_{band}.joblib"
+    stamp = f"{pack_name}_{band}.{path.stat().st_mtime_ns}"
+    flat = CACHE / f"{stamp}.joblib"
+    if not flat.exists():
+        CACHE.mkdir(parents=True, exist_ok=True)
+        _replace_into(flat, lambda part: joblib.dump(joblib.load(path), part))
+        for old in CACHE.glob(f"{pack_name}_{band}.*"):  # what was derived from an earlier version of the pack
+            if not old.name.startswith(stamp) and not old.name.endswith(".part"):
+                old.unlink(missing_ok=True)
+    pack = joblib.load(flat, mmap_mode="r")
+    pack["stamp"] = stamp
     if pack.get("version") != VERSION:
         raise SystemExit(f"{pack_name}_{band}: pack version {pack.get('version')}, this code reads {VERSION}: rebuild it")
     for k, v in pack["settings"].items():
         setattr(nm, k, v)
     pack["models"] = {k: SimpleNamespace(wave=w) for k, w in pack["wave"].items()}
     return pack
+
+
+def cached(pack, what, make):
+    """A value derived from a pack alone (make()), kept in pack.CACHE for this version of the pack."""
+    import joblib
+
+    path = CACHE / f"{pack['stamp']}.{what}.joblib"
+    if path.exists():
+        return joblib.load(path)
+    value = make()
+    save_cached(path, value)
+    return value
+
+
+def save_cached(path, value):
+    """Save a value in pack.CACHE (whole, even with several processes saving it at once)."""
+    import joblib
+
+    CACHE.mkdir(parents=True, exist_ok=True)
+    _replace_into(path, lambda part: joblib.dump(value, part))
 
 
 def main(argv=None):

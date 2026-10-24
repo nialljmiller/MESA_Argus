@@ -16,6 +16,7 @@ Types and their library sources:
 """
 import json
 import os
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -115,7 +116,7 @@ def light(name, ebv=0.0):
     CACHE.mkdir(parents=True, exist_ok=True)
     # written under this process's own name, then moved into place in one step: several processes (the app's
     # workers, the precompute) may integrate the same template at once, and none may read a half-written file
-    part = path.with_name(f"{path.stem}.{os.getpid()}.part.npz")
+    part = path.with_name(f"{path.stem}.{os.getpid()}.{threading.get_ident()}.part.npz")
     np.savez_compressed(part, kind=out["kind"], timing=out["timing"], wave=out["wave"].to_value("AA"),
                         seds=out["seds"].astype(np.float32), x=out["x"], period=-1.0 if out["period"] is None else out["period"],
                         meta=json.dumps(out["meta"]), **{f"mag_{b}": out["mag"][b] for b in ("beta", "rho")},

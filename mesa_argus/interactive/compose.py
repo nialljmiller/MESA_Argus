@@ -16,11 +16,15 @@ Stand-ins, each stated on screen:
   the new airmass (X^0.6), and given the extra sky noise (sky ~ X); the field's own alerts and photometry stay as
   observed.
 """
+import os
+import threading
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 
 SKY_PX = 900.0 / 1024.0  # hdps tile pixel (arcsec)
+PSF_CACHE = Path(__file__).resolve().parents[2] / "data" / "interactive" / "psf"  # stamps, per ArgusSim version
 
 
 @lru_cache(maxsize=1)
@@ -44,9 +48,35 @@ def fullwell():
     return float(cfg.telescope.fullwell)
 
 
+def _cached(name, make):
+    """An array from the PSF cache (data/interactive/psf/argus_sim-<version>/<name>.npy), made and saved when
+    missing: building ArgusSim's PSF set takes seconds in every process, a stamp tens of milliseconds."""
+    import argus_sim
+
+    folder = PSF_CACHE / f"argus_sim-{argus_sim.__version__}"
+    path = folder / f"{name}.npy"
+    if path.exists():
+        return np.load(path)
+    value = np.asarray(make(), float)
+    folder.mkdir(parents=True, exist_ok=True)
+    part = folder / f"{name}.{os.getpid()}.{threading.get_ident()}.part.npy"  # (made by several processes or threads
+    # at once: each writes its own file, moved into place whole)
+    np.save(part, value)
+    os.replace(part, path)
+    return value
+
+
+@lru_cache(maxsize=4)
+def _angles(band):
+    """The field angles ArgusSim's PSFs are tabulated at (sensor.PSFs.angles)."""
+    return _cached(f"angles_{band}", lambda: _psfs().angles(band))
+
+
 @lru_cache(maxsize=4096)
 def _stamp(band, seeing, angle_index):
-    return np.asarray(_psfs().stamp(band, round(float(seeing), 2), int(angle_index), 0, 0), float)
+    seeing = round(float(seeing), 2)
+    return _cached(f"stamp_{band}_{seeing:.2f}_{int(angle_index)}",
+                   lambda: _psfs().stamp(band, seeing, int(angle_index), 0, 0))
 
 
 def psf_on_tile(band, seeing, field_angle, dx, dy, extent, shape, half_arcsec=20.0):
@@ -54,7 +84,7 @@ def psf_on_tile(band, seeing, field_angle, dx, dy, extent, shape, half_arcsec=20
     (rows slice, cols slice, values) of the patch around it."""
     from scipy.ndimage import map_coordinates
 
-    angles = _psfs().angles(band)
+    angles = _angles(band)
     stamp = _stamp(band, seeing, int(np.abs(angles - field_angle).argmin()))
     yy, xx = np.indices(stamp.shape)
     cy, cx = float((stamp * yy).sum()), float((stamp * xx).sum())

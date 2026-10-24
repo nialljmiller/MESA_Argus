@@ -130,7 +130,7 @@ def candidate(composed, dx, dy, fwhm_px, plane_rms=None, stats=None, mask=None):
     hdps never detected in every frame, and none of the 441 places hdps did make a candidate; sky-subtracted, the
     dwarf nova in only half the frames). The reference is taken as science - difference (the PSF-matched reference
     the difference was made with)."""
-    from hdps.alerts.features import detect_and_featurize
+    from hdps.alerts.features import detect_candidates, extract_features, moffat_score_map, prod_score_map
 
     diff = np.asarray(composed["difference"], np.float64)
     sci = np.asarray(composed["science"], np.float64)
@@ -150,15 +150,20 @@ def candidate(composed, dx, dy, fwhm_px, plane_rms=None, stats=None, mask=None):
     if plane_rms is not None and np.isfinite(plane_rms) and plane_rms > 0:
         zn = np.where(valid, D, np.nan) / np.sqrt(var)
         var = var * (float(np.nanstd(zn[np.abs(zn) < 10])) / plane_rms) ** 2
-    feats, n_pos, _ = detect_and_featurize(np.where(valid, D, 0.0).astype(np.float32), var.astype(np.float32), valid,
-                                           fwhm_px, detect_sigma=3.0)
-    if feats is None or n_pos == 0:
+    # hdps.alerts.features.detect_and_featurize, step by step, with the features of the star's candidate only (each
+    # candidate's are computed on its own; the plane's statistics and the negative detections are the same)
+    D32, var32 = np.where(valid, D, 0.0).astype(np.float32), var.astype(np.float32)
+    SP = prod_score_map(D32, valid)
+    SM = moffat_score_map(D32, var32, valid, fwhm_px)
+    pos = detect_candidates(SP, valid, 3.0)
+    if len(pos) == 0:
         return None
-    sep = np.hypot(np.asarray(feats["x"]) + xs.start - x, np.asarray(feats["y"]) + ys.start - y) * px
+    sep = np.hypot(np.asarray(pos["x"]) + xs.start - x, np.asarray(pos["y"]) + ys.start - y) * px
     k = int(np.argmin(sep))
     if sep[k] > MATCH_ARCSEC:
         return None
-    return {name: float(np.asarray(v)[k]) for name, v in feats.items()}
+    feats = extract_features(pos[k:k + 1], detect_candidates(-SP, valid, 3.0), D32, var32, valid, SP, SM, fwhm_px)
+    return {name: float(np.asarray(v)[0]) for name, v in feats.items()}
 
 
 def alerts(candidates, bundle, cut):

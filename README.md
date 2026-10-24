@@ -318,7 +318,7 @@ star file and the observation batch for any number of real fields.
 ### Live notebook
 
 `notebooks/argus_night_live.ipynb` is the field movie, live, with one star you edit. The window is the movie itself
-(`night_movie.draw`): CMD, light curves, hdps's exposure and difference image with the alerts, SEDs. Below it:
+(`night_movie.MovieFrame`): CMD, light curves, hdps's exposure and difference image with the alerts, SEDs. Below it:
 
 - the field: M3, M67 or M45 (the Pleiades), each one precomputed hdps night; the band, β or ρ;
 - star E's type (RRab, RRc, contact binary, detached binary, dwarf nova, SN Ia, microlensing) and its sliders:
@@ -339,8 +339,22 @@ Two things that check found, both now reproduced:
 - hdps's tiles carry surface brightness, so a star's flux on a tile is its electrons × 1.31 (the pixel-area ratio).
 - hdps's bright-star mask compares tiles with the sky still in them. Anything brighter than about β 15 cannot alert.
 
-The note under the controls lists every simplification. A change recomputes the night in about 1 s; worker processes draw
-the frames for Play.
+The note under the controls lists every simplification.
+
+How it keeps up (timings on a 10-core Mac also running other work, 140-frame night; a night of up to 350 frames scales
+in proportion):
+- **Drawing.** `night_movie.MovieFrame` builds the figure once per star setting. Each frame draws only what changes over
+  a kept background, in matplotlib's own order, so a frame is the image a full redraw gives. A frame takes about
+  0.15 s, against about 0.6 s before (the engine's movies use the same code).
+- **Measuring.** Six worker processes measure E in every frame and draw the frames for Play.
+  - A change shows its new frame after about 1.5 s, without holding up the controls; a setting seen before after under
+    1 s.
+  - Play shows its first frame after about 2 s, then about 16 frames per second, and replays at the movie's 24.
+- **Caches.** Kept in `data/interactive/`:
+  - each pack uncompressed, memory-mapped by every process;
+  - per pack, the sky, noise and field alerts;
+  - ArgusSim's PSF stamps;
+  - the measurements of each setting, keyed to the code that made them.
 
 ```bash
 python3 -m ipykernel install --user --name mesa-argus --display-name "MESA_ARGUS (Python 3.14)"   # once

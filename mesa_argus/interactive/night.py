@@ -1,4 +1,4 @@
-"""One night of a field pack with the edited star in it: everything night_movie.draw reads, for every frame.
+"""One night of a field pack with the edited star in it: everything the movie's drawing reads, for every frame.
 
 The field (its stars, hdps's images, its variables' photometry and its alerts) is the pack's: a real hdps run. The
 edited star is added to hdps's cut-outs (compose) and measured there with hdps's own detector, alert features and the
@@ -8,11 +8,15 @@ the model would raise.
 Three steps, each usable on its own so worker processes can share the work (worker.py):
     measure_frames(state, ns)    the star in frames ns: its photometry and its alert candidate's features
     assemble(state, meas, cands) the draw data for the whole night (scores the candidates)
-    draw(fig, n)                 movie frame n by night_movie.draw (the frame's images composed when drawn)
+    draw(fig, n)                 movie frame n by night_movie.MovieFrame (built once per star; each frame drawn over
+                                 it; the frame's images composed when drawn)
 A state is (settings, airmass offset, noise seed): the same state gives the same images and numbers anywhere.
 """
+import hashlib
+import io
 import os
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,6 +30,7 @@ CUT = "fa10"  # the real/bogus operating point: 10 false alerts per deg2 per exp
 MAX_SHOWN = 6  # stars the light-curve panel draws (as the movie): the edited star and up to 5 of the field's
 LABEL = "E"  # the edited star's label on the panels
 THREADS = min(8, os.cpu_count() or 1)  # frames measured at once when no worker processes are given
+MEASURED_KEPT = 500  # settings whose measurements are kept on disk per pack (~30 kB each)
 
 
 def bundle():
@@ -33,6 +38,22 @@ def bundle():
     found = sorted((REPO / "data" / "rb").glob("*/bundle/manifest.json"), key=lambda p: p.stat().st_mtime)
     final = [p for p in found if p.parent.parent.name == "final"]
     return str((final or found)[-1].parent) if found else None
+
+
+@lru_cache(maxsize=1)
+def measurement_code():
+    """A digest of the code a measurement comes from (this package's star, composition and measurement, and hdps's
+    source detector and alert features): measurements cached on disk are reused only while it is unchanged."""
+    import hdps.alerts.features
+    import hdps.photometry.source_detection_cpu
+
+    from mesa_argus.interactive import star
+
+    digest = hashlib.sha1()
+    for module in (compose, measure, star, templates, pack, hdps.alerts.features, hdps.photometry.source_detection_cpu):
+        digest.update(Path(module.__file__).read_bytes())
+    digest.update(Path(__file__).read_bytes())
+    return digest.hexdigest()[:16]
 
 
 class TrueMag:
@@ -60,15 +81,20 @@ class Night:
         self.ab = templates.photometry()
         self.star = EditableStar()
         self.span = (float(p["bjd"][0]), float(p["bjd"][-1]))
-        self.field_alerts = self._score_field()
+        model_name = "none" if self.model is None else (
+            f"{Path(self.model).parent.name}.{(Path(self.model) / 'manifest.json').stat().st_mtime_ns}")
+        self.field_alerts = pack.cached(p, f"field_alerts.{model_name}.{cut}", self._score_field)
         self.hdps_fwhm, self.hdps_plane = self._hdps_frame_values()
-        sky_q = [(np.nan, np.nan) if c is None else compose.noise_ratio(c) for c in p["cutouts"]]
+        sky_q = pack.cached(p, "sky_noise", lambda: [(np.nan, np.nan) if c is None else compose.noise_ratio(c)
+                                                     for c in p["cutouts"]])
         self.sky, self.q = np.array([a for a, _ in sky_q]), np.array([b for _, b in sky_q])
         self.mask = self._mask_settings()
         self._stats = {}  # (frame, window, airmass offset) -> the frame's noise and sky there (measure.window_stats)
         self._light = {}  # state -> the star's light at every frame (EditableStar.evaluate)
+        self._measured = {}  # state -> its measurements, the last few (and on disk: measure)
         self.state = self.d = self.result = None
         self._exposure = {}  # frame -> its composed images, for the current state
+        self._movie = self._movie_for = None  # the MovieFrame drawn into, and the (figure, state) it was built for
 
     # ---------------------------------------------------------------- the field
     def _hdps_frame_values(self):
@@ -122,13 +148,14 @@ class Night:
         """The star's light at every frame (EditableStar.evaluate) for a state; the last few kept."""
         s, d_airmass, _ = state
         key = (repr(s), round(d_airmass, 3))
-        if key not in self._light:
+        light = self._light.get(key)
+        if light is None:  # (measure may run in a thread while frames are drawn: the value, not the cache, is returned)
             p = self.p
             if len(self._light) > 8:
                 self._light.clear()
-            self._light[key] = self.star.evaluate(s, p["bjd"][self.frames], p["airmass"][self.frames] + d_airmass,
-                                                  p["args"]["exptime"], span=self.span)
-        return self._light[key]
+            light = self._light[key] = self.star.evaluate(s, p["bjd"][self.frames], p["airmass"][self.frames] + d_airmass,
+                                                          p["args"]["exptime"], span=self.span)
+        return light
 
     def compose(self, state, n):
         """Frame n's cut-outs with the star added (compose.frame), or None where hdps made none."""
@@ -167,25 +194,49 @@ class Night:
     def update(self, s: Settings, d_airmass=0.0, seed=0, workers=None):
         """The night with the edited star at these settings (s.band set to the band shown) and the airmass offset:
         measured (by the worker pool when given, else threads here), then assembled."""
+        return self.assemble(*self.measure(s, d_airmass, seed, workers))
+
+    def measure(self, s: Settings, d_airmass=0.0, seed=0, workers=None):
+        """(state, meas, cands) for these settings: the star measured in every frame (by the worker pool when given,
+        else threads here). Changes nothing the drawing reads, so it may run in a thread while frames are drawn."""
+        import joblib
+
         s.band = self.band
         state = (s, float(d_airmass), int(seed))
-        self.light(state)  # the star's template integrated here once (cached on disk), not by every worker or thread
-        ns = list(range(len(self.frames)))
-        done = workers.measure(state, ns) if workers is not None else None
-        if done is None:  # threads: FFTs and numba release the GIL; each frame has its own noise seed
-            chunks = [ns[i::THREADS] for i in range(THREADS)]
-            with ThreadPoolExecutor(max_workers=THREADS) as pool:
-                done = [r for part in pool.map(lambda c: self.measure_frames(state, c), chunks) for r in part]
-        done.sort(key=lambda r: r[0])
-        return self.assemble(state, np.array([r[1] for r in done], float), [r[2] for r in done])
+        key = hashlib.sha1(f"{state!r} {self.model} {self.cut} {measurement_code()}".encode()).hexdigest()[:20]
+        if key in self._measured:  # a setting seen before: the same measurements (they depend on nothing else)
+            return (state, *self._measured[key])
+        path = pack.CACHE / f"{self.p['stamp']}.measured.{key}.joblib"
+        if path.exists():
+            meas, cands = joblib.load(path)
+        else:
+            self.light(state)  # the star's template integrated here once (cached on disk), not by every worker or thread
+            ns = list(range(len(self.frames)))
+            done = workers.measure(state, ns) if workers is not None else None
+            if done is None:  # threads: FFTs and numba release the GIL; each frame has its own noise seed
+                chunks = [ns[i::THREADS] for i in range(THREADS)]
+                with ThreadPoolExecutor(max_workers=THREADS) as pool:
+                    done = [r for part in pool.map(lambda c: self.measure_frames(state, c), chunks) for r in part]
+            done.sort(key=lambda r: r[0])
+            meas, cands = np.array([r[1] for r in done], float), [r[2] for r in done]
+            pack.save_cached(path, (meas, cands))
+            kept = sorted(pack.CACHE.glob(f"{self.p['stamp']}.measured.*.joblib"), key=lambda f: f.stat().st_mtime)
+            for old in kept[:-MEASURED_KEPT]:  # (the newest settings measured are kept)
+                old.unlink(missing_ok=True)
+        if len(self._measured) > 32:
+            self._measured.clear()
+        self._measured[key] = (meas, cands)
+        return state, meas, cands
 
     # ---------------------------------------------------------------- the draw data
-    def assemble(self, state, meas, cands):
-        """The draw data for a state from the star's measurements: (mag, err) per frame and its candidates."""
+    def assemble(self, state, meas, cands, scored=None):
+        """The draw data for a state from the star's measurements: (mag, err) per frame and its candidates, scored by
+        the real/bogus model here unless scored [(score, alerted)] is given (a worker drawing what was scored)."""
         nm, p, B, E, frames = self.nm, self.p, self.band, self.E, self.frames
         s, d_airmass, _ = state
         star = self.light(state)
-        scored = measure.alerts(cands, self.model, self.cut)
+        if scored is None:
+            scored = measure.alerts(cands, self.model, self.cut)
         X_all = p["airmass"] + d_airmass
         seeing_all = p["seeing"] * (X_all / p["airmass"]) ** 0.6
         bjd = p["bjd"][frames]
@@ -250,7 +301,7 @@ class Night:
         self.result = dict(mag=meas[:, 0], err=meas[:, 1], true=true[B][E], score=np.array([sc for sc, _ in scored]),
                            alerted=np.array([a for _, a in scored]), template=star["template"],
                            n_field_alerts=np.array([len(a) for a in self.field_alerts]), meas=meas, cands=cands,
-                           saturated=meas[:, 2] > 0)
+                           saturated=meas[:, 2] > 0, scored=scored)
         return self.result
 
     def exposure(self, n):
@@ -270,12 +321,30 @@ class Night:
         return self._exposure[n]
 
     def draw(self, fig, n):
-        """Movie frame n (of the pack's frames) into fig, by night_movie.draw itself."""
+        """Movie frame n (of the pack's frames) drawn into fig by night_movie.MovieFrame, the movie's own drawing: the
+        figure built once for the current star (on the first frame after a change), each frame drawn over it. The
+        frame's RGBA image (the canvas's buffer)."""
         nm, d, frames = self.nm, self.d, self.frames
+        if (self._movie_for is None or self._movie_for[0] is not fig or self._movie_for[1] is not self.state
+                or not any(ax is self._movie.cmd for ax in fig.axes)):  # (or the figure was cleared meanwhile)
+            fig.clear()
+            self._movie, self._movie_for = nm.MovieFrame(fig, self.args, d), (fig, self.state)
+        movie = self._movie
         j = frames[n]
         d["n"] = n
         t = list(np.asarray(d["ut"])[frames[:n + 1]])
         d["history"] = {k: dict(t=t, m=list(v["m"][:n + 1]), e=list(v["e"][:n + 1]), true=list(v["true"][:n + 1]))
                         for k, v in self._series.items()}
-        fig.clear()
-        nm.draw(fig, self.args, {self.band: self.exposure(n)}, j, d)
+        movie.update({self.band: self.exposure(n)}, j)
+        return movie.render()
+
+    def frame_image(self, fig, n, quality=92):
+        """Movie frame n as a JPEG (fig: a figure at the dpi wanted; full colour resolution, quality 92: finer than the
+        movie's own h264)."""
+        from PIL import Image
+
+        rgba = self.draw(fig, n)
+        image = Image.frombuffer("RGBA", fig.canvas.get_width_height(physical=True), rgba, "raw", "RGBA", 0, 1)
+        buf = io.BytesIO()
+        image.convert("RGB").save(buf, "JPEG", quality=quality, subsampling=0)
+        return buf.getvalue()
