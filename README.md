@@ -335,7 +335,8 @@ star file and the observation batch for any number of real fields.
 `notebooks/argus_night_live.ipynb` is the field movie, live, with one star you edit. The window is the movie itself
 (`night_movie.MovieFrame`): CMD, light curves, hdps's exposure and difference image with the alerts, SEDs. Below it:
 
-- the field: M3, M67 or M45 (the Pleiades), each one precomputed hdps night; the band, β or ρ;
+- the field: M67, M45 (the Pleiades) or the f294 test field (injected stars), each one precomputed hdps night (M3's
+  night is to be rerun); the band, β or ρ;
 - star E's type (RRab, RRc, contact binary, detached binary, dwarf nova, SN Ia, microlensing) and its sliders:
   magnitude, amplitude (a supernova: none), period or timescale; a click on either image moves it;
 - an airmass offset (the same night observed lower);
@@ -353,6 +354,11 @@ the same photometry within 0.01 mag (median and scatter) and the same alert deci
 Two things that check found, both now reproduced:
 - hdps's tiles carry surface brightness, so a star's flux on a tile is its electrons × 1.31 (the pixel-area ratio).
 - hdps's bright-star mask compares tiles with the sky still in them. Anything brighter than about β 15 cannot alert.
+
+The packs built so far (M67, M45, the f294 test field) and that check were made with hdps's bright-star mask on. Our
+configuration has it off since 2026-10-25, as Argus's production configuration, so these nights are to be remade
+with it off (M3's too), and the check repeated on a night processed without it (rb_model_test_f294_maskoff). The note
+under the controls says which way the night shown was processed; E follows the night's own setting.
 
 The note under the controls lists every simplification.
 

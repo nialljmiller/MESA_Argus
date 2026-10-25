@@ -34,16 +34,24 @@ WORDS = {  # each type's slider names: magnitude, amplitude, period/timescale
     "supernova (Ia)": ("Peak mag", "Amplitude", "Timescale (×)"),
     "microlensing": ("Baseline mag", "Peak gain (mag)", "t_E (d)"),
 }
-STAND_INS = ("Everything except star E is one real hdps night (reduction, WCS, reprojection, SFFT difference, "
-             "detection, alert features). Star E is added to hdps's images afterwards: ArgusSim's PSF at each frame's "
-             "seeing on hdps's tile grid, with its photon noise, up to the sensor's full well; in the difference image "
-             "as (now − reference) × PSF (SFFT's match taken as perfect for it). It is measured with hdps's source "
-             "detector (zero point from hdps's own catalogue of the frame) and alerted by hdps's alert features, "
-             "hdps's bright-star mask and the real/bogus model. Checked against injected stars hdps measured itself: "
-             "the same photometry within 0.01 mag and the same alerts (97% and 100% of frames). As in hdps with its "
-             "bright-star mask, a source brighter than about β 15 does not alert. Airmass +: every image dimmed by "
-             "the extra extinction, blurred to the worse seeing (∝ X^0.6) and given the extra sky noise; the field's "
-             "own alerts and light curves stay as observed.")
+def stand_ins(masked):
+    """The note under the controls; masked: the night's hdps run had its bright-star detection mask on."""
+    return ("Everything except star E is one real hdps night (reduction, WCS, reprojection, SFFT difference, "
+            "detection, alert features). Star E is added to hdps's images afterwards: ArgusSim's PSF at each frame's "
+            "seeing on hdps's tile grid, with its photon noise, up to the sensor's full well; in the difference image "
+            "as (now − reference) × PSF (SFFT's match taken as perfect for it). It is measured with hdps's source "
+            "detector (zero point from hdps's own catalogue of the frame) and alerted by hdps's alert features"
+            + (", hdps's bright-star mask" if masked else "") + " and the real/bogus model. Checked against injected "
+            "stars hdps measured itself" + ("" if masked else " (on a night hdps processed with its bright-star mask "
+                                                               "on)") + ": the same photometry within 0.01 mag and the "
+            "same alerts (97% and 100% of frames)." + (" This night was processed with hdps's bright-star mask on "
+                                                        "(not Argus's production setting): as in hdps then, a source "
+                                                        "brighter than about β 15 does not alert." if masked else "")
+            + " Airmass +: every image dimmed by the extra extinction, blurred to the worse "
+            "seeing (∝ X^0.6) and given the extra sky noise; the field's own alerts and light curves stay as observed.")
+
+
+NOTE_STYLE = "font-size:11px;color:#555;max-width:1150px"
 
 
 def available():
@@ -124,7 +132,7 @@ class App:
                                  style=style, continuous_update=False)
         self.play = W.ToggleButton(value=False, description="Play", icon="play", layout=W.Layout(width="100px"))
         self.status = W.HTML()
-        self.notes = W.HTML(f"<div style='font-size:11px;color:#555;max-width:1150px'>{STAND_INS}</div>")
+        self.notes = W.HTML(f"<div style='{NOTE_STYLE}'>{stand_ins(False)}</div>")
         self.where = [30.0, -20.0]
         self.night = None
         self._busy = False
@@ -276,6 +284,7 @@ class App:
         self.status.value = f"<b>loading {FIELD_NAMES.get(self.field.value, self.field.value)} ({band}) …</b>"
         t = time.time()
         self.night = N.Night(self.field.value, band)
+        self.notes.value = f"<div style='{NOTE_STYLE}'>{stand_ins(self.night.mask is not None)}</div>"
         if self.workers is not None:
             self.workers.use(self.field.value, band, self.night.model, self.night.cut)
         last = len(self.night.frames) - 1
