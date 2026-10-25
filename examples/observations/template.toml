@@ -21,6 +21,15 @@ block = 9
 # 11/16 and 0/16; production processes whole frames). The field's Gaia stars must reach the window's far corner:
 # radius ~0.5 deg for 56.
 window = 56
+# [arcmin] allowed: [east, north]: the block inside the window, the far corner within 0.52 deg. Where the readout
+# window's centre lies from the field (the block's centre), [east, north]; the block stays on the field, only the
+# window moves. [0, 0]: the window centred on the field. A real Argus frame is centred on the telescope's pointing,
+# not on a target, so a target generally sits off-centre. hdps's linear WCS solver starts from the detections in a
+# circle about the frame centre; with a crowded target there (M3's core) it accepts false alignments with the pixel
+# scale 5-15x wrong and every tile is dropped (docs/ARGUS_INTEGRATION.md, 2026-10-24), so such a target is observed
+# off-centre. Limits: the block stays inside the window, and the window's far corner within the field's Gaia stars
+# (0.52 deg); 0 for the whole sensor (window = 0).
+window_offset = [0.0, 0.0]
 
 [night]
 # allowed: YYYY-MM-DD | "auto". Local date of the first night (the night starts on that evening); "auto": the night
@@ -325,10 +334,11 @@ mask_saturated_in_fit = true
 # reference or no science data kept out of the kernel fit. Fitting across them gives the kernel a flat pedestal (a
 # kernel-sized square around every star) and a background gradient.
 mask_no_coverage_in_fit = true
-# allowed: false | true. true (hdps default and production false): bright-star residual footprints kept out of
-# detection (inf Var(D)), so with no real/bogus model their residuals are not alerts. Real variability under the mask
-# is not detected either.
-mask_bright_stars = true
+# allowed: false | true. hdps docker/demo/config.yaml and hdps default: false. True keeps bright-star residual
+# footprints out of detection (inf Var(D); the kernel fit is unchanged), but hdps thresholds the science tile with its
+# sky still in, so nothing brighter than about beta 15 can alert and a bright-sky tile is masked whole
+# (docs/ARGUS_INTEGRATION.md). Off, as Argus runs: the alerts are the ones Argus would send (true until 2026-10-25).
+mask_bright_stars = false
 # allowed: > 0. electrons per pixel in the reference (sky-subtracted coadd) or the science tile (which still holds its
 # sky, ~1000-1300 e- in rho here): above the science sky, or the whole science tile is masked. hdps default 5000.
 bright_star_threshold = 3000.0

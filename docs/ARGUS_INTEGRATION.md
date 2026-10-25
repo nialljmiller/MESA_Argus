@@ -53,7 +53,9 @@ Each of these changes measurements: decide one at a time.
       its sky still in it (hdps's own convention: "science frames still carry sky", docker/demo/config.yaml), while
       its docstring assumes sky-subtracted inputs. Effective threshold ~1500-1700 e- above sky instead of 3000, moving
       with the sky; nothing brighter than about beta 15 can alert. Proposed fix: subtract the science tile's
-      background before thresholding. hdps's production config leaves the mask off; MESA_Argus turns it on.
+      background before thresholding. hdps's production config leaves the mask off; MESA_Argus had it on until
+      2026-10-25 and now leaves it off too (the alerts should be the ones Argus sends). Runs made before then
+      carry `mask_bright_stars = true` in their resolved observation.toml.
       On a bright-sky night the whole tile is above the threshold: M67 beta (sky ~3550 e- per tile pixel) got no
       alert candidate in any frame, its differences being normal (noise 49 e-, ~400 detections per frame).
 - [ ] Report: `LinearWCSSolver` accepts a false alignment in a crowded field. It takes the detections in a circle

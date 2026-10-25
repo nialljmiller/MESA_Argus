@@ -356,7 +356,7 @@ TASKS = [
     _task("ReprojectionTask", dict(segment_shape=[2048, 2048], grid_resolution=33)),
     _task("CoaddTapTask", dict(background_mode="regional")),
     _task("SFFTSubtractionTask", dict(reference_mode="coadd", kernel_half_width=6, kernel_poly_order=0, background_order=2,
-                                      mask_saturated_in_fit=True, mask_no_coverage_in_fit=True, mask_bright_stars=True,
+                                      mask_saturated_in_fit=True, mask_no_coverage_in_fit=True, mask_bright_stars=False,
                                       bright_star_threshold=3000.0, mask_dilation_growth=4, variance_conv="direct",
                                       rejection_iters=1, rejection_sigma=3.0, rejection_grow=2, retain_planes=True)),
     _task("DiffDetectionTask", dict(detect_sigma=5.0, bg_region_size=256, max_sources=100000,
@@ -442,10 +442,13 @@ TASK_RULES = {
                                                          "no science data kept out of the kernel fit. Fitting across "
                                                          "them gives the kernel a flat pedestal (a kernel-sized square "
                                                          "around every star) and a background gradient."),
-    ("SFFTSubtractionTask", "mask_bright_stars"): ({True, False}, "true (hdps default and production false): "
-                                                   "bright-star residual footprints kept out of detection (inf "
-                                                   "Var(D)), so with no real/bogus model their residuals are not "
-                                                   "alerts. Real variability under the mask is not detected either."),
+    ("SFFTSubtractionTask", "mask_bright_stars"): ({True, False}, f"{_H} and hdps default: false. True keeps "
+                                                   "bright-star residual footprints out of detection (inf Var(D); "
+                                                   "the kernel fit is unchanged), but hdps thresholds the science "
+                                                   "tile with its sky still in, so nothing brighter than about beta "
+                                                   "15 can alert and a bright-sky tile is masked whole "
+                                                   "(docs/ARGUS_INTEGRATION.md). Off, as Argus runs: the alerts are "
+                                                   "the ones Argus would send (true until 2026-10-25)."),
     ("SFFTSubtractionTask", "bright_star_threshold"): (POSITIVE, "electrons per pixel in the reference (sky-"
                                                        "subtracted coadd) or the science tile (which still holds its "
                                                        "sky, ~1000-1300 e- in rho here): above the science sky, or "
