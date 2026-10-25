@@ -5,7 +5,8 @@ systemctl --user list-units --state=failed). On macOS jobs run plainly; there, a
 a job starts only when no other engine (observe.py, night_movie.py) is running on the machine.
 
 Queue file: one job per line, "<name>[@<MemoryMax>] <command ...>" ('#' comments and blank lines ignored), run from
-the repository; the optional @size (e.g. @45G) replaces --memory-max for that job. It is read again before each start,
+the repository; the optional @size (e.g. @45G) replaces --memory-max for that job, and a trailing ! (@45G!) means
+no rerun if the limit kills it. It is read again before each start,
 so jobs can be added, reordered or removed while the queue runs. Each finished job gets a line in <queue>.state
 ("<name> ok|failed <hours> h <peak> GB <swap> GB <start> <end>", the peaks measured on the unit's cgroup, Linux only);
 a job named there is not run again. Each job's output: <queue folder>/logs/<name>.log.
@@ -17,8 +18,9 @@ as make_training_data.py waits: building a scene loads the 3D dust map, ~10 GB, 
 --setup-timeout.
 
 Failures: every one writes a line with FAILED to the runner's output. A job its MemoryMax killed (the unit's Result
-oom-kill) runs once more, alone, at --retry-factor times the limit (its output folder moved aside to <name>.capkill);
-a second failure is final. State lines: ok, failed, or capkill (followed by the next attempt's limit).
+oom-kill) runs once more, alone, at --retry-factor times the limit, at most --retry-max (its output folder moved aside
+to <name>.capkill); a second failure is final, as is the first when the line says ! or the limit is at --retry-max.
+State lines: ok, failed, or capkill (followed by the next attempt's limit).
 
 Safety: an observe.py job whose output folder (outputs/pseudo_real/<name>) already exists is not started (a run is
 there: move it aside to run it again); a job whose unit (q-<name>.scope) is still running when the queue starts, left
@@ -46,7 +48,7 @@ def stamp():
 
 
 def size(text):
-    m = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGT]?)", str(text).strip().upper())
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGT]?)", str(text).strip().upper().rstrip("!"))
     if not m:
         raise SystemExit(f"not a memory size: {text}")
     return float(m[1]) * UNITS.get(m[2], 1)
@@ -150,8 +152,8 @@ class Job:
         argv = shlex.split(command)
         if LINUX:
             self.unit = unit_name(name)
-            argv = ["systemd-run", "--user", "--scope", "--quiet", f"--unit={self.unit}", "-p", f"MemoryMax={cap}",
-                    "-p", f"MemorySwapMax={swap_max}", *argv]
+            argv = ["systemd-run", "--user", "--scope", "--quiet", f"--unit={self.unit}",
+                    "-p", f"MemoryMax={cap.rstrip('!')}", "-p", f"MemorySwapMax={swap_max}", *argv]
             self.peak = Peak(self.unit)
             print(f"{stamp()} {name}: unit {self.unit}.scope (MemoryMax={cap}, MemorySwapMax={swap_max})",
                   flush=True)
@@ -210,6 +212,7 @@ def main(argv=None):
     p.add_argument("--swap-max", default="2G", help="each job's MemorySwapMax (Linux): past MemoryMax a job would "
                                                      "otherwise swap without end instead of being stopped")
     p.add_argument("--retry-factor", type=float, default=1.5, help="a job killed at its limit runs again at this x it")
+    p.add_argument("--retry-max", default="50G", help="the highest limit a rerun gets")
     p.add_argument("--setup-timeout", type=float, default=1800.0, help="seconds to wait for a job's scenes")
     p.add_argument("--wait-for-engines", action="store_true", help="also on Linux, wait while another engine runs")
     p.add_argument("--poll", type=float, default=30.0, help="seconds between looks")
@@ -241,8 +244,10 @@ def main(argv=None):
             memory, swap = (job.peak.memory / 2**30, job.peak.swap / 2**30) if job.peak else (float("nan"),) * 2
             status = "ok" if code == 0 else "failed"
             extra = ""
-            if code != 0 and not job.alone and job.capkill():
-                status, nxt = "capkill", f"{size(job.cap) * args.retry_factor / 2**20:.0f}M"
+            nxt_bytes = min(size(job.cap) * args.retry_factor, size(args.retry_max))
+            if (code != 0 and not job.alone and not job.cap.endswith("!") and nxt_bytes > size(job.cap)
+                    and job.capkill()):
+                status, nxt = "capkill", f"{nxt_bytes / 2**20:.0f}M"
                 extra = f" next={nxt}"
                 folder = output_folder(job.command, job.name)
                 if folder is not None and folder.exists():
@@ -256,6 +261,8 @@ def main(argv=None):
             again_at = extra.replace(" next=", "")
             what = {"ok": "ok", "failed": "FAILED",
                     "capkill": f"FAILED (killed at its MemoryMax; runs once more, alone, at {again_at})"}[status]
+            if status == "failed" and job.capkill():
+                what = "FAILED (killed at its MemoryMax; no rerun)"
             print(f"{stamp()} {what} {job.name} (exit {code}; {hours:.2f} h; peak {memory:.1f} GB, "
                   f"swap {swap:.1f} GB; MemoryMax {job.cap})", flush=True)
         done = finished(state) | {job.name for job in running}
