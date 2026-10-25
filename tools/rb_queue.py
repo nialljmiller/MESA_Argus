@@ -26,7 +26,8 @@ Sharing the machine: other work comes first. Each job runs under choom -n (--oom
 unit takes no OOMScoreAdjust), so if the machine as a whole runs short (another workload grew), the kernel stops our
 job, not theirs. A job whose limit
 does not fit beside what else runs now waits (WAITING, said once); with --shrink-min, it starts instead with a smaller
-limit (what fits) when that is at least --shrink-min.
+limit (what fits) when that is at least --shrink-min and at least 3/4 of its own. With --backfill, while the next job
+does not fit, a later one that does (not a rerun) starts in its place.
 
 Disk: with --min-disk, a job starts only while the repository's disk has at least that much free (a night's hdps
 products are ~10 GB per band); until then the runner waits and says so once (WAITING).
@@ -227,6 +228,7 @@ def main(argv=None):
     p.add_argument("--min-disk", default="", help="free disk a job needs to start (e.g. 15G)")
     p.add_argument("--oom-score-adjust", type=int, default=500, help="the jobs' oom_score_adj (Linux): stopped first")
     p.add_argument("--shrink-min", default="", help="start a job that does not fit with what fits, if at least this")
+    p.add_argument("--backfill", action="store_true", help="while the next job does not fit, start a later one")
     p.add_argument("--setup-timeout", type=float, default=1800.0, help="seconds to wait for a job's scenes")
     p.add_argument("--wait-for-engines", action="store_true", help="also on Linux, wait while another engine runs")
     p.add_argument("--poll", type=float, default=30.0, help="seconds between looks")
@@ -305,12 +307,23 @@ def main(argv=None):
             room = min(budget, m["MemTotal"] - outside - size(args.headroom))
             left = room - sum(size(job.cap) for job in running)
             fits = size(todo[0][1]) <= left
-            if not fits and args.shrink_min and left >= size(args.shrink_min) and len(running) < args.parallel:
+            if (not fits and args.shrink_min and len(running) < args.parallel
+                    and left >= max(size(args.shrink_min), 0.75 * size(todo[0][1]))):
                 shrunk = f"{int(left / 2**30)}G" + ("!" if todo[0][1].endswith("!") else "")
                 print(f"{stamp()} {todo[0][0]}: MemoryMax {todo[0][1]} does not fit beside the rest "
                       f"({outside / 2**30:.1f} GB used outside our jobs); starting it at {shrunk}", flush=True)
                 todo[0] = (todo[0][0], shrunk, *todo[0][2:])
                 fits = True
+            if not fits and args.backfill and not todo[0][3] and len(running) < args.parallel:
+                later = [k for k, job in enumerate(todo) if k and not job[3] and size(job[1]) <= left]
+                if later:
+                    k = later[0]
+                    if f"backfill {todo[k][0]}" not in said:
+                        print(f"{stamp()} {todo[0][0]} (MemoryMax {todo[0][1]}) does not fit ({left / 2**30:.1f} GB "
+                              f"left): {todo[k][0]} (MemoryMax {todo[k][1]}) goes first", flush=True)
+                        said.add(f"backfill {todo[k][0]}")
+                    todo.insert(0, todo.pop(k))
+                    fits = True
             if not fits and len(running) < args.parallel and "memory" not in said:
                 print(f"{stamp()} WAITING: {todo[0][0]} (MemoryMax {todo[0][1]}) does not fit: "
                       f"{left / 2**30:.1f} GB left ({outside / 2**30:.1f} GB used outside our jobs)", flush=True)
