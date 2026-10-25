@@ -6,8 +6,10 @@ the directory hdps's AlertVettingTask loads (model_bundle; hdps.alerts.classifie
     model.joblib    a scikit-learn RandomForestClassifier: predict_proba(X)[:, 1] is the real score
 
 Held-out test, whole fields (a field observed on several nights shares its stars and their residuals between them,
-so no field is on both sides): --test-fields, those fields; else, with 4 fields or more, --folds-fold
-cross-validation by field (each field scored by a model trained without it); with fewer, whole exposures. The
+so no field is on both sides): --test-fields, those fields, and the bundle is the model measured (trained without
+them, so its operating points are measured on fields it never saw); else, with 4 fields or more, --folds-fold
+cross-validation by field (each field scored by a model trained without it) and the bundle trained on every field;
+with fewer, whole exposures. The
 measures are taken on the test candidates made as Argus runs: with --evaluate mask-off (the default), only nights run
 with hdps's bright-star mask off (the training set's mask_bright_stars; a mask hides candidates, so its nights would
 show fewer false alerts than Argus sends). Operating points: "faN" is the score cut that leaves N false alerts per
@@ -85,7 +87,8 @@ def main(argv=None):
         split = f"fields held out: {', '.join(args.test_fields)} ({len(args.test_fields)} of {len(fields)})"
         if y[~test].sum() == 0 or y[test].sum() == 0:
             sys.exit("no real rows in the training or the test part: more (injected) observations are needed")
-        score[test] = make().fit(X[~test], y[~test]).predict_proba(X[test])[:, 1]
+        held_out_model = make().fit(X[~test], y[~test])
+        score[test] = held_out_model.predict_proba(X[test])[:, 1]
     elif len(fields) >= 4:  # cross-validation by field: every field scored by a model that never saw it
         from sklearn.model_selection import GroupKFold
 
@@ -149,8 +152,9 @@ def main(argv=None):
                    roc_auc=float(roc_auc_score(yt, st)), average_precision=float(average_precision_score(yt, st)),
                    at_points=at_points(measured), by_moon_phase=by_phase,
                    fit_seconds=round(time.time() - t0, 1))
-    # the bundle is trained on everything (the test split above only measures it)
-    model = make().fit(X, y)
+    # the bundle: with --test-fields, the model measured above; else trained on everything (the split only measures it)
+    model = held_out_model if args.test_fields else make().fit(X, y)
+    metrics["bundle_trained_on"] = "the training fields (not --test-fields)" if args.test_fields else "every row"
     metrics["feature_importance"] = {n: float(v) for n, v in sorted(zip(names, model.feature_importances_),
                                                                      key=lambda kv: -kv[1])}
     args.out.mkdir(parents=True, exist_ok=True)
