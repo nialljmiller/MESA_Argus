@@ -1,7 +1,7 @@
 """Run jobs (observations, or any command) from a queue file, one at a time or several within a memory budget. On
-Linux each job runs in its own memory-limited systemd unit (systemd-run --user --scope -p MemoryMax=...), so a job
-the limit kills fails alone and the queue goes on (the unit stays listed as failed: systemctl --user list-units
---state=failed). On macOS jobs run plainly; there, and with --wait-for-engines on Linux, a job starts only when no
+Linux each job runs in its own memory-limited systemd unit (systemd-run --user --scope -p MemoryMax=... -p
+MemorySwapMax=...), so a job the limit kills fails alone and the queue goes on (the unit stays listed as failed:
+systemctl --user list-units --state=failed). On macOS jobs run plainly; there, and with --wait-for-engines on Linux, a job starts only when no
 other engine (observe.py, night_movie.py) is running on the machine.
 
 Queue file: one job per line, "<name>[@<MemoryMax>] <command ...>" ('#' comments and blank lines ignored), run from
@@ -140,7 +140,7 @@ class Peak(threading.Thread):
 
 
 class Job:
-    def __init__(self, name, cap, command, logs, adopt_unit=None, alone=False):
+    def __init__(self, name, cap, command, logs, adopt_unit=None, alone=False, swap_max="2G"):
         self.name, self.cap, self.command, self.log_path = name, cap, command, logs / f"{name}.log"
         self.t0, self.process, self.peak, self.unit, self.alone = time.time(), None, None, adopt_unit, alone
         if adopt_unit:  # left running by an earlier runner: followed, not started
@@ -151,9 +151,9 @@ class Job:
         if LINUX:
             self.unit = unit_name(name)
             argv = ["systemd-run", "--user", "--scope", "--quiet", f"--unit={self.unit}", "-p", f"MemoryMax={cap}",
-                    *argv]
+                    "-p", f"MemorySwapMax={swap_max}", *argv]
             self.peak = Peak(self.unit)
-            print(f"{stamp()} {name}: unit {self.unit}.scope (MemoryMax={cap})", flush=True)
+            print(f"{stamp()} {name}: unit {self.unit}.scope (MemoryMax={cap}, MemorySwapMax={swap_max})", flush=True)
         self.log = open(self.log_path, "a" if alone else "w")
         self.process = subprocess.Popen(argv, cwd=REPO, stdout=self.log, stderr=subprocess.STDOUT,
                                         stdin=subprocess.DEVNULL)
@@ -206,6 +206,8 @@ def main(argv=None):
     p.add_argument("--parallel", type=int, default=1, help="jobs at once, at most")
     p.add_argument("--budget", default="", help="the running jobs' MemoryMax summed stays within this (Linux)")
     p.add_argument("--headroom", default="4G", help="memory left beyond the jobs' limits and what else runs now")
+    p.add_argument("--swap-max", default="2G", help="each job's MemorySwapMax (Linux): past MemoryMax a job would "
+                                                     "otherwise swap without end instead of being stopped")
     p.add_argument("--retry-factor", type=float, default=1.5, help="a job killed at its limit runs again at this x it")
     p.add_argument("--setup-timeout", type=float, default=1800.0, help="seconds to wait for a job's scenes")
     p.add_argument("--wait-for-engines", action="store_true", help="also on Linux, wait while another engine runs")
@@ -292,7 +294,7 @@ def main(argv=None):
             said.discard("engines")
             name, cap, command, alone = todo[0]
             print(f"{stamp()} start {name}{' (again, alone)' if alone else ''}: {command}", flush=True)
-            running.append(Job(name, cap, command, logs, alone=alone))
+            running.append(Job(name, cap, command, logs, alone=alone, swap_max=args.swap_max))
             continue
         time.sleep(args.poll)
 
