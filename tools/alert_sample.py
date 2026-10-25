@@ -104,7 +104,7 @@ def resolve_cut(cut, bundle):
         return float(points[cut])
 
 
-def one_band(folder, band, out, min_sigma, cut=None):
+def one_band(folder, band, out, min_sigma, cut=None, validate=False):
     """Copy a night's packets for one band (with a cut: those at or above it) and write their truth; returns the
     manifest entry (None: no packets)."""
     from fastavro import writer
@@ -126,6 +126,7 @@ def one_band(folder, band, out, min_sigma, cut=None):
     dest = out / name / band / "packets"
     dest.mkdir(parents=True, exist_ok=True)
     rows, versions, n_read = [], set(), 0
+    cutouts = {"science": 0, "difference": 0, "template": 0}
     for path in files:
         packets = alert_files.read(path)
         n_read += len(packets)
@@ -143,6 +144,13 @@ def one_band(folder, band, out, min_sigma, cut=None):
                 writer(f, schema, packets, codec="deflate")
         for packet in packets:
             versions.add(packet["schemaVersion"])
+            if validate:  # hdps's own packet model (the cutouts' 4096-byte rule included); raises on a bad packet
+                from hdps.alerts.models import Alert
+
+                Alert(**packet)
+            for kind in cutouts:  # v4.0: 4096 bytes when present (v3.0 packets have no such fields)
+                value = packet.get(f"cutout{kind.capitalize()}")
+                cutouts[kind] += value is not None and len(value) == 4096
             c = packet["candidate"]
             alert_id = str(packet["alertId"])
             row = dict(alertId=alert_id, epochId=c["epochId"], ra=c["ra"], dec=c["dec"],
@@ -155,6 +163,7 @@ def one_band(folder, band, out, min_sigma, cut=None):
                            truth_flux_now=t["truth_flux_now"], truth_flux_reference=t["truth_flux_reference"],
                            truth_diff_flux=t["truth_diff_flux"], label=int(t["label"]))
                 source = sources.get(row["truth_label"], {})
+                row["injected"] = bool(source)  # one of the library stars injected over the window
                 row.update({f"source_{k}": source.get(k) for k in SOURCE_KEYS})
             rows.append(row)
     truth = pd.DataFrame(rows)
@@ -167,6 +176,7 @@ def one_band(folder, band, out, min_sigma, cut=None):
     return dict(observation=name, band=band, **settings, sample_cut=cut, rb_model_versions=models, exposures=frames,
                 moon_illumination=round(moon_illumination(mid), 3) if mid else None,
                 schema_versions=sorted(versions), packets=len(truth), packets_before_cut=n_read,
+                cutouts_4096_bytes=cutouts,
                 packet_files=len(files),
                 packets_without_truth=missing,
                 by_truth_class={k: int(v) for k, v in truth["truth_class"].value_counts().items()}
@@ -174,11 +184,42 @@ def one_band(folder, band, out, min_sigma, cut=None):
                 by_label={str(k): int(v) for k, v in truth["label"].value_counts().items()} if "label" in truth else {})
 
 
+CUTOUTS = """\
+## Cutouts
+
+Every packet carries cutoutScience, cutoutDifference and cutoutTemplate, as ADR-0030 sec. 4 and TN-0004 ("Cutouts")
+specify: 32 x 32 little-endian IEEE 754 float32 in electrons, 4096 bytes each, row-major in the TAN segment's [y, x]
+order (byte 4 * (32 * row + col) holds segment pixel (x0 + col, y0 + row), (x0, y0) the stamp's lowest-index corner;
+no rotation, CDELT1 negative: +y north, -x east at the segment's tangent point). Read one with
+`numpy.frombuffer(packet["cutoutDifference"], "<f4").reshape(32, 32)`.
+
+- Centered on every alert: the exposures are 60 s, and the BOOM/Argus meeting chose centered cutouts at 15-minute
+  and longer cadence and, Plan A, at 1-minute cadence. TN-0004 leaves the centered placement TBD; here the
+  candidate's rounded pixel (round(y), round(x)) is at [row 16, col 16] (x0 = round(x) - 16, y0 = round(y) - 16), the
+  convention of hdps's own alert stamps extended to an even size. Pixels beyond the segment's edge are NaN.
+- Science: the science tile before subtraction (sky included); difference: SFFT's difference plane; template: the
+  reference coadd on the tile that SFFT subtracts against (hdps's retained presub_science and presub_reference: the
+  planes of hdps's own alert stamps). The template ships for v4 until the broker hosts Argus reference images
+  (optional per the meeting).
+- Pixel values are as hdps's tiles hold them: electrons per sensor-pixel area (hdps's reprojection keeps surface
+  brightness, 0.879" tile pixels against 1.007" sensor pixels), so a star summed over a cutout is about 1.31 times its
+  electrons.
+- The filling is our implementation of ADR-0030 sec. 4 in hdps's AlertVettingTask (a local commit on top of hdps PR
+  #474, which defers cutout extraction): hdps's own code, the planes hdps already cuts its alert stamps from, until
+  hdps's producer PR lands.
+"""
+
 KNOWN_GAPS = """\
-Known gaps of hdps's schema v4.0 producer (hdps PR #474, under review: its schema may still change):
+## Known gaps
+
+The schema: hdps PR #474 (schema v4.0) is under review. The BOOM/Argus meeting decided on a single schema in which an
+alert holds a candidate with either an eventAssociation or an ssoAssociation child (the other null); PR #474 instead
+removes eventAssociation and puts eventId on the envelope, which is what its requested change is about. Expect the
+schema to change before it merges; this sample follows PR #474 as it stands.
+
+Gaps of hdps's v4.0 producer:
 - psfFluxDifErr is -1.0 (not produced) until hdps exposes the flux error from extract_features (hdps#476);
 - coadd is true on every alert (hdps#477);
-- no cutouts in the packets (cutoutScience/Difference/Template null: cutout extraction is deferred to a later PR);
 - fields with no producer yet are explicit blanks: filter 0, cameraIds/otaIds/filterIds/focuserIds/subarrayIds [],
   referenceId -1 and the reference times 0.0, alertCadence 0; no solar-system association runs (ssoAssociation null);
 - JD(TT) is computed from hdps's Argus-epoch anchor inline (until hdps#410's argus_epoch_to_jd);
@@ -226,13 +267,15 @@ def write_readme(out, manifest):
               "- `<observation>/<band>/packets/<epochId>.avro`: one exposure's packets, exactly as hdps built them "
               "(read with any Avro reader, e.g. `fastavro.reader`).",
               "- `<observation>/<band>/truth.parquet`: one row per packet, joined on `alertId` (also `epochId`, "
-              "`ra`, `dec`): `truth_class` (transient, variable: an injected source; constant: a real star that did "
+              "`ra`, `dec`): `injected` (true: one of the injected library stars), `truth_class` (transient, variable: an "
+              "injected source; constant: a real star that did "
               "not change; none: nothing simulated there), `truth_label` and `source_*` (the injected source: kind, "
               "model, redshift, t0, ...), `truth_mag`, `truth_diff_flux` (its true flux change since the reference, "
               "electrons), and `label`: 1 real (an injected source whose true change is at least 3 times the "
               "candidate's PSF flux error), 0 bogus (a constant star or nothing), -1 an injected source changing less "
               "than that.",
-              "- `manifest.json`: everything in the table above, per night and band.", "", KNOWN_GAPS]
+              "- `manifest.json`: everything in the table above, per night and band (also cutout counts).", "",
+              CUTOUTS, KNOWN_GAPS]
     (out / "README.md").write_text("\n".join(lines))
 
 
@@ -245,6 +288,8 @@ def main(argv=None):
     p.add_argument("--cut", help="keep packets with realBogusScore >= this: a number, or an operating point of --bundle")
     p.add_argument("--bundle", type=Path, help="the real/bogus bundle the nights were scored with (for a --cut label)")
     p.add_argument("--name", help="the sample's name, for the README")
+    p.add_argument("--validate", action="store_true", help="check every packet with hdps.alerts.models (the schema's "
+                                                            "hdps on PYTHONPATH)")
     args = p.parse_args(argv)
     cut = resolve_cut(args.cut, args.bundle)
     sys.path.insert(0, str(REPO / "tools"))
@@ -253,7 +298,7 @@ def main(argv=None):
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"nights": []}
     for folder in args.observations:
         for band in args.bands:
-            entry = one_band(folder.resolve(), band, args.out, args.min_sigma, cut)
+            entry = one_band(folder.resolve(), band, args.out, args.min_sigma, cut, args.validate)
             if entry is None:
                 print(f"{folder.name} {band}: no packets or no alerts.csv; skipped")
                 continue
