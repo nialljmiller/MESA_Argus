@@ -1,8 +1,8 @@
 """Run jobs (observations, or any command) from a queue file, one at a time or several within a memory budget. On
 Linux each job runs in its own memory-limited systemd unit (systemd-run --user --scope -p MemoryMax=... -p
 MemorySwapMax=...), so a job the limit kills fails alone and the queue goes on (the unit stays listed as failed:
-systemctl --user list-units --state=failed). On macOS jobs run plainly; there, and with --wait-for-engines on Linux, a job starts only when no
-other engine (observe.py, night_movie.py) is running on the machine.
+systemctl --user list-units --state=failed). On macOS jobs run plainly; there, and with --wait-for-engines on Linux,
+a job starts only when no other engine (observe.py, night_movie.py) is running on the machine.
 
 Queue file: one job per line, "<name>[@<MemoryMax>] <command ...>" ('#' comments and blank lines ignored), run from
 the repository; the optional @size (e.g. @45G) replaces --memory-max for that job. It is read again before each start,
@@ -153,7 +153,8 @@ class Job:
             argv = ["systemd-run", "--user", "--scope", "--quiet", f"--unit={self.unit}", "-p", f"MemoryMax={cap}",
                     "-p", f"MemorySwapMax={swap_max}", *argv]
             self.peak = Peak(self.unit)
-            print(f"{stamp()} {name}: unit {self.unit}.scope (MemoryMax={cap}, MemorySwapMax={swap_max})", flush=True)
+            print(f"{stamp()} {name}: unit {self.unit}.scope (MemoryMax={cap}, MemorySwapMax={swap_max})",
+                  flush=True)
         self.log = open(self.log_path, "a" if alone else "w")
         self.process = subprocess.Popen(argv, cwd=REPO, stdout=self.log, stderr=subprocess.STDOUT,
                                         stdin=subprocess.DEVNULL)
@@ -241,7 +242,7 @@ def main(argv=None):
             status = "ok" if code == 0 else "failed"
             extra = ""
             if code != 0 and not job.alone and job.capkill():
-                status, nxt = "capkill", f"{size(job.cap) * args.retry_factor / 2**30:.0f}G"
+                status, nxt = "capkill", f"{size(job.cap) * args.retry_factor / 2**20:.0f}M"
                 extra = f" next={nxt}"
                 folder = output_folder(job.command, job.name)
                 if folder is not None and folder.exists():
