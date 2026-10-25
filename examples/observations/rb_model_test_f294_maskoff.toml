@@ -1,0 +1,76 @@
+# rb_model_test_f294 (the live notebook's f294 test night) again with hdps's bright-star mask off (the production
+# setting, the default since 2026-10-25): the same field, night, injected stars and early real/bogus model at "fa10"
+# (data/rb/early/bundle); rb_model_test_f294 itself was run with the mask on and stays as it was.
+[field]
+name = "rb_model_test_f294_maskoff"
+ra = 294.7844
+dec = -11.6235
+block = 9
+
+[night]
+date = "2026-07-30"
+nights = 1
+
+[stars]
+background = "f294_784m11_623_field"
+layout = "real"
+
+[inject]
+number = 60
+seed = 7
+
+[output]
+# every exposure (140 in beta), as rb_model_test_f294 was run (observe.py --set output.stride=1)
+stride = 1
+
+[[hdps.tasks]]
+type = "DataCleanupTask"
+
+[[hdps.tasks]]
+type = "ImageReductionTask"
+
+[[hdps.tasks]]
+type = "SourceDetectionTask"
+
+[[hdps.tasks]]
+type = "SourceFilterTask"
+
+[[hdps.tasks]]
+type = "ReferenceRetrievalTask"
+
+[[hdps.tasks]]
+type = "LinearWCSSolverTask"
+
+[[hdps.tasks]]
+type = "SourceMatchingTask"
+
+[[hdps.tasks]]
+type = "TPVWCSSolverTask"
+
+[[hdps.tasks]]
+type = "LightweightFITSOutputTask"
+
+[[hdps.tasks]]
+type = "ReprojectionTask"
+
+[[hdps.tasks]]
+type = "CoaddTapTask"
+
+[[hdps.tasks]]
+type = "SFFTSubtractionTask"
+
+[[hdps.tasks]]
+type = "DiffDetectionTask"
+
+[[hdps.tasks]]
+type = "TransientOutputTask"
+
+[[hdps.tasks]]
+type = "AlertVettingTask"
+[hdps.tasks.config]
+model_bundle = "data/rb/early/bundle"
+score_cut = "fa10"
+emit_all_candidates = true
+
+[[hdps.tasks]]
+type = "TileImageOutputTask"

@@ -112,10 +112,13 @@ class Night:
 
     def _mask_settings(self):
         """(threshold, base px, growth px) of hdps's bright-star detection mask as the run had it (the pack's SFFT
-        settings, else the observation defaults), or None when the run did not mask."""
-        from mesa_argus import schema
-
-        sfft = self.p.get("sfft") or next(t["config"] for t in schema.TASKS if t["type"] == "SFFTSubtractionTask")
+        settings; a pack made before they were kept: its run's resolved observation, else the setting then, the mask
+        on at 3000 e-), or None when the run did not mask."""
+        sfft = self.p.get("sfft")
+        if not sfft:
+            run = REPO / "outputs" / "pseudo_real" / self.p["observation"]
+            sfft = (pack.sfft_settings(run) if (run / "observation.toml").exists() else
+                    dict(mask_bright_stars=True, bright_star_threshold=3000.0, mask_dilation_growth=4))
         if not sfft.get("mask_bright_stars", False):
             return None
         base = sfft.get("mask_dilation")

@@ -7,7 +7,12 @@ measured - true (hdps's catalogue for the real star; the stand-in for E), and al
 and E's, scored by the same real/bogus model and cut). The engine leaves transients out of the reference, so E's
 reference holds none of it here either.
 
+--features: the stand-in's alert features checked on hdps's own candidates: in every 5th frame, each real candidate
+(a transient or variable) and up to 8 others, at least 15" inside the cut-out, featurized again by the app's code on
+the frame's cut-outs; both feature sets scored by the same model and cut, and the accept/reject decisions compared.
+
     python tools/check_edited_star.py f294test --band beta
+    python tools/check_edited_star.py f294test --band beta --features
 """
 import argparse
 import sys
@@ -103,12 +108,56 @@ def check(pack_name, band):
               f"same decision in {np.mean(ha[valid] == ea[valid]):.0%} of frames")
 
 
+def features(pack_name, band):
+    from hdps.alerts.features import FEATURE_NAMES
+
+    from mesa_argus.interactive import measure
+    from mesa_argus.interactive.night import Night
+
+    night = Night(pack_name, band)
+    p = night.p
+    clf = measure.classifier(night.model)
+    cut = clf.cut_for(night.cut)
+    rng = np.random.default_rng(1)
+    rows = []
+    for n in range(0, len(p["frames"]), 5):
+        c, cand = p["cutouts"][n], p["candidates"][n]
+        if c is None or not len(cand["key"]):
+            continue
+        ext = c["extent"]
+        inside = ((cand["dx"] > ext[0] + 15) & (cand["dx"] < ext[1] - 15) & (cand["dy"] > ext[2] + 15)
+                  & (cand["dy"] < ext[3] - 15))
+        real = np.isin(cand["truth"], ["transient", "variable"])
+        other = np.nonzero(inside & ~real)[0]
+        rows += [(n, i) for i in list(np.nonzero(inside & real)[0]) + list(rng.choice(other, min(8, len(other)),
+                                                                                      replace=False))]
+    hd = np.array([p["candidates"][n]["features"][i] for n, i in rows], float)
+    s_hd = clf.score_features({name: hd[:, k] for k, name in enumerate(FEATURE_NAMES)})
+    mine = [measure.candidate(p["cutouts"][n], float(p["candidates"][n]["dx"][i]), float(p["candidates"][n]["dy"][i]),
+                              night.hdps_fwhm[n], night.hdps_plane[n], mask=night.mask) for n, i in rows]
+    found = np.array([f is not None for f in mine])
+    s_me = np.full(len(rows), np.nan)
+    if found.any():
+        s_me[found] = clf.score_features({name: np.array([f[name] for f in mine if f is not None])
+                                          for name in FEATURE_NAMES})
+    real = np.array([p["candidates"][n]["truth"][i] in ("transient", "variable") for n, i in rows])
+    same = (s_me[found] >= cut) == (s_hd[found] >= cut)
+    print(f"{len(rows)} hdps candidates ({real.sum()} real) in {len({n for n, _ in rows})} frames; found again "
+          f"{found.sum()}; same accept/reject as hdps {same.mean():.0%}; score difference median "
+          f"{np.median(np.abs(s_me[found] - s_hd[found])):.3f}; accepted: hdps {np.sum(s_hd[found] >= cut)}, "
+          f"stand-in {np.sum(s_me[found] >= cut)}")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("pack", help="a field pack whose run injected transients (e.g. f294test)")
     p.add_argument("--band", default="beta")
+    p.add_argument("--features", action="store_true", help="check the stand-in's alert features on hdps's candidates")
     args = p.parse_args(argv)
-    check(args.pack, args.band)
+    if args.features:
+        features(args.pack, args.band)
+    else:
+        check(args.pack, args.band)
 
 
 if __name__ == "__main__":
