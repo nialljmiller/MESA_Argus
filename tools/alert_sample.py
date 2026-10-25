@@ -19,6 +19,14 @@ The packets are the stream Argus would send (mesa_argus.alert_files: hdps's Aler
 the file stands in for Kafka); nothing in them is changed or added. The truth comes from the engine's
 <name>_night_<band>.alerts.csv (every hdps candidate with its features and its truth, alertId from the packets).
 
+A night run in two halves, one band each (observation files <night>_beta and <night>_rho with [output] bands = one
+band: one engine per run fits a smaller machine), is the same night: no seed derives from the name or the bands
+(the stars, [inject] and [night] seeds are explicit; the engine's noise is seeded per exposure from [output]
+noise_seed), so both halves hold the same scene, as long as both run on one machine (the [inject] templates are drawn
+from that machine's stars/ library). Such a half is filed under its night, <out>/<night>/<band>/, and the halves of a
+night are checked to hold the same scene (scene/sources.json and scene/exposures.ecsv): a night whose halves differ
+stops the run.
+
 The cut: hdps sends a packet only for a candidate whose score is at or above AlertVettingTask's score_cut
 (emit_all_candidates adds below-cut rows to the alert catalogue, never packets), and no packet field depends on the
 cut. So a night run with score_cut = 0 (a packet for every candidate, the real/bogus model loaded) and selected here
@@ -89,6 +97,25 @@ def sources_by_label(folder):
     return {s["label"]: s for s in json.loads(path.read_text()) if s.get("label")}
 
 
+def night_of(folder, band):
+    """The night a run belongs to: a one-band half (<night>_<band>, [output] bands = [band]) files under <night>."""
+    obs = tomllib.loads((folder / "observation.toml").read_text())
+    bands = obs.get("output", {}).get("bands", ["beta", "rho"])
+    suffix = f"_{band}"
+    return folder.name[:-len(suffix)] if bands == [band] and folder.name.endswith(suffix) else folder.name
+
+
+def scene_digest(folder):
+    """A digest of the run's scene (scene/sources.json and scene/exposures.ecsv): equal for the halves of one night."""
+    import hashlib
+
+    h = hashlib.sha256()
+    for part in ("sources.json", "exposures.ecsv"):
+        path = folder / "scene" / part
+        h.update(path.read_bytes() if path.exists() else b"")
+    return h.hexdigest()[:16]
+
+
 def resolve_cut(cut, bundle):
     """A cut as a number: a literal, or an operating point from the bundle's manifest.json (hdps's cut_for)."""
     if cut is None:
@@ -112,10 +139,11 @@ def one_band(folder, band, out, min_sigma, cut=None, validate=False):
     from mesa_argus import alert_files
     from rb_training_set import label
 
-    name = folder.name
+    run = folder.name
+    name = night_of(folder, band)  # the night (a one-band half files under it)
     packet_dir = folder / "hdps" / band / "alerts"
     files = sorted(packet_dir.glob("*.avro"))
-    table_path = folder / f"{name}_night_{band}.alerts.csv"
+    table_path = folder / f"{run}_night_{band}.alerts.csv"
     if not files or not table_path.exists():
         return None
     table = pd.read_csv(table_path, low_memory=False)
@@ -173,7 +201,8 @@ def one_band(folder, band, out, min_sigma, cut=None, validate=False):
     mid = table["time_utc"].iloc[len(table) // 2] if len(table) else None
     models = sorted({str(m) for m in table.get("model_version", pd.Series(dtype=str)).dropna().unique()})
     frames = int(table["exposure"].nunique()) if len(table) else 0
-    return dict(observation=name, band=band, **settings, sample_cut=cut, rb_model_versions=models, exposures=frames,
+    return dict(observation=name, run=run, scene=scene_digest(folder), band=band, **settings, sample_cut=cut,
+                rb_model_versions=models, exposures=frames,
                 moon_illumination=round(moon_illumination(mid), 3) if mid else None,
                 schema_versions=sorted(versions), packets=len(truth), packets_before_cut=n_read,
                 cutouts_4096_bytes=cutouts,
@@ -298,15 +327,27 @@ def main(argv=None):
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"nights": []}
     for folder in args.observations:
         for band in args.bands:
+            obs = tomllib.loads((folder / "observation.toml").read_text())
+            if band not in obs.get("output", {}).get("bands", ["beta", "rho"]):
+                continue  # (the other half of a one-band run)
             entry = one_band(folder.resolve(), band, args.out, args.min_sigma, cut, args.validate)
             if entry is None:
                 print(f"{folder.name} {band}: no packets or no alerts.csv; skipped")
                 continue
-            manifest["nights"] = [n for n in manifest["nights"] if (n["observation"], n["band"]) != (folder.name, band)]
+            night = entry["observation"]
+            manifest["nights"] = [n for n in manifest["nights"] if (n["observation"], n["band"]) != (night, band)]
             manifest["nights"].append(entry)
-            print(f"{folder.name} {band}: {entry['packets']} packets in {entry['packet_files']} files, schema "
+            print(f"{night} {band}{' (from ' + folder.name + ')' if night != folder.name else ''}: "
+                  f"{entry['packets']} packets in {entry['packet_files']} files, schema "
                   f"{','.join(entry['schema_versions'])}, {entry['packets_without_truth']} without truth; "
                   f"{entry['by_truth_class']}", flush=True)
+    scenes = {}  # the halves of a night hold one scene
+    for n in manifest["nights"]:
+        scenes.setdefault(n["observation"], set()).add(n.get("scene"))
+    differ = sorted(night for night, digests in scenes.items() if len(digests - {None}) > 1)
+    if differ:
+        raise SystemExit(f"the bands of {', '.join(differ)} come from different scenes (runs on different machines or "
+                         "with different seeds): not one night")
     if args.name:
         manifest["name"] = args.name
     for n in manifest["nights"]:  # the cut each night ran at, as a number (a label resolved in its bundle)
