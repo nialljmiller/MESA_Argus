@@ -5,7 +5,8 @@
 # 08-19 09-18 10-17, full 07-28 08-27 09-25 10-25, last quarter 08-05 09-03 11-01), so observe.py keeps it.
 # role: train (has a mask-on night) or test (fields with no mask-on alert table: held out whole, all four phases).
 # machine: where its field set reaches the 0.52 deg the window needs (stars/<field>/meta.json radius_deg); f359
-# (84,000 stars, over 30 GB) on newton.
+# (84,000 stars, over 30 GB) on newton; f324, f325 (on both) on newton. The order each machine runs them in is its queue
+# (outputs/rb_queue/<machine>.queue): for the v1 model (training cut-off 2026-10-25 20:00) new moon first, then quarters.
 # Existing nights: f008 f023 f065 f098 f101 f324 f325 10-23 (Moon 0.95), f250 08-28 (0.99, beta only),
 # f255 f260 08-14 (0.08), f247 08-07 (0.26), f299 10-02 (0.53), f272 09-04 (0.39, rho only).
 field,date,phase,round,role,machine
@@ -23,9 +24,9 @@ f247_568p16_919_field,2026-07-13,new,1,train,mac
 f286_702p23_009_field,2026-09-10,new,1,test,newton
 f250_400p36_464_field,2026-08-11,new,1,train,mac
 f286_702p23_009_field,2026-09-25,full,1,test,newton
-f324_959p28_251_field,2026-10-09,new,1,train,mac
+f324_959p28_251_field,2026-10-09,new,1,train,newton
 f294_784m11_623_field,2026-08-11,new,1,test,mac
-f325_160p21_053_field,2026-10-09,new,1,train,mac
+f325_160p21_053_field,2026-10-09,new,1,train,newton
 f294_784m11_623_field,2026-08-27,full,1,test,newton
 f299_911m08_104_field,2026-09-10,new,1,train,newton
 f359_539p61_214_field,2026-10-09,new,1,test,newton
@@ -44,8 +45,8 @@ f247_568p16_919_field,2026-07-20,first quarter,2,train,mac
 f294_784m11_623_field,2026-08-19,first quarter,2,test,newton
 f250_400p36_464_field,2026-08-19,first quarter,2,train,mac
 f299_911m08_104_field,2026-09-18,first quarter,2,train,newton
-f324_959p28_251_field,2026-10-17,first quarter,2,train,mac
-f325_160p21_053_field,2026-10-17,first quarter,2,train,mac
+f324_959p28_251_field,2026-10-17,first quarter,2,train,newton
+f325_160p21_053_field,2026-10-17,first quarter,2,train,newton
 f359_539p61_214_field,2026-10-17,first quarter,2,test,newton
 f008_841p52_998_field,2026-11-01,last quarter,3,train,mac
 f255_305p11_269_field,2026-08-05,last quarter,3,train,newton
@@ -61,6 +62,6 @@ f247_568p16_919_field,2026-07-28,full,3,train,mac
 f294_784m11_623_field,2026-09-03,last quarter,3,test,newton
 f250_400p36_464_field,2026-08-05,last quarter,3,train,mac
 f299_911m08_104_field,2026-09-25,full,3,train,newton
-f324_959p28_251_field,2026-11-01,last quarter,3,train,mac
-f325_160p21_053_field,2026-11-01,last quarter,3,train,mac
+f324_959p28_251_field,2026-11-01,last quarter,3,train,newton
+f325_160p21_053_field,2026-11-01,last quarter,3,train,newton
 f359_539p61_214_field,2026-11-01,last quarter,3,test,newton
