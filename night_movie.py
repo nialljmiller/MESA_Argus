@@ -767,7 +767,7 @@ def alert_table(work, stem):
     packets = work / "alerts" / f"{stem}.avro"
     if packets.exists():
         for packet in alert_files.read(packets):
-            ids[(packet["candidate"]["ra"], packet["candidate"]["dec"])] = packet["alertId"]
+            ids[(packet["candidate"]["ra"], packet["candidate"]["dec"])] = str(packet["alertId"])  # (v4: a UUID)
     table.insert(0, "alertId", [ids.get((float(r), float(d)), "") for r, d in zip(table["ra_deg"], table["dec_deg"])])
     return table
 

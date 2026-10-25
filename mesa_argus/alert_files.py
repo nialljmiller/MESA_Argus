@@ -9,9 +9,6 @@ record, here the file's records are the same encoding. Nothing in a packet is ch
 """
 from pathlib import Path
 
-# The four schema files in named-type dependency order (as hdps_alerts/tests/test_models.py loads them).
-SCHEMA_FILES = ("argus.alert.candidate.avsc", "argus.alert.eventAssociation.avsc",
-                "argus.alert.ssoAssociation.avsc", "argus.alert.avsc")
 
 
 def schema_dir():
@@ -25,13 +22,50 @@ def schema_dir():
     raise FileNotFoundError(f"hdps_alerts/schemas not found above {pkg}")
 
 
+def schema_files(d=None):
+    """hdps's argus.alert*.avsc files in named-type dependency order (each after the records it names; the envelope,
+    argus.alert.avsc, last), as hdps_alerts/tests/test_models.py lists them. Read from the folder, so any schema
+    version works: v3.0 has candidate, eventAssociation, ssoAssociation; v4.0 (hdps PR #474) drops eventAssociation."""
+    import json
+
+    def refs(t):  # the type names a type refers to (strings in type position)
+        if isinstance(t, str):
+            return {t}
+        if isinstance(t, list):
+            return set().union(*map(refs, t)) if t else set()
+        if isinstance(t, dict):
+            out = set()
+            for key in ("type", "items", "values"):
+                if key in t:
+                    out |= refs(t[key])
+            for field in t.get("fields", []):
+                out |= refs(field["type"])
+            return out
+        return set()
+
+    d = Path(d) if d is not None else schema_dir()
+    named = {}
+    for path in sorted(d.glob("argus.alert*.avsc")):
+        s = json.loads(path.read_text())
+        named[f"{s.get('namespace', '')}.{s['name']}".lstrip(".")] = (path, refs(s) - {s["name"], "record"})
+    order, done = [], set()
+    while len(order) < len(named):
+        ready = [n for n, (_, uses) in named.items() if n not in done
+                 and all(other in done or other == n or other not in uses for other in named)]
+        if not ready:
+            raise ValueError(f"{d}: circular named types among {sorted(set(named) - done)}")
+        for n in sorted(ready):
+            order.append(named[n][0])
+            done.add(n)
+    return order
+
+
 def alert_schema():
     """The argus.alert envelope from hdps's .avsc files, its named records inlined (so the container file's
     embedded schema is complete and any Avro reader can decode it)."""
     from fastavro.schema import load_schema_ordered
 
-    d = schema_dir()
-    return load_schema_ordered([str(d / name) for name in SCHEMA_FILES])
+    return load_schema_ordered([str(path) for path in schema_files()])
 
 
 class AvroFileProducer:

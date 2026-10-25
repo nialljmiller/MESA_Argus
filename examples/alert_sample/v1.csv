@@ -1,0 +1,15 @@
+# v1 alert-broker sample nights (2026-10-25, agreed with the real/bogus training): nights the v1 model neither trains
+# on nor calibrates its cut on. v1 trains on f008 f023 f065 f098 f101 f247 f250 f255 f260 f272 f299 f324 f325; fa10 is
+# calibrated on f294 (07-30, 08-11, 08-19) and f286 (09-10, 09-25). f294 here on four other nights (one per Moon
+# phase; f294 is not up >= 3 h after 09-18), distinct from every f294 night the training plan uses (07-30 08-11 08-19
+# 08-27 09-03); f359 (in neither training nor calibration; its v2 test nights are 10-09 10-17 10-25 11-01) on newton,
+# over 30 GB and over 8 h a night; f286 on a night outside its calibration nights, if time allows. In run order per
+# machine.
+field,date,phase,machine
+f294_784m11_623_field,2026-09-10,new,mac
+f294_784m11_623_field,2026-07-28,full,mac
+f294_784m11_623_field,2026-09-18,first quarter,mac
+f294_784m11_623_field,2026-08-05,last quarter,mac
+f359_539p61_214_field,2026-09-10,new,newton
+f286_702p23_009_field,2026-08-19,first quarter,newton
+f359_539p61_214_field,2026-09-25,full,newton

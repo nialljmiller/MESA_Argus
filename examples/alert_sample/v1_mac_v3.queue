@@ -1,0 +1,5 @@
+# v1 alert-sample nights for mac's rb_queue (tools/rb_queue.py), hdps alert schema v3: put these at the top of outputs/rb_queue/mac.queue once data/rb/bundle_v1 is on this machine.
+alert_sample_v1_f294_784m11_623_20260910 /opt/homebrew/opt/python@3.14/bin/python3.14 observe.py examples/observations/alert_sample/alert_sample_v1_f294_784m11_623_20260910.toml
+alert_sample_v1_f294_784m11_623_20260728 /opt/homebrew/opt/python@3.14/bin/python3.14 observe.py examples/observations/alert_sample/alert_sample_v1_f294_784m11_623_20260728.toml
+alert_sample_v1_f294_784m11_623_20260918 /opt/homebrew/opt/python@3.14/bin/python3.14 observe.py examples/observations/alert_sample/alert_sample_v1_f294_784m11_623_20260918.toml
+alert_sample_v1_f294_784m11_623_20260805 /opt/homebrew/opt/python@3.14/bin/python3.14 observe.py examples/observations/alert_sample/alert_sample_v1_f294_784m11_623_20260805.toml
