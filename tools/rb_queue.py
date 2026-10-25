@@ -10,9 +10,15 @@ so jobs can be added, reordered or removed while the queue runs. Each finished j
 ("<name> ok|failed <hours> h <peak> GB <swap> GB <start> <end>", the peaks measured on the unit's cgroup, Linux only);
 a job named there is not run again. Each job's output: <queue folder>/logs/<name>.log.
 
-Several at once (--parallel N): a job starts only while the running jobs' MemoryMax plus its own stay within --budget,
-and only once every running observation has its scenes built (its log says "observing", as make_training_data.py
-waits: building a scene loads the 3D dust map, ~10 GB, twice per observation), or after --setup-timeout.
+Several at once (--parallel N): a job starts only while the running jobs' MemoryMax plus its own stay within --budget
+and within what the machine has for them (its memory less what everything else uses now, the library-star queue
+included, less --headroom), and only once every running observation has its scenes built (its log says "observing",
+as make_training_data.py waits: building a scene loads the 3D dust map, ~10 GB, twice per observation), or after
+--setup-timeout.
+
+Failures: every one writes a line with FAILED to the runner's output. A job its MemoryMax killed (the unit's Result
+oom-kill) runs once more, alone, at --retry-factor times the limit (its output folder moved aside to <name>.capkill);
+a second failure is final. State lines: ok, failed, or capkill (followed by the next attempt's limit).
 
 Safety: an observe.py job whose output folder (outputs/pseudo_real/<name>) already exists is not started (a run is
 there: move it aside to run it again); a job whose unit (q-<name>.scope) is still running when the queue starts, left
@@ -57,8 +63,26 @@ def read_queue(path, default_cap):
     return jobs
 
 
+def state_lines(state):
+    return [line.split() for line in state.read_text().splitlines() if line.strip()] if state.exists() else []
+
+
 def finished(state):
-    return {line.split()[0] for line in state.read_text().splitlines() if line.strip()} if state.exists() else set()
+    return {w[0] for w in state_lines(state) if w[1] in ("ok", "failed")}
+
+
+def retries(state):
+    """{name: MemoryMax} of jobs killed once at their limit and not yet run again."""
+    done = finished(state)
+    return {w[0]: w[-1].removeprefix("next=") for w in state_lines(state) if w[1] == "capkill" and w[0] not in done}
+
+
+def meminfo():
+    values = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, _, rest = line.partition(":")
+        values[key] = int(rest.split()[0]) * 1024
+    return values
 
 
 def other_engines():
@@ -111,13 +135,14 @@ class Peak(threading.Thread):
                 if folder is None:
                     continue
             self.memory = max(self.memory, self._read(folder, "memory.peak"), self._read(folder, "memory.current"))
-            self.swap = max(self.swap, self._read(folder, "memory.swap.peak"), self._read(folder, "memory.swap.current"))
+            self.swap = max(self.swap, self._read(folder, "memory.swap.peak"),
+                            self._read(folder, "memory.swap.current"))
 
 
 class Job:
-    def __init__(self, name, cap, command, logs, adopt_unit=None):
+    def __init__(self, name, cap, command, logs, adopt_unit=None, alone=False):
         self.name, self.cap, self.command, self.log_path = name, cap, command, logs / f"{name}.log"
-        self.t0, self.process, self.peak, self.unit = time.time(), None, None, adopt_unit
+        self.t0, self.process, self.peak, self.unit, self.alone = time.time(), None, None, adopt_unit, alone
         if adopt_unit:  # left running by an earlier runner: followed, not started
             self.peak = Peak(adopt_unit)
             self.peak.start()
@@ -129,7 +154,7 @@ class Job:
                     *argv]
             self.peak = Peak(self.unit)
             print(f"{stamp()} {name}: unit {self.unit}.scope (MemoryMax={cap})", flush=True)
-        self.log = open(self.log_path, "w")
+        self.log = open(self.log_path, "a" if alone else "w")
         self.process = subprocess.Popen(argv, cwd=REPO, stdout=self.log, stderr=subprocess.STDOUT,
                                         stdin=subprocess.DEVNULL)
         if self.peak:
@@ -147,6 +172,23 @@ class Job:
         folder = output_folder(self.command, self.name)
         return 0 if folder and len(list(folder.glob("*_night_*.alerts.csv"))) >= 2 else 1
 
+    def current(self):
+        """The unit's memory now (bytes)."""
+        group = subprocess.run(["systemctl", "--user", "show", "-P", "ControlGroup", f"{self.unit}.scope"],
+                               capture_output=True, text=True).stdout.strip()
+        try:
+            return int(Path("/sys/fs/cgroup" + group, "memory.current").read_text()) if group else 0
+        except (OSError, ValueError):
+            return 0
+
+    def capkill(self):
+        """Whether its unit was killed at its MemoryMax."""
+        if not LINUX:
+            return False
+        result = subprocess.run(["systemctl", "--user", "show", "-P", "Result", f"{self.unit}.scope"],
+                                capture_output=True, text=True).stdout.strip()
+        return result == "oom-kill"
+
     def set_up(self, timeout):
         """Whether its scenes are built (its log says "observing"), or it is past the timeout, or not an observation."""
         if "observe.py" not in self.command or time.time() - self.t0 > timeout:
@@ -163,6 +205,8 @@ def main(argv=None):
     p.add_argument("--memory-max", default="45G", help="each job's MemoryMax (Linux), unless its line gives one")
     p.add_argument("--parallel", type=int, default=1, help="jobs at once, at most")
     p.add_argument("--budget", default="", help="the running jobs' MemoryMax summed stays within this (Linux)")
+    p.add_argument("--headroom", default="4G", help="memory left beyond the jobs' limits and what else runs now")
+    p.add_argument("--retry-factor", type=float, default=1.5, help="a job killed at its limit runs again at this x it")
     p.add_argument("--setup-timeout", type=float, default=1800.0, help="seconds to wait for a job's scenes")
     p.add_argument("--wait-for-engines", action="store_true", help="also on Linux, wait while another engine runs")
     p.add_argument("--poll", type=float, default=30.0, help="seconds between looks")
@@ -193,12 +237,26 @@ def main(argv=None):
             hours = (time.time() - job.t0) / 3600
             memory, swap = (job.peak.memory / 2**30, job.peak.swap / 2**30) if job.peak else (float("nan"),) * 2
             status = "ok" if code == 0 else "failed"
+            extra = ""
+            if code != 0 and not job.alone and job.capkill():
+                status, nxt = "capkill", f"{size(job.cap) * args.retry_factor / 2**30:.0f}G"
+                extra = f" next={nxt}"
+                folder = output_folder(job.command, job.name)
+                if folder is not None and folder.exists():
+                    aside = folder.with_name(folder.name + ".capkill")
+                    folder.rename(aside)
+                    print(f"{stamp()} {folder.relative_to(REPO)} moved aside to {aside.name}", flush=True)
             with open(state, "a") as f:
                 f.write(f"{job.name} {status} {hours:.2f} h {memory:.1f} GB {swap:.1f} GB "
-                        f"{time.strftime('%m-%d_%H:%M', time.localtime(job.t0))} {time.strftime('%m-%d_%H:%M')}\n")
-            print(f"{stamp()} {status} {job.name} (exit {code}; {hours:.2f} h; peak {memory:.1f} GB, swap {swap:.1f} GB)",
-                  flush=True)
+                        f"{time.strftime('%m-%d_%H:%M', time.localtime(job.t0))} {time.strftime('%m-%d_%H:%M')}"
+                        f" cap={job.cap}{extra}\n")
+            again_at = extra.replace(" next=", "")
+            what = {"ok": "ok", "failed": "FAILED",
+                    "capkill": f"FAILED (killed at its MemoryMax; runs once more, alone, at {again_at})"}[status]
+            print(f"{stamp()} {what} {job.name} (exit {code}; {hours:.2f} h; peak {memory:.1f} GB, "
+                  f"swap {swap:.1f} GB; MemoryMax {job.cap})", flush=True)
         done = finished(state) | {job.name for job in running}
+        again = retries(state)
         todo = []
         for name, cap, command in read_queue(queue, args.memory_max):
             folder = output_folder(command, name)
@@ -206,17 +264,25 @@ def main(argv=None):
                 continue
             if folder is not None and folder.exists():
                 if name not in said:
-                    print(f"{stamp()} {name}: {folder.relative_to(REPO)} exists; not started (move it aside to run it)",
+                    print(f"{stamp()} NOT STARTED {name}: {folder.relative_to(REPO)} exists (move it aside to run it)",
                           flush=True)
                     said.add(name)
                 continue
-            todo.append((name, cap, command))
+            todo.append((name, again.get(name, cap), command, name in again))
+        todo.sort(key=lambda job: not job[3])  # a rerun first, alone
         if not todo and not running and args.exit_when_empty:
             print(f"{stamp()} queue empty: done", flush=True)
             return
-        can_start = (todo and len(running) < args.parallel
-                     and all(job.set_up(args.setup_timeout) for job in running)
-                     and (not LINUX or sum(size(job.cap) for job in running) + size(todo[0][1]) <= budget))
+        fits = True
+        if LINUX and todo:
+            m = meminfo()
+            ours = sum(job.current() for job in running)
+            outside = m["MemTotal"] - m["MemAvailable"] - ours  # the library-star queue and everything else, now
+            room = min(budget, m["MemTotal"] - outside - size(args.headroom))
+            fits = sum(size(job.cap) for job in running) + size(todo[0][1]) <= room
+        can_start = (todo and len(running) < args.parallel and fits
+                     and not any(job.alone for job in running) and (not todo[0][3] or not running)
+                     and all(job.set_up(args.setup_timeout) for job in running))
         if can_start and (not LINUX or args.wait_for_engines) and other_engines():
             if "engines" not in said:
                 print(f"{stamp()} waiting: another engine is running ({other_engines()[0][:120]})", flush=True)
@@ -224,9 +290,9 @@ def main(argv=None):
             can_start = False
         if can_start:
             said.discard("engines")
-            name, cap, command = todo[0]
-            print(f"{stamp()} start {name}: {command}", flush=True)
-            running.append(Job(name, cap, command, logs))
+            name, cap, command, alone = todo[0]
+            print(f"{stamp()} start {name}{' (again, alone)' if alone else ''}: {command}", flush=True)
+            running.append(Job(name, cap, command, logs, alone=alone))
             continue
         time.sleep(args.poll)
 
