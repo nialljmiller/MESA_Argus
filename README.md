@@ -279,6 +279,21 @@ python tools/rb_training_set.py outputs/pseudo_real/rb_* -o data/rb             
 python tools/train_rb.py data/rb/training_set.parquet -o data/rb/bundle_v1      # -> an hdps model bundle
 ```
 
+The alerts should be the ones Argus sends, and Argus observes every night of the lunar month, so the training nights
+span it: `examples/rb/moon_phases_2026.csv` lists each field's nights at new moon, the quarters and full moon (a date
+the field is up >= 3 h, so observe.py does not move it to another week and another phase). `--plan` writes those
+observations, `tools/rb_queue.py` runs them one at a time (on Linux each in its own memory-limited systemd unit):
+
+```bash
+python tools/make_training_data.py --plan examples/rb/moon_phases_2026.csv --machine mac --stride 2 --write-only
+python tools/rb_queue.py outputs/rb_queue/mac.queue        # lines "<name> python observe.py data/rb/observations/<name>.toml"
+```
+
+Every training row carries its night (field, night_date, mask_bright_stars, moon_phase, moon_illumination, moon_alt).
+`train_rb.py` holds out whole fields (`--test-fields`, else cross-validation by field), measures on the nights run
+with hdps's bright-star mask off (as Argus runs it; nights before 2026-10-25 had it on, which hides candidates) and
+gives every operating point per Moon phase.
+
 The bundle is what hdps's `RFBundleClassifier` loads: set `model_bundle` for AlertVettingTask in `[[hdps.tasks]]`
 and `score_cut = "fa10"` (10 false alerts per deg² per exposure, as hdps's production config).
 

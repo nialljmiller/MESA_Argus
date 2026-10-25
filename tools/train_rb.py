@@ -5,12 +5,18 @@ the directory hdps's AlertVettingTask loads (model_bundle; hdps.alerts.classifie
                     operating_points {label: score cut}, metrics
     model.joblib    a scikit-learn RandomForestClassifier: predict_proba(X)[:, 1] is the real score
 
-Held-out test: whole observations when there are several (--test-fraction of them), else whole exposures, so the
-test never shares a frame (or a field) with training. Operating points: "faN" is the score cut that leaves N false
-alerts per square degree per exposure on the test set (hdps's convention, e.g. score_cut = "fa10"), from the bogus
-candidates above the cut over the test frames' readout-window area; "p50" etc. keep that fraction of real ones.
+Held-out test, whole fields (a field observed on several nights shares its stars and their residuals between them,
+so no field is on both sides): --test-fields, those fields; else, with 4 fields or more, --folds-fold
+cross-validation by field (each field scored by a model trained without it); with fewer, whole exposures. The
+measures are taken on the test candidates made as Argus runs: with --evaluate mask-off (the default), only nights run
+with hdps's bright-star mask off (the training set's mask_bright_stars; a mask hides candidates, so its nights would
+show fewer false alerts than Argus sends). Operating points: "faN" is the score cut that leaves N false alerts per
+square degree per exposure on those test frames (hdps's convention, e.g. score_cut = "fa10"), from the bogus
+candidates above the cut over the frames' readout-window area; "p50" etc. keep that fraction of real ones. Each
+operating point is also measured per Moon phase (the training set's moon_phase).
 
     python tools/train_rb.py data/rb/training_set.parquet -o data/rb/bundle_v1
+    python tools/train_rb.py data/rb/training_set.parquet -o data/rb/bundle_v2 --test-fields f278_214m16_942_field
 """
 import argparse
 import json
@@ -45,7 +51,11 @@ def main(argv=None):
     p.add_argument("-o", "--out", type=Path, required=True, help="the bundle directory to write")
     p.add_argument("--trees", type=int, default=500)
     p.add_argument("--min-leaf", type=int, default=5, help="min_samples_leaf: smooths the score")
-    p.add_argument("--test-fraction", type=float, default=0.25, help="held-out share (observations, else exposures)")
+    p.add_argument("--test-fraction", type=float, default=0.25, help="held-out exposures (under 4 fields)")
+    p.add_argument("--test-fields", nargs="+", help="field sets held out whole (the training set's field column)")
+    p.add_argument("--folds", type=int, default=5, help="without --test-fields: cross-validation folds, by field")
+    p.add_argument("--evaluate", choices=["mask-off", "all"], default="mask-off",
+                   help="test candidates measured: those of nights with the bright-star mask off, or all")
     p.add_argument("--fa", type=float, nargs="+", default=[1.0, 10.0, 100.0], help="false alerts / deg^2 / exposure")
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args(argv)
@@ -56,32 +66,61 @@ def main(argv=None):
         sys.exit(f"training set feature spec {manifest_in['feature_spec']} != hdps's {FEATURE_SPEC_VERSION}")
     names = list(FEATURE_NAMES)
     t["frame"] = t["observation_dir"] + "|" + t["band"] + "|" + t["exposure"].astype(str)
-    rng = np.random.default_rng(args.seed)
-    observations = sorted(t["observation_dir"].unique())
-    if len(observations) >= 4:  # hold out whole observations (fields / nights the model never saw)
-        held = set(rng.choice(observations, max(1, round(args.test_fraction * len(observations))), replace=False))
-        test = t["observation_dir"].isin(held).to_numpy()
-        split = f"by observation: {len(held)} of {len(observations)} held out"
-    else:  # one or a few observations: hold out whole exposures
+    if "field" not in t.columns:  # a training set made before it carried provenance
+        t["field"] = t["observation_dir"]
+    for column, value in (("mask_bright_stars", True), ("moon_phase", "unknown")):
+        if column not in t.columns:
+            t[column] = value
+    X, y = t[names].to_numpy(float), t["label"].to_numpy(int)
+    fields = sorted(t["field"].unique())
+    make = lambda: RandomForestClassifier(n_estimators=args.trees, min_samples_leaf=args.min_leaf,  # noqa: E731
+                                          class_weight="balanced", n_jobs=-1, random_state=args.seed)
+    t0 = time.time()
+    score = np.full(len(t), np.nan)
+    if args.test_fields:  # these fields held out whole
+        unknown = sorted(set(args.test_fields) - set(fields))
+        if unknown:
+            sys.exit(f"--test-fields not in the training set: {', '.join(unknown)}")
+        test = t["field"].isin(args.test_fields).to_numpy()
+        split = f"fields held out: {', '.join(args.test_fields)} ({len(args.test_fields)} of {len(fields)})"
+        if y[~test].sum() == 0 or y[test].sum() == 0:
+            sys.exit("no real rows in the training or the test part: more (injected) observations are needed")
+        score[test] = make().fit(X[~test], y[~test]).predict_proba(X[test])[:, 1]
+    elif len(fields) >= 4:  # cross-validation by field: every field scored by a model that never saw it
+        from sklearn.model_selection import GroupKFold
+
+        folds = min(args.folds, len(fields))
+        for train_rows, test_rows in GroupKFold(n_splits=folds).split(X, y, groups=t["field"]):
+            score[test_rows] = make().fit(X[train_rows], y[train_rows]).predict_proba(X[test_rows])[:, 1]
+        test = np.ones(len(t), bool)
+        split = f"{folds}-fold cross-validation by field ({len(fields)} fields)"
+    else:  # one or a few fields: hold out whole exposures
+        rng = np.random.default_rng(args.seed)
         frames = t["frame"].unique()
         held = set(rng.choice(frames, max(1, round(args.test_fraction * len(frames))), replace=False))
         test = t["frame"].isin(held).to_numpy()
-        split = f"by exposure: {len(held)} of {len(frames)} held out (fewer than 4 observations)"
-    X, y = t[names].to_numpy(float), t["label"].to_numpy(int)
-    print(f"{len(t)} rows ({y.sum()} real, {(1 - y).sum()} bogus); test split {split}", flush=True)
-    if y[~test].sum() == 0 or y[test].sum() == 0:
-        sys.exit("no real rows in the training or the test part: more (injected) observations are needed")
+        split = f"by exposure: {len(held)} of {len(frames)} held out (fewer than 4 fields)"
+        score[test] = make().fit(X[~test], y[~test]).predict_proba(X[test])[:, 1]
+    measured = test.copy()
+    if args.evaluate == "mask-off":
+        off = ~t["mask_bright_stars"].astype(bool).to_numpy()
+        if (measured & off).any():
+            measured &= off
+            split += "; measured on the mask-off nights"
+        else:
+            split += "; no mask-off night in the test part: measured on all of it"
+    print(f"{len(t)} rows ({y.sum()} real, {(1 - y).sum()} bogus); {split}", flush=True)
+    if y[measured].sum() == 0 or (1 - y[measured]).sum() == 0:
+        sys.exit("the measured test part needs real and bogus rows")
+    area = frame_area_deg2(t.loc[measured, "observation_dir"].unique())
 
-    t0 = time.time()
-    model = RandomForestClassifier(n_estimators=args.trees, min_samples_leaf=args.min_leaf, class_weight="balanced",
-                                   n_jobs=-1, random_state=args.seed)
-    model.fit(X[~test], y[~test])
-    score = model.predict_proba(X[test])[:, 1]
-    yt = y[test]
-    area = frame_area_deg2(t.loc[test, "observation_dir"].unique())
-    test_frames = t.loc[test, ["frame", "observation_dir"]].drop_duplicates()
-    sky = float(sum(area[d] for d in test_frames["observation_dir"]))  # deg^2 x exposures on the test set
-    bogus_scores, real_scores = np.sort(score[yt == 0])[::-1], score[yt == 1]
+    def sky_of(rows):  # deg^2 x exposures of these rows' frames
+        frames = t.loc[rows, ["frame", "observation_dir"]].drop_duplicates()
+        return float(sum(area[d] for d in frames["observation_dir"]))
+
+    yt, st = y[measured], score[measured]
+    sky = sky_of(measured)
+    bogus_scores, real_scores = np.sort(st[yt == 0])[::-1], st[yt == 1]
     points = {}
     for fa in args.fa:  # the cut leaving fa false alerts per deg^2 per exposure
         n_allowed = int(np.floor(fa * sky))
@@ -89,17 +128,31 @@ def main(argv=None):
         points[f"fa{fa:g}"] = cut
     for keep in (0.5, 0.9):
         points[f"p{round(keep * 100)}"] = float(np.quantile(real_scores, 1 - keep))
-    metrics = dict(train_rows=int((~test).sum()), test_rows=int(test.sum()), test_real=int(yt.sum()),
-                   test_bogus=int((1 - yt).sum()), test_deg2_exposures=sky, split=split,
-                   roc_auc=float(roc_auc_score(yt, score)), average_precision=float(average_precision_score(yt, score)),
-                   at_points={k: dict(cut=c, real_kept=float(np.mean(real_scores >= c)),
-                                      false_per_deg2_exposure=float(np.sum(bogus_scores >= c) / sky))
-                              for k, c in points.items()},
-                   feature_importance={n: float(v) for n, v in sorted(zip(names, model.feature_importances_),
-                                                                       key=lambda kv: -kv[1])},
+
+    def at_points(rows):
+        rsc, bsc, area_here = score[rows & (y == 1)], score[rows & (y == 0)], sky_of(rows)
+        return {k: dict(cut=c, real_kept=float(np.mean(rsc >= c)) if len(rsc) else None,
+                        false_per_deg2_exposure=float(np.sum(bsc >= c) / area_here) if area_here else None)
+                for k, c in points.items()}
+
+    by_phase = {}
+    for phase in sorted(t.loc[measured, "moon_phase"].astype(str).unique()):
+        rows = measured & (t["moon_phase"].astype(str) == phase).to_numpy()
+        auc = float(roc_auc_score(y[rows], score[rows])) if 0 < y[rows].sum() < rows.sum() else None
+        by_phase[phase] = dict(fields=int(t.loc[rows, "field"].nunique()),
+                               nights=int(t.loc[rows, "observation_dir"].nunique()), real=int(y[rows].sum()),
+                               bogus=int((1 - y[rows]).sum()), deg2_exposures=sky_of(rows), roc_auc=auc,
+                               at_points=at_points(rows))
+    metrics = dict(train_rows=int((~test).sum()) if not test.all() else int(len(t)), test_rows=int(test.sum()),
+                   measured_rows=int(measured.sum()), test_real=int(yt.sum()), test_bogus=int((1 - yt).sum()),
+                   test_deg2_exposures=sky, split=split, evaluate=args.evaluate,
+                   roc_auc=float(roc_auc_score(yt, st)), average_precision=float(average_precision_score(yt, st)),
+                   at_points=at_points(measured), by_moon_phase=by_phase,
                    fit_seconds=round(time.time() - t0, 1))
     # the bundle is trained on everything (the test split above only measures it)
-    model.fit(X, y)
+    model = make().fit(X, y)
+    metrics["feature_importance"] = {n: float(v) for n, v in sorted(zip(names, model.feature_importances_),
+                                                                     key=lambda kv: -kv[1])}
     args.out.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, args.out / "model.joblib", compress=3)
     version = f"mesa-argus-rf-{time.strftime('%Y%m%d')}-{len(t)}"
@@ -113,6 +166,12 @@ def main(argv=None):
     print(f"ROC AUC {metrics['roc_auc']:.4f}, average precision {metrics['average_precision']:.4f}")
     for k, v in metrics["at_points"].items():
         print(f"  {k}: cut {v['cut']:.3f}: real kept {v['real_kept']:.3f}, false {v['false_per_deg2_exposure']:.2f} /deg2/exposure")
+    for phase, m in by_phase.items():
+        line = ", ".join(f"{k} {v['real_kept']:.3f} / {v['false_per_deg2_exposure']:.1f}"
+                         for k, v in m["at_points"].items()
+                         if v["real_kept"] is not None and v["false_per_deg2_exposure"] is not None)
+        print(f"  {phase} ({m['nights']} nights, {m['fields']} fields): real kept / false per deg2 per exposure: "
+              f"{line}")
     print(f"bundle -> {args.out} (model_version {version})")
 
 
