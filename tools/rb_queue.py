@@ -22,6 +22,9 @@ oom-kill) runs once more, alone, at --retry-factor times the limit, at most --re
 to <name>.capkill); a second failure is final, as is the first when the line says ! or the limit is at --retry-max.
 State lines: ok, failed, or capkill (followed by the next attempt's limit).
 
+Disk: with --min-disk, a job starts only while the repository's disk has at least that much free (a night's hdps
+products are ~10 GB per band); until then the runner waits and says so once (WAITING).
+
 Safety: an observe.py job whose output folder (outputs/pseudo_real/<name>) already exists is not started (a run is
 there: move it aside to run it again); a job whose unit (q-<name>.scope) is still running when the queue starts, left
 by an earlier runner, is followed to its end and recorded (ok when it left its two alert tables).
@@ -31,6 +34,7 @@ by an earlier runner, is followed to its end and recorded (ok when it left its t
 """
 import argparse
 import re
+import shutil
 import shlex
 import subprocess
 import sys
@@ -213,6 +217,7 @@ def main(argv=None):
                                                      "otherwise swap without end instead of being stopped")
     p.add_argument("--retry-factor", type=float, default=1.5, help="a job killed at its limit runs again at this x it")
     p.add_argument("--retry-max", default="50G", help="the highest limit a rerun gets")
+    p.add_argument("--min-disk", default="", help="free disk a job needs to start (e.g. 15G)")
     p.add_argument("--setup-timeout", type=float, default=1800.0, help="seconds to wait for a job's scenes")
     p.add_argument("--wait-for-engines", action="store_true", help="also on Linux, wait while another engine runs")
     p.add_argument("--poll", type=float, default=30.0, help="seconds between looks")
@@ -293,6 +298,16 @@ def main(argv=None):
         can_start = (todo and len(running) < args.parallel and fits
                      and not any(job.alone for job in running) and (not todo[0][3] or not running)
                      and all(job.set_up(args.setup_timeout) for job in running))
+        if can_start and args.min_disk:
+            free = shutil.disk_usage(REPO).free
+            if free < size(args.min_disk):
+                if "disk" not in said:
+                    print(f"{stamp()} WAITING: {free / 2**30:.0f} GB free on disk, below --min-disk {args.min_disk}; "
+                          f"{todo[0][0]} not started", flush=True)
+                    said.add("disk")
+                can_start = False
+            else:
+                said.discard("disk")
         if can_start and (not LINUX or args.wait_for_engines) and other_engines():
             if "engines" not in said:
                 print(f"{stamp()} waiting: another engine is running ({other_engines()[0][:120]})", flush=True)
