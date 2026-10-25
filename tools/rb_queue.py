@@ -22,6 +22,11 @@ oom-kill) runs once more, alone, at --retry-factor times the limit, at most --re
 to <name>.capkill); a second failure is final, as is the first when the line says ! or the limit is at --retry-max.
 State lines: ok, failed, or capkill (followed by the next attempt's limit).
 
+Sharing the machine: other work comes first. Each job's unit gets OOMScoreAdjust (--oom-score-adjust, default 500), so
+if the machine as a whole runs short (another workload grew), the kernel stops our job, not theirs. A job whose limit
+does not fit beside what else runs now waits (WAITING, said once); with --shrink-min, it starts instead with a smaller
+limit (what fits) when that is at least --shrink-min.
+
 Disk: with --min-disk, a job starts only while the repository's disk has at least that much free (a night's hdps
 products are ~10 GB per band); until then the runner waits and says so once (WAITING).
 
@@ -146,7 +151,7 @@ class Peak(threading.Thread):
 
 
 class Job:
-    def __init__(self, name, cap, command, logs, adopt_unit=None, alone=False, swap_max="2G"):
+    def __init__(self, name, cap, command, logs, adopt_unit=None, alone=False, swap_max="2G", oom_adjust=500):
         self.name, self.cap, self.command, self.log_path = name, cap, command, logs / f"{name}.log"
         self.t0, self.process, self.peak, self.unit, self.alone = time.time(), None, None, adopt_unit, alone
         if adopt_unit:  # left running by an earlier runner: followed, not started
@@ -157,7 +162,8 @@ class Job:
         if LINUX:
             self.unit = unit_name(name)
             argv = ["systemd-run", "--user", "--scope", "--quiet", f"--unit={self.unit}",
-                    "-p", f"MemoryMax={cap.rstrip('!')}", "-p", f"MemorySwapMax={swap_max}", *argv]
+                    "-p", f"MemoryMax={cap.rstrip('!')}", "-p", f"MemorySwapMax={swap_max}",
+                    "-p", f"OOMScoreAdjust={oom_adjust}", *argv]
             self.peak = Peak(self.unit)
             print(f"{stamp()} {name}: unit {self.unit}.scope (MemoryMax={cap}, MemorySwapMax={swap_max})",
                   flush=True)
@@ -218,6 +224,8 @@ def main(argv=None):
     p.add_argument("--retry-factor", type=float, default=1.5, help="a job killed at its limit runs again at this x it")
     p.add_argument("--retry-max", default="50G", help="the highest limit a rerun gets")
     p.add_argument("--min-disk", default="", help="free disk a job needs to start (e.g. 15G)")
+    p.add_argument("--oom-score-adjust", type=int, default=500, help="the jobs' OOMScoreAdjust (Linux): stopped first")
+    p.add_argument("--shrink-min", default="", help="start a job that does not fit with what fits, if at least this")
     p.add_argument("--setup-timeout", type=float, default=1800.0, help="seconds to wait for a job's scenes")
     p.add_argument("--wait-for-engines", action="store_true", help="also on Linux, wait while another engine runs")
     p.add_argument("--poll", type=float, default=30.0, help="seconds between looks")
@@ -294,7 +302,20 @@ def main(argv=None):
             ours = sum(job.current() for job in running)
             outside = m["MemTotal"] - m["MemAvailable"] - ours  # the library-star queue and everything else, now
             room = min(budget, m["MemTotal"] - outside - size(args.headroom))
-            fits = sum(size(job.cap) for job in running) + size(todo[0][1]) <= room
+            left = room - sum(size(job.cap) for job in running)
+            fits = size(todo[0][1]) <= left
+            if not fits and args.shrink_min and left >= size(args.shrink_min) and len(running) < args.parallel:
+                shrunk = f"{int(left / 2**30)}G" + ("!" if todo[0][1].endswith("!") else "")
+                print(f"{stamp()} {todo[0][0]}: MemoryMax {todo[0][1]} does not fit beside the rest "
+                      f"({outside / 2**30:.1f} GB used outside our jobs); starting it at {shrunk}", flush=True)
+                todo[0] = (todo[0][0], shrunk, *todo[0][2:])
+                fits = True
+            if not fits and len(running) < args.parallel and "memory" not in said:
+                print(f"{stamp()} WAITING: {todo[0][0]} (MemoryMax {todo[0][1]}) does not fit: "
+                      f"{left / 2**30:.1f} GB left ({outside / 2**30:.1f} GB used outside our jobs)", flush=True)
+                said.add("memory")
+            elif fits:
+                said.discard("memory")
         can_start = (todo and len(running) < args.parallel and fits
                      and not any(job.alone for job in running) and (not todo[0][3] or not running)
                      and all(job.set_up(args.setup_timeout) for job in running))
@@ -317,7 +338,8 @@ def main(argv=None):
             said.discard("engines")
             name, cap, command, alone = todo[0]
             print(f"{stamp()} start {name}{' (again, alone)' if alone else ''}: {command}", flush=True)
-            running.append(Job(name, cap, command, logs, alone=alone, swap_max=args.swap_max))
+            running.append(Job(name, cap, command, logs, alone=alone, swap_max=args.swap_max,
+                               oom_adjust=args.oom_score_adjust))
             continue
         time.sleep(args.poll)
 
