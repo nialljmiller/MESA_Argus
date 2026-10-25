@@ -34,7 +34,8 @@ products are ~10 GB per band); until then the runner waits and says so once (WAI
 
 Safety: an observe.py job whose output folder (outputs/pseudo_real/<name>) already exists is not started (a run is
 there: move it aside to run it again); a job whose unit (q-<name>.scope) is still running when the queue starts, left
-by an earlier runner, is followed to its end and recorded (ok when it left its two alert tables).
+by an earlier runner, is followed to its end and recorded (ok when its unit succeeded and it left an alert table
+per band it ran).
 
     nohup python3.14 tools/rb_queue.py outputs/rb_queue/newton.queue --memory-max 45G \\
         > outputs/rb_queue/newton.log 2>&1 < /dev/null & disown
@@ -47,6 +48,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -176,7 +178,7 @@ class Job:
             self.peak.start()
 
     def poll(self):
-        """None while running, else the exit code (adopted: 0 if it left both alert tables)."""
+        """None while running, else the exit code (adopted: 0 if its unit succeeded and left a table per band)."""
         if self.process is not None:
             code = self.process.poll()
             if code is not None:
@@ -184,8 +186,15 @@ class Job:
             return code
         if unit_state(self.unit) == 0:
             return None
-        folder = output_folder(self.command, self.name)
-        return 0 if folder and len(list(folder.glob("*_night_*.alerts.csv"))) >= 2 else 1
+        result = subprocess.run(["systemctl", "--user", "show", "-P", "Result", f"{self.unit}.scope"],
+                                capture_output=True, text=True).stdout.strip()
+        if result and result != "success":
+            return 1
+        folder = output_folder(self.command, self.name)  # (a unit gone already: its alert tables, one per band)
+        if folder is None or not (folder / "observation.toml").exists():
+            return 1
+        bands = tomllib.loads((folder / "observation.toml").read_text()).get("output", {}).get("bands", ["beta", "rho"])
+        return 0 if len(list(folder.glob("*_night_*.alerts.csv"))) >= len(bands) else 1
 
     def current(self):
         """The unit's process memory now (bytes: memory.stat anon + shmem, the part MemAvailable does not count; its
