@@ -1,4 +1,4 @@
 # v1 alert-sample nights for newton's rb_queue (tools/rb_queue.py), hdps alert schema v3: put these at the top of outputs/rb_queue/newton.queue once data/rb/bundle_v1 is on this machine.
 alert_sample_v1_f359_539p61_214_20260910@45G! /usr/bin/python3.14 observe.py examples/observations/alert_sample/alert_sample_v1_f359_539p61_214_20260910.toml
 alert_sample_v1_f286_702p23_009_20260819@45G /usr/bin/python3.14 observe.py examples/observations/alert_sample/alert_sample_v1_f286_702p23_009_20260819.toml
-alert_sample_v1_f359_539p61_214_20260925@45G! /usr/bin/python3.14 observe.py examples/observations/alert_sample/alert_sample_v1_f359_539p61_214_20260925.toml
+# optional, only if f359 09-10 and f286 end by Monday 12:00: alert_sample_v1_f359_539p61_214_20260925@45G! /usr/bin/python3.14 observe.py examples/observations/alert_sample/alert_sample_v1_f359_539p61_214_20260925.toml
