@@ -1,0 +1,66 @@
+# Real/bogus training nights across the lunar month, bright-star mask off (2026-10-25: "a sample of alerts that is
+# most representative of the data that argus will be sending"). Each field also keeps its existing night (mask on, run
+# with --date 2026-10-23; the night it used is in its observation.toml), so each gets the Moon phases that night lacks.
+# Every date is one the field is up >= 3 h (the 2026 phases: new 07-13 08-11 09-10 10-09 11-08, first quarter 07-20
+# 08-19 09-18 10-17, full 07-28 08-27 09-25 10-25, last quarter 08-05 09-03 11-01), so observe.py keeps it.
+# role: train (has a mask-on night) or test (fields with no mask-on alert table: held out whole, all four phases).
+# machine: where its field set reaches the 0.52 deg the window needs (stars/<field>/meta.json radius_deg); f359
+# (84,000 stars, over 30 GB) on newton.
+# Existing nights: f008 f023 f065 f098 f101 f324 f325 10-23 (Moon 0.95), f250 08-28 (0.99, beta only),
+# f255 f260 08-14 (0.08), f247 08-07 (0.26), f299 10-02 (0.53), f272 09-04 (0.39, rho only).
+field,date,phase,round,role,machine
+f008_841p52_998_field,2026-10-09,new,1,train,mac
+f255_305p11_269_field,2026-07-28,full,1,train,newton
+f023_882p69_165_field,2026-10-09,new,1,train,mac
+f260_012p03_816_field,2026-07-28,full,1,train,newton
+f065_830p44_237_field,2026-11-08,new,1,train,mac
+f272_796p05_414_field,2026-08-11,new,1,train,newton
+f098_580p58_321_field,2026-11-08,new,1,train,mac
+f278_214m16_942_field,2026-07-13,new,1,test,newton
+f101_104p39_633_field,2026-11-08,new,1,train,mac
+f278_214m16_942_field,2026-07-28,full,1,test,newton
+f247_568p16_919_field,2026-07-13,new,1,train,mac
+f286_702p23_009_field,2026-09-10,new,1,test,newton
+f250_400p36_464_field,2026-08-11,new,1,train,mac
+f286_702p23_009_field,2026-09-25,full,1,test,newton
+f324_959p28_251_field,2026-10-09,new,1,train,mac
+f294_784m11_623_field,2026-08-11,new,1,test,mac
+f325_160p21_053_field,2026-10-09,new,1,train,mac
+f294_784m11_623_field,2026-08-27,full,1,test,newton
+f299_911m08_104_field,2026-09-10,new,1,train,newton
+f359_539p61_214_field,2026-10-09,new,1,test,newton
+f359_539p61_214_field,2026-10-25,full,1,test,newton
+f008_841p52_998_field,2026-10-17,first quarter,2,train,mac
+f255_305p11_269_field,2026-07-20,first quarter,2,train,newton
+f023_882p69_165_field,2026-10-17,first quarter,2,train,mac
+f260_012p03_816_field,2026-07-20,first quarter,2,train,newton
+f065_830p44_237_field,2026-10-17,first quarter,2,train,mac
+f272_796p05_414_field,2026-08-19,first quarter,2,train,newton
+f098_580p58_321_field,2026-10-17,first quarter,2,train,mac
+f278_214m16_942_field,2026-07-20,first quarter,2,test,newton
+f101_104p39_633_field,2026-10-17,first quarter,2,train,mac
+f286_702p23_009_field,2026-09-18,first quarter,2,test,newton
+f247_568p16_919_field,2026-07-20,first quarter,2,train,mac
+f294_784m11_623_field,2026-08-19,first quarter,2,test,newton
+f250_400p36_464_field,2026-08-19,first quarter,2,train,mac
+f299_911m08_104_field,2026-09-18,first quarter,2,train,newton
+f324_959p28_251_field,2026-10-17,first quarter,2,train,mac
+f325_160p21_053_field,2026-10-17,first quarter,2,train,mac
+f359_539p61_214_field,2026-10-17,first quarter,2,test,newton
+f008_841p52_998_field,2026-11-01,last quarter,3,train,mac
+f255_305p11_269_field,2026-08-05,last quarter,3,train,newton
+f023_882p69_165_field,2026-11-01,last quarter,3,train,mac
+f260_012p03_816_field,2026-08-05,last quarter,3,train,newton
+f065_830p44_237_field,2026-11-01,last quarter,3,train,mac
+f272_796p05_414_field,2026-08-27,full,3,train,newton
+f098_580p58_321_field,2026-11-01,last quarter,3,train,mac
+f278_214m16_942_field,2026-08-05,last quarter,3,test,newton
+f101_104p39_633_field,2026-11-01,last quarter,3,train,mac
+f286_702p23_009_field,2026-09-03,last quarter,3,test,newton
+f247_568p16_919_field,2026-07-28,full,3,train,mac
+f294_784m11_623_field,2026-09-03,last quarter,3,test,newton
+f250_400p36_464_field,2026-08-05,last quarter,3,train,mac
+f299_911m08_104_field,2026-09-25,full,3,train,newton
+f324_959p28_251_field,2026-11-01,last quarter,3,train,mac
+f325_160p21_053_field,2026-11-01,last quarter,3,train,mac
+f359_539p61_214_field,2026-11-01,last quarter,3,test,newton

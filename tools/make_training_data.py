@@ -4,16 +4,26 @@ window, no movies, run several at once. Each writes <name>_night_<band>.alerts.c
 features, its truth); tools/rb_training_set.py turns them into a training set, tools/train_rb.py into an hdps bundle.
 
 Each observation is written as an observation file in <out>/observations/ and run with observe.py into
-outputs/pseudo_real/rb_<field>_<date>/. A field the array cannot observe for 3 h near the date is skipped (observe.py
-says so); a run that fails is logged and the batch goes on. Re-running skips observations whose alert tables exist.
+outputs/pseudo_real/rb_<field>_<date>/. A run that fails is logged and the batch goes on. Re-running skips observations
+whose alert tables exist.
+
+With --date, observe.py takes the nearest night (in weekly steps) each field is up >= 3 h: the folder keeps the date
+asked, the night may be weeks away, at another Moon phase (its observation.toml has the night used). With --plan, each
+line names its night: a (field, date) whose field is not up >= 3 h that night is skipped, not moved, so every night is
+at the Moon phase planned.
 
     python tools/make_training_data.py --fields all --date 2026-10-23 --inject 200 --parallel 4
+    python tools/make_training_data.py --plan data/rb/plans/moon_phases.csv --stride 2 --write-only
+
+--plan: a CSV with columns field, date (and any others: phase, round, machine; --machine keeps the lines of one).
+--write-only: write the observation files and print "<name> <file>" per observation, for tools/rb_queue.py.
 """
 import argparse
 import re
 import subprocess
 import sys
 import time
+import zlib
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -58,9 +68,25 @@ stride = {stride}
 '''
 
 
+def up_that_night(ra, dec, date):
+    """Whether the field is up >= 3 h on the night of `date` (observe.py's rule); if not, observe.py would move it to
+    another week, so the night is skipped with a note."""
+    sys.path.insert(0, str(REPO))
+    from mesa_argus import night
+
+    found, minutes = night.nearest_night(ra, dec, date, night.SITES["argus"], None, None, None, 180)
+    if found != date:
+        print(f"({ra}, {dec}) on {date}: not up >= 3 h (observe.py would take {found}); skipped")
+        return False
+    return True
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--fields", nargs="+", default=["all"], help="field set names (stars/<name>), or all")
+    p.add_argument("--plan", type=Path, help="CSV of (field, date) nights, in order (instead of --fields/--date)")
+    p.add_argument("--machine", help="with --plan: only its lines whose machine column is this")
+    p.add_argument("--write-only", action="store_true", help="write the observation files, print them, run nothing")
     p.add_argument("--date", default="2026-10-23", help="the night to start from (observe.py takes the nearest "
                                                          "night each field is up >= 3 h)")
     p.add_argument("--inject", type=int, default=200, help="library stars per observation")
@@ -71,22 +97,42 @@ def main(argv=None):
                    help="seconds to wait for an observation's scenes before starting the next anyway")
     args = p.parse_args(argv)
 
-    fields = sorted(d.name for d in (REPO / "stars").glob("*_field")) if args.fields == ["all"] else args.fields
+    if args.plan:
+        import pandas as pd
+
+        plan = pd.read_csv(args.plan, comment="#", skipinitialspace=True)
+        if args.machine:
+            plan = plan[plan["machine"] == args.machine]
+        nights = [(str(r.field), str(r.date)) for r in plan.itertuples()]
+    else:
+        fields = sorted(d.name for d in (REPO / "stars").glob("*_field")) if args.fields == ["all"] else args.fields
+        nights = [(field, args.date) for field in fields]
     (args.out / "observations").mkdir(parents=True, exist_ok=True)
     jobs = []
-    for i, field in enumerate(fields):
+    for i, (field, date) in enumerate(nights):
         where = field_of(field)
         if where is None:
             print(f"{field}: not a field set name; skipped")
             continue
-        name, text = observation(field, *where, args.date, args.inject, seed=i + 1, stride=args.stride)
+        if args.plan and not up_that_night(*where, date):
+            continue
+        # injection seed: --plan, fixed per night whatever the order; else the field's place in the list
+        seed = zlib.crc32(f"{field} {date}".encode()) % 100000 if args.plan else i + 1
+        name, text = observation(field, *where, date, args.inject, seed=seed, stride=args.stride)
         done = list((REPO / "outputs" / "pseudo_real" / name).glob("*_night_*.alerts.csv"))
         if len(done) >= 2:
             print(f"{name}: done already")
             continue
+        if (REPO / "outputs" / "pseudo_real" / name).exists():
+            print(f"{name}: a run is there without both alert tables; skipped (move it aside to run it again)")
+            continue
         path = args.out / "observations" / f"{name}.toml"
         path.write_text(text)
         jobs.append((name, path))
+    if args.write_only:
+        for name, path in jobs:
+            print(name, path.relative_to(REPO))
+        return
     print(f"{len(jobs)} observations, {args.parallel} at a time", flush=True)
     running, results = [], {}
     log_dir = args.out / "logs"
