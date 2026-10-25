@@ -188,11 +188,13 @@ class Job:
         return 0 if folder and len(list(folder.glob("*_night_*.alerts.csv"))) >= 2 else 1
 
     def current(self):
-        """The unit's memory now (bytes)."""
+        """The unit's process memory now (bytes: memory.stat anon + shmem, the part MemAvailable does not count; its
+        page cache is counted there as available)."""
         group = subprocess.run(["systemctl", "--user", "show", "-P", "ControlGroup", f"{self.unit}.scope"],
                                capture_output=True, text=True).stdout.strip()
         try:
-            return int(Path("/sys/fs/cgroup" + group, "memory.current").read_text()) if group else 0
+            stat = dict(line.split() for line in Path("/sys/fs/cgroup" + group, "memory.stat").read_text().splitlines())
+            return int(stat.get("anon", 0)) + int(stat.get("shmem", 0)) if group else 0
         except (OSError, ValueError):
             return 0
 
