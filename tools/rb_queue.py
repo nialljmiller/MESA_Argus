@@ -22,8 +22,9 @@ oom-kill) runs once more, alone, at --retry-factor times the limit, at most --re
 to <name>.capkill); a second failure is final, as is the first when the line says ! or the limit is at --retry-max.
 State lines: ok, failed, or capkill (followed by the next attempt's limit).
 
-Sharing the machine: other work comes first. Each job's unit gets OOMScoreAdjust (--oom-score-adjust, default 500), so
-if the machine as a whole runs short (another workload grew), the kernel stops our job, not theirs. A job whose limit
+Sharing the machine: other work comes first. Each job runs under choom -n (--oom-score-adjust, default 500; a scope
+unit takes no OOMScoreAdjust), so if the machine as a whole runs short (another workload grew), the kernel stops our
+job, not theirs. A job whose limit
 does not fit beside what else runs now waits (WAITING, said once); with --shrink-min, it starts instead with a smaller
 limit (what fits) when that is at least --shrink-min.
 
@@ -163,7 +164,7 @@ class Job:
             self.unit = unit_name(name)
             argv = ["systemd-run", "--user", "--scope", "--quiet", f"--unit={self.unit}",
                     "-p", f"MemoryMax={cap.rstrip('!')}", "-p", f"MemorySwapMax={swap_max}",
-                    "-p", f"OOMScoreAdjust={oom_adjust}", *argv]
+                    *(["choom", "-n", str(oom_adjust), "--"] if shutil.which("choom") else []), *argv]
             self.peak = Peak(self.unit)
             print(f"{stamp()} {name}: unit {self.unit}.scope (MemoryMax={cap}, MemorySwapMax={swap_max})",
                   flush=True)
@@ -224,7 +225,7 @@ def main(argv=None):
     p.add_argument("--retry-factor", type=float, default=1.5, help="a job killed at its limit runs again at this x it")
     p.add_argument("--retry-max", default="50G", help="the highest limit a rerun gets")
     p.add_argument("--min-disk", default="", help="free disk a job needs to start (e.g. 15G)")
-    p.add_argument("--oom-score-adjust", type=int, default=500, help="the jobs' OOMScoreAdjust (Linux): stopped first")
+    p.add_argument("--oom-score-adjust", type=int, default=500, help="the jobs' oom_score_adj (Linux): stopped first")
     p.add_argument("--shrink-min", default="", help="start a job that does not fit with what fits, if at least this")
     p.add_argument("--setup-timeout", type=float, default=1800.0, help="seconds to wait for a job's scenes")
     p.add_argument("--wait-for-engines", action="store_true", help="also on Linux, wait while another engine runs")
