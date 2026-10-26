@@ -14,7 +14,9 @@ own filter curve. We keep one copy per model, matched to that model's history ro
     mag/<band>            [n_model]           absolute mags: Gaia/Argus Vega, SDSS AB
 
 phase: -1 pre-main sequence, 0 MS, 1 H-shell burning, 2 core He burning.
-The raw CSVs in SED/ are always kept: seds.h5 is a convenience copy, not a replacement.
+The raw CSVs are always kept: in SED/, then (tools/archive_seds.sh, once the track is finished) byte for byte in
+SED.tar.zst; restore with tar -I zstd -xf runs/<track>/SED.tar.zst -C runs/<track>. seds.h5 is a convenience
+copy, not a replacement (unpack() rebuilds the CSVs from it only to the 7th digit of convolved_flux).
 """
 
 import glob
