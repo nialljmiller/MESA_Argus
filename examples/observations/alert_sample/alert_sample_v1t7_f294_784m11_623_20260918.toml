@@ -1,0 +1,84 @@
+# v1t7 alert sample (2026-10-26): alert_sample_v1_f294_784m11_623_20260918 again with TPVWCSSolverTask tpv_terms = 7 (tpvtest7: f359 beta 31 of 31
+# exposures live against 14 of 31 at 17 terms, the live ones unharmed). The v1 runs stay as they are; the user picks.
+# Alert-broker sample "alert_sample_v1" (tools/alert_sample_nights.py): f294_784m11_623_field on the night of
+# 2026-09-18 (first quarter Moon), as Argus would run it: every exposure, both bands, bright-star mask off (hdps's
+# production config), the real/bogus model data/rb/bundle_v1 loaded at score_cut "fa10". 200 library stars injected
+# over the readout window (a training-style density, far above the variables and transients Argus would see there).
+[field]
+name = "alert_sample_v1t7_f294_784m11_623_20260918"
+ra = 294.784
+dec = -11.623
+
+[night]
+date = "2026-09-18"
+nights = 1
+
+[stars]
+background = "f294_784m11_623_field"
+layout = "real"
+
+[inject]
+number = 200
+seed = 1002
+
+[output]
+movie = false
+pipeline_movie = false
+movie_data = false
+lightcurves = false
+catalogues = false
+stride = 1
+
+[[hdps.tasks]]
+type = "DataCleanupTask"
+
+[[hdps.tasks]]
+type = "ImageReductionTask"
+
+[[hdps.tasks]]
+type = "SourceDetectionTask"
+
+[[hdps.tasks]]
+type = "SourceFilterTask"
+
+[[hdps.tasks]]
+type = "ReferenceRetrievalTask"
+
+[[hdps.tasks]]
+type = "LinearWCSSolverTask"
+
+[[hdps.tasks]]
+type = "SourceMatchingTask"
+
+[[hdps.tasks]]
+type = "TPVWCSSolverTask"
+[hdps.tasks.config]
+tpv_terms = 7  # 2026-10-26 test: the 17-term fit left a non-finite reprojection grid in up to 56% of exposures
+
+[[hdps.tasks]]
+type = "LightweightFITSOutputTask"
+
+[[hdps.tasks]]
+type = "ReprojectionTask"
+
+[[hdps.tasks]]
+type = "CoaddTapTask"
+
+[[hdps.tasks]]
+type = "SFFTSubtractionTask"
+
+[[hdps.tasks]]
+type = "DiffDetectionTask"
+
+[[hdps.tasks]]
+type = "TransientOutputTask"
+
+[[hdps.tasks]]
+type = "AlertVettingTask"
+[hdps.tasks.config]
+model_bundle = "data/rb/bundle_v1"
+score_cut = "fa10"
+emit_all_candidates = true
+
+[[hdps.tasks]]
+type = "TileImageOutputTask"
