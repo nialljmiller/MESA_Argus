@@ -29,8 +29,10 @@ does not fit beside what else runs now waits (WAITING, said once); with --shrink
 limit (what fits) when that is at least --shrink-min and at least 3/4 of its own. With --backfill, while the next job
 does not fit, a later one that does (not a rerun) starts in its place.
 
-Disk: with --min-disk, a job starts only while the repository's disk has at least that much free (a night's hdps
-products are ~10 GB per band); until then the runner waits and says so once (WAITING).
+Disk: with --min-disk, a job starts only while the repository's disk has at least that much free (a one-band night at
+every exposure left 26 GB of hdps products: f359, vega, 2026-10-25); until then the runner waits and says so once
+(WAITING). With --disk-floor, while jobs run, the newest of them is stopped whenever the free space falls below the
+floor, before it fills the disk: DISK-STOPPED in the output (not FAILED), state diskstop (not run again by itself).
 
 Safety: an observe.py job whose output folder (outputs/pseudo_real/<name>) already exists is not started (a run is
 there: move it aside to run it again); a job whose unit (q-<name>.scope) is still running when the queue starts, left
@@ -83,7 +85,7 @@ def state_lines(state):
 
 
 def finished(state):
-    return {w[0] for w in state_lines(state) if w[1] in ("ok", "failed")}
+    return {w[0] for w in state_lines(state) if w[1] in ("ok", "failed", "diskstop")}
 
 
 def retries(state):
@@ -173,9 +175,23 @@ class Job:
                   flush=True)
         self.log = open(self.log_path, "a" if alone else "w")
         self.process = subprocess.Popen(argv, cwd=REPO, stdout=self.log, stderr=subprocess.STDOUT,
-                                        stdin=subprocess.DEVNULL)
+                                        stdin=subprocess.DEVNULL, start_new_session=True)
         if self.peak:
             self.peak.start()
+
+    def stop(self):
+        """Stop the job: its unit (Linux), else its process group."""
+        import os
+        import signal
+
+        self.disk_stopped = True
+        if LINUX and self.unit:
+            subprocess.run(["systemctl", "--user", "stop", f"{self.unit}.scope"], capture_output=True)
+        elif self.process is not None:
+            try:
+                os.killpg(self.process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
     def poll(self):
         """None while running, else the exit code (adopted: 0 if its unit succeeded and left a table per band)."""
@@ -236,7 +252,8 @@ def main(argv=None):
                                                      "otherwise swap without end instead of being stopped")
     p.add_argument("--retry-factor", type=float, default=1.5, help="a job killed at its limit runs again at this x it")
     p.add_argument("--retry-max", default="50G", help="the highest limit a rerun gets")
-    p.add_argument("--min-disk", default="", help="free disk a job needs to start (e.g. 15G)")
+    p.add_argument("--min-disk", default="", help="free disk a job needs to start (e.g. 30G)")
+    p.add_argument("--disk-floor", default="", help="while jobs run, stop the newest when free disk falls below this")
     p.add_argument("--oom-score-adjust", type=int, default=500, help="the jobs' oom_score_adj (Linux): stopped first")
     p.add_argument("--shrink-min", default="", help="start a job that does not fit with what fits, if at least this")
     p.add_argument("--backfill", action="store_true", help="while the next job does not fit, start a later one")
@@ -269,7 +286,7 @@ def main(argv=None):
                 job.peak.done.set()
             hours = (time.time() - job.t0) / 3600
             memory, swap = (job.peak.memory / 2**30, job.peak.swap / 2**30) if job.peak else (float("nan"),) * 2
-            status = "ok" if code == 0 else "failed"
+            status = "ok" if code == 0 else "diskstop" if getattr(job, "disk_stopped", False) else "failed"
             extra = ""
             nxt_bytes = min(size(job.cap) * args.retry_factor, size(args.retry_max))
             if (code != 0 and not job.alone and not job.cap.endswith("!") and nxt_bytes > size(job.cap)
@@ -286,12 +303,20 @@ def main(argv=None):
                         f"{time.strftime('%m-%d_%H:%M', time.localtime(job.t0))} {time.strftime('%m-%d_%H:%M')}"
                         f" cap={job.cap}{extra}\n")
             again_at = extra.replace(" next=", "")
-            what = {"ok": "ok", "failed": "FAILED",
+            what = {"ok": "ok", "failed": "FAILED", "diskstop": "DISK-STOPPED (the disk's free space fell below "
+                                                                f"--disk-floor {args.disk_floor})",
                     "capkill": f"FAILED (killed at its MemoryMax; runs once more, alone, at {again_at})"}[status]
-            if status == "failed" and job.capkill():
+            if status == "failed" and job.capkill():  # (a disk stop is not a limit kill)
                 what = "FAILED (killed at its MemoryMax; no rerun)"
             print(f"{stamp()} {what} {job.name} (exit {code}; {hours:.2f} h; peak {memory:.1f} GB, "
                   f"swap {swap:.1f} GB; MemoryMax {job.cap})", flush=True)
+        if args.disk_floor and running:
+            free = shutil.disk_usage(REPO).free
+            if free < size(args.disk_floor) and not any(getattr(job, "disk_stopped", False) for job in running):
+                newest = max(running, key=lambda job: job.t0)
+                print(f"{stamp()} disk: {free / 2**30:.1f} GB free, below --disk-floor {args.disk_floor}: stopping "
+                      f"{newest.name}", flush=True)
+                newest.stop()
         done = finished(state) | {job.name for job in running}
         again = retries(state)
         todo = []
