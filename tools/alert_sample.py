@@ -83,6 +83,7 @@ def night_settings(folder, band):
     area = window_deg2(folder, band, obs)
     inject = len(sources_by_label(folder))  # the library stars placed over the window (scene/sources.json)
     return dict(field=obs["stars"].get("background", ""), date=obs["night"]["date"],
+                tpv_terms=tasks.get("TPVWCSSolverTask", {}).get("tpv_terms", 17),
                 mask_bright_stars=sfft.get("mask_bright_stars"),
                 bright_star_threshold=sfft.get("bright_star_threshold"), model_bundle=vet.get("model_bundle") or "",
                 score_cut=vet.get("score_cut"), emit_all_candidates=vet.get("emit_all_candidates"),
@@ -279,6 +280,18 @@ Gaps of hdps's v4.0 producer:
 """
 
 
+def tpv_sentence(nights):
+    """What the nights' TPV setting means for the gaps (README)."""
+    terms = sorted({n.get("tpv_terms", 17) for n in nights})
+    if terms == [17]:
+        return ("These nights ran with hdps's default of 17 TPV terms. With tpv_terms = 7 (a TPVWCSSolverTask setting, "
+                "no code change) the same exposures are live (tested on f359 2026-09-10 beta: 31 of 31 exposures with "
+                "candidates against 14 of 31, the live ones unharmed).")
+    return (f"These nights ran with TPVWCSSolverTask tpv_terms = {' / '.join(map(str, terms))} (an hdps setting, "
+            "no code change). With hdps's default of 17 terms the same nights (the v1 sample) had 803 of 1,804 "
+            "exposures without a tile, 22% to 100% live per night and band; the table gives this set's.")
+
+
 def write_readme(out, manifest):
     """README.md for the sample, from its manifest."""
     nights = manifest["nights"]
@@ -318,9 +331,12 @@ def write_readme(out, manifest):
               "difference-image candidate. With packets: those that sent at least one packet. "
               f"Over the sample, {live} of {run} exposures run produced candidates "
               f"({100 * live / run:.0f}%). " if run else "",
-              "In the others hdps dropped every tile of the exposure (its segment reprojection skipped each tile for a "
-              "non-finite WCS grid; the cause is under investigation and is concentrated in certain telescopes), so "
-              "light curves have gaps there. Rates in this sample count exposures that produced candidates: the fa10 "
+              "In the others hdps dropped every tile of the exposure: its TPV distortion fit (TPVWCSSolverTask), "
+              "started from an identity guess because the simulated cameras have no camera calibration, fails on some "
+              "telescopes (residuals of 100-200\" against about 0.2\" on the others), and segment reprojection then "
+              "finds a non-finite WCS grid on every tile and skips them all, so light curves have gaps there. "
+              + tpv_sentence(nights),
+              "Rates in this sample count exposures that produced candidates: the fa10 "
               "cut's 10 false alerts per square degree per exposure was measured over the calibration nights' "
               "exposures with candidates, and the packets per exposure of a night divide by its exposures with "
               "candidates, not by its exposures run.", "",
