@@ -116,6 +116,25 @@ def scene_digest(folder):
     return h.hexdigest()[:16]
 
 
+def exposures_run(folder, band):
+    """The exposures the engine ran through hdps for this band: its log's "hdps: N alerts from M frames" (M), else the
+    scene's exposures in the band (scene/exposures.ecsv) at the run's stride."""
+    import re
+
+    log = folder / f"{folder.name}_night_{band}.log"
+    text = log.read_text(errors="replace") if log.exists() else ""
+    m = re.search(r"^hdps: \d+ alerts from (\d+) frames", text, re.M)
+    if m:
+        return int(m[1])
+    path = folder / "scene" / "exposures.ecsv"
+    if not path.exists():
+        return None
+    from astropy.table import Table
+
+    stride = tomllib.loads((folder / "observation.toml").read_text())["output"].get("stride", 1)
+    return int(len(range(0, int((Table.read(path)["band"] == band).sum()), stride)))
+
+
 def resolve_cut(cut, bundle):
     """A cut as a number: a literal, or an operating point from the bundle's manifest.json (hdps's cut_for)."""
     if cut is None:
@@ -200,9 +219,11 @@ def one_band(folder, band, out, min_sigma, cut=None, validate=False):
     settings = night_settings(folder, band)
     mid = table["time_utc"].iloc[len(table) // 2] if len(table) else None
     models = sorted({str(m) for m in table.get("model_version", pd.Series(dtype=str)).dropna().unique()})
-    frames = int(table["exposure"].nunique()) if len(table) else 0
+    with_candidates = int(table["exposure"].nunique()) if len(table) else 0  # (every candidate is a row)
+    with_packets = int(truth["exposure"].nunique()) if "exposure" in truth else 0
     return dict(observation=name, run=run, scene=scene_digest(folder), band=band, **settings, sample_cut=cut,
-                rb_model_versions=models, exposures=frames,
+                rb_model_versions=models, exposures_run=exposures_run(folder, band),
+                exposures_with_candidates=with_candidates, exposures_with_packets=with_packets,
                 moon_illumination=round(moon_illumination(mid), 3) if mid else None,
                 schema_versions=sorted(versions), packets=len(truth), packets_before_cut=n_read,
                 cutouts_4096_bytes=cutouts,
@@ -279,14 +300,31 @@ def write_readme(out, manifest):
              "simulated nights the model did not train on)",
              f"- of the packets, {real} are real by the truth rule below, {total - real} bogus or below it", "",
              "## Nights", "",
-             "| observation | field | night | Moon lit | band | exposures | window deg2 | injected (per deg2) | "
-             "packets | real | by truth class |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+             "| observation | field | night | Moon lit | band | exposures run / with candidates / with packets | "
+             "window deg2 | injected (per deg2) | packets | real | by truth class |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
     for n in nights:
         lines.append(f"| {n['observation']} | {n['field']} | {n['date']} | {n['moon_illumination']} | {n['band']} | "
-                     f"{n['exposures']} | {n['window_deg2']} | {n['injected']} ({n['injected_per_deg2']}) | "
+                     f"{n.get('exposures_run')} / {n.get('exposures_with_candidates')} / "
+                     f"{n.get('exposures_with_packets')} | {n['window_deg2']} | "
+                     f"{n['injected']} ({n['injected_per_deg2']}) | "
                      f"{n['packets']} | {n['by_label'].get('1', 0)} | "
                      + ", ".join(f"{k} {v}" for k, v in n["by_truth_class"].items()) + " |")
-    lines += ["", "## Injection", "",
+    run = sum(n.get("exposures_run") or 0 for n in nights)
+    live = sum(n.get("exposures_with_candidates") or 0 for n in nights)
+    lines += ["", "## Exposures and gaps", "",
+              "Exposures run: those ArgusSim took of the window and the engine passed to hdps (one band, every "
+              "exposure of the night at the run's stride). With candidates: those for which hdps produced at least one "
+              "difference-image candidate. With packets: those that sent at least one packet. "
+              f"Over the sample, {live} of {run} exposures run produced candidates "
+              f"({100 * live / run:.0f}%). " if run else "",
+              "In the others hdps dropped every tile of the exposure (its segment reprojection skipped each tile for a "
+              "non-finite WCS grid; the cause is under investigation and is concentrated in certain telescopes), so "
+              "light curves have gaps there. Rates in this sample count exposures that produced candidates: the fa10 "
+              "cut's 10 false alerts per square degree per exposure was measured over the calibration nights' "
+              "exposures with candidates, and the packets per exposure of a night divide by its exposures with "
+              "candidates, not by its exposures run.", "",
+              "## Injection", "",
               "Each night's readout window holds the field's real Gaia stars (constant unless injected) plus the "
               "injected library stars in the table: supernovae, dwarf novae, microlensing events, RR Lyrae, eclipsing "
               "binaries, modelled light curves placed at random over the window. That density is far above what "
