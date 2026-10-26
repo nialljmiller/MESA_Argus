@@ -5,14 +5,19 @@
 # A track counts as finished when it has seds.h5 (runner.py packs it when the run ends), no live .running lock, no
 # `star` process working in it, and no SED file newer than 30 minutes. RSP runs (runs/*/fine/SED) are not touched:
 # rsp.pack already removes their CSVs.
-#   tools/archive_seds.sh [--dry-run] [track ...]      (default: every runs/*/SED)
+#   tools/archive_seds.sh [--dry-run] [--now] [track ...]      (default: every runs/*/SED)
+# --now: the caller has just finished these tracks (runner.py, after packing seds.h5), so their SED files may be new.
 # Restore a track's CSVs exactly:  tar -I zstd -xf runs/<track>/SED.tar.zst -C runs/<track>
 set -uo pipefail
 cd "$(dirname "$0")/.."
 RUNS="$(cd runs && pwd -P)"
 LOG=outputs/archive_seds.log
 DRY=0
-[ "${1:-}" = "--dry-run" ] && { DRY=1; shift; }
+NOW=0
+while [ $# -gt 0 ]; do
+    case "$1" in --dry-run) DRY=1;; --now) NOW=1;; *) break;; esac
+    shift
+done
 mkdir -p outputs
 log() { echo "$(date '+%F %T') $*" | tee -a "$LOG"; }
 
@@ -26,7 +31,8 @@ finished() {  # $1: run folder
     for p in $(pgrep -x star); do
         case "$(readlink "/proc/$p/cwd" 2>/dev/null)" in "$run"|"$run"/*) echo "star process $p works in it"; return 1;; esac
     done
-    [ -z "$(find "$run/SED" -newermt '-30 minutes' -print -quit)" ] || { echo "SED written in the last 30 min"; return 1; }
+    [ $NOW = 1 ] || [ -z "$(find "$run/SED" -newermt '-30 minutes' -print -quit)" ] || {
+        echo "SED written in the last 30 min"; return 1; }
     [ -z "$(find "$run/SED" -mindepth 1 ! -type f -print -quit)" ] || { echo "SED holds something other than files"; return 1; }
     [ ! -e "$run/SED.tar.zst" ] || { echo "SED.tar.zst already exists"; return 1; }
 }

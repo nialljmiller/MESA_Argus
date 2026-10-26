@@ -149,8 +149,9 @@ def run_tracks(tracks, workers=None, threads=None, rerun_failed=False):
         ok, minutes, term = run_dir(prepare(t), threads, resume_from_photo=t.get("resume_from_photo", False))
         print(f"  {'OK ' if ok else 'BAD'} {t['name']:<30s} {minutes:7.1f} min  {term or 'no termination code'}", flush=True)
         if ok and t.get("save_seds"):
-            from .seds import pack
+            from .seds import archive, pack
             print(f"      packed SEDs -> {pack(t)}", flush=True)
+            print(f"      SED CSVs -> {archive(t)}", flush=True)  # SED.tar.zst, checked, then the CSVs removed
         return t["name"], ok
 
     with ThreadPoolExecutor(max_workers=workers) as ex:

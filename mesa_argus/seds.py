@@ -21,6 +21,7 @@ copy, not a replacement (unpack() rebuilds the CSVs from it only to the 7th digi
 
 import glob
 import re
+import subprocess
 
 import numpy as np
 
@@ -169,6 +170,15 @@ def _unpack_models(args):
                 lines.append(",".join(a + b))
             (out_dir / f"{f[:-4]}_SED_{m:08d}.csv").write_text("\n".join(lines) + "\n")
     return len(models)
+
+
+def archive(track):
+    """Move a just-finished track's SED/ CSVs into runs/<track>/SED.tar.zst, byte for byte (tools/archive_seds.sh: the
+    CSVs are removed only after the archive is checked against them; on any failure they stay). Its log line."""
+    r = subprocess.run(["nice", "-n", "10", "ionice", "-c3", str(C.REPO / "tools" / "archive_seds.sh"), "--now",
+                        track["name"]], capture_output=True, text=True)
+    lines = [ln for ln in r.stdout.splitlines() if track["name"] in ln]
+    return lines[-1].split(" ", 2)[-1] if lines else f"archive_seds: no line for {track['name']} (exit {r.returncode})"
 
 
 def unpack(track, workers=8):
